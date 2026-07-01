@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -461,7 +462,11 @@ class ChromeTtsBridge:
 			raise CdpError("Chrome DevTools port is not ready.")
 		for _ in range(200):
 			_raise_if_cancelled(cancelEvent)
-			targets = _read_json_endpoint(self._debugPort, "/json/list")
+			try:
+				targets = _read_json_endpoint(self._debugPort, "/json/list", timeout=0.5)
+			except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+				time.sleep(STARTUP_POLL_INTERVAL)
+				continue
 			if isinstance(targets, list):
 				for target in targets:
 					if not isinstance(target, dict):

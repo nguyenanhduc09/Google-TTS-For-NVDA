@@ -132,7 +132,8 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 
 	def _create_list(self, parent: wx.Window, includeStatus: bool = False) -> wx.ListCtrl:
 		listCtrl = wx.ListCtrl(parent, style=wx.LC_REPORT | wx.LC_HRULES | wx.LC_VRULES)
-		listCtrl.EnableCheckBoxes()
+		if hasattr(listCtrl, "EnableCheckBoxes"):
+			listCtrl.EnableCheckBoxes()
 		columns = [
 			(_("Language"), 110),
 			(_("Package"), 210),
@@ -227,9 +228,20 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		return _("{size:.1f} MB").format(size=size / 1024 / 1024)
 
 	def _checked_packages(self, listCtrl: wx.ListCtrl, packages: list[VoicePackage]) -> list[VoicePackage]:
-		return [packages[i] for i in range(listCtrl.ItemCount) if listCtrl.IsItemChecked(i)]
+		checked: list[VoicePackage] = []
+		if hasattr(listCtrl, "IsItemChecked"):
+			count = min(listCtrl.ItemCount, len(packages))
+			checked = [packages[i] for i in range(count) if listCtrl.IsItemChecked(i)]
+			if checked:
+				return checked
+		index = listCtrl.GetFirstSelected()
+		if 0 <= index < len(packages):
+			return [packages[index]]
+		return []
 
 	def _on_check_all(self, listCtrl: wx.ListCtrl, check: bool) -> None:
+		if not hasattr(listCtrl, "CheckItem"):
+			return
 		for i in range(listCtrl.ItemCount):
 			listCtrl.CheckItem(i, check)
 
@@ -401,25 +413,23 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		gui.messageBox(message, _("Google TTS Voice Manager"), wx.OK | wx.ICON_ERROR, self)
 
 	def _refresh_buttons(self) -> None:
-<<<<<<< Updated upstream
-		for control in (self.refreshButton, self.openFolderButton, self.installedList, self.downloadList):
-=======
+		hasInstalledItems = self.installedList.ItemCount > 0
+		hasDownloadItems = self.downloadList.ItemCount > 0
+		hasInstalledChecks = hasattr(self.installedList, "CheckItem")
+		hasDownloadChecks = hasattr(self.downloadList, "CheckItem")
 		for control in (
 			self.refreshButton,
 			self.openFolderButton,
-			self.removeButton,
-			self.downloadButton,
-			self.installedSelectAllButton,
-			self.installedUnselectAllButton,
-			self.downloadSelectAllButton,
-			self.downloadUnselectAllButton,
 			self.installedList,
 			self.downloadList,
 		):
->>>>>>> Stashed changes
 			control.Enable(not self.isBusy)
-		self.removeButton.Enable(not self.isBusy and self.installedList.ItemCount > 0)
-		self.downloadButton.Enable(not self.isBusy and self.downloadList.ItemCount > 0)
+		self.installedSelectAllButton.Enable(not self.isBusy and hasInstalledItems and hasInstalledChecks)
+		self.installedUnselectAllButton.Enable(not self.isBusy and hasInstalledItems and hasInstalledChecks)
+		self.downloadSelectAllButton.Enable(not self.isBusy and hasDownloadItems and hasDownloadChecks)
+		self.downloadUnselectAllButton.Enable(not self.isBusy and hasDownloadItems and hasDownloadChecks)
+		self.removeButton.Enable(not self.isBusy and hasInstalledItems)
+		self.downloadButton.Enable(not self.isBusy and hasDownloadItems)
 
 	def on_close(self, evt: wx.CloseEvent) -> None:
 		if self.isBusy:
