@@ -95,9 +95,17 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self.installedList.SetName(_("Installed voice packages"))
 		sizer.Add(self.installedList, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 		buttonRow = wx.BoxSizer(wx.HORIZONTAL)
-		self.removeButton = wx.Button(self.installedPanel, label=_("&Remove selected"))
+		self.removeButton = wx.Button(self.installedPanel, label=_("&Remove checked"))
 		self.removeButton.Bind(wx.EVT_BUTTON, self.on_remove_selected)
+		self.installedSelectAllButton = wx.Button(self.installedPanel, label=_("Select &all"))
+		self.installedSelectAllButton.Bind(wx.EVT_BUTTON, lambda evt: self._on_check_all(self.installedList, True))
+		self.installedUnselectAllButton = wx.Button(self.installedPanel, label=_("&Unselect all"))
+		self.installedUnselectAllButton.Bind(wx.EVT_BUTTON, lambda evt: self._on_check_all(self.installedList, False))
 		buttonRow.Add(self.removeButton)
+		buttonRow.AddSpacer(8)
+		buttonRow.Add(self.installedSelectAllButton)
+		buttonRow.AddSpacer(8)
+		buttonRow.Add(self.installedUnselectAllButton)
 		sizer.Add(buttonRow, 0, wx.EXPAND | wx.ALL, 8)
 
 	def _build_download_tab(self) -> None:
@@ -109,13 +117,22 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self.downloadList.SetName(_("Downloadable voice packages"))
 		sizer.Add(self.downloadList, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
 		buttonRow = wx.BoxSizer(wx.HORIZONTAL)
-		self.downloadButton = wx.Button(self.downloadPanel, label=_("&Download selected"))
+		self.downloadButton = wx.Button(self.downloadPanel, label=_("&Download checked"))
 		self.downloadButton.Bind(wx.EVT_BUTTON, self.on_download_selected)
+		self.downloadSelectAllButton = wx.Button(self.downloadPanel, label=_("Select &all"))
+		self.downloadSelectAllButton.Bind(wx.EVT_BUTTON, lambda evt: self._on_check_all(self.downloadList, True))
+		self.downloadUnselectAllButton = wx.Button(self.downloadPanel, label=_("&Unselect all"))
+		self.downloadUnselectAllButton.Bind(wx.EVT_BUTTON, lambda evt: self._on_check_all(self.downloadList, False))
 		buttonRow.Add(self.downloadButton)
+		buttonRow.AddSpacer(8)
+		buttonRow.Add(self.downloadSelectAllButton)
+		buttonRow.AddSpacer(8)
+		buttonRow.Add(self.downloadUnselectAllButton)
 		sizer.Add(buttonRow, 0, wx.EXPAND | wx.ALL, 8)
 
 	def _create_list(self, parent: wx.Window, includeStatus: bool = False) -> wx.ListCtrl:
-		listCtrl = wx.ListCtrl(parent, style=wx.LC_REPORT | wx.LC_SINGLE_SEL | wx.LC_HRULES | wx.LC_VRULES)
+		listCtrl = wx.ListCtrl(parent, style=wx.LC_REPORT | wx.LC_HRULES | wx.LC_VRULES)
+		listCtrl.EnableCheckBoxes()
 		columns = [
 			(_("Language"), 110),
 			(_("Package"), 210),
@@ -209,39 +226,136 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			return ""
 		return _("{size:.1f} MB").format(size=size / 1024 / 1024)
 
-	def _selected_package(self, listCtrl: wx.ListCtrl, packages: list[VoicePackage]) -> VoicePackage | None:
-		index = listCtrl.GetFirstSelected()
-		if index < 0 or index >= len(packages):
-			return None
-		return packages[index]
+	def _checked_packages(self, listCtrl: wx.ListCtrl, packages: list[VoicePackage]) -> list[VoicePackage]:
+		return [packages[i] for i in range(listCtrl.ItemCount) if listCtrl.IsItemChecked(i)]
+
+	def _on_check_all(self, listCtrl: wx.ListCtrl, check: bool) -> None:
+		for i in range(listCtrl.ItemCount):
+			listCtrl.CheckItem(i, check)
 
 	def on_download_selected(self, evt: wx.CommandEvent) -> None:
-		package = self._selected_package(self.downloadList, self.downloadPackages)
-		if package is None:
-			self.set_status(_("No voice package selected."), 0, announce=True)
+		packages = self._checked_packages(self.downloadList, self.downloadPackages)
+		if not packages:
+			self.set_status(_("No voice packages selected."), 0, announce=True)
 			return
-		self._run_worker(
-			lambda: voice_store.download_package(package, self._post_progress),
-			lambda result: self._finish_operation(result, _("Installed {package}.").format(package=package.id)),
-		)
+		totalCount = len(packages)
+
+		def work() -> dict[str, Any]:
+			succeeded = 0
+			failed: list[str] = []
+			for i, package in enumerate(packages):
+				def _progress(
+					percent: int | None,
+					message: str,
+					_idx: int = i,
+					_pkgId: str = package.id,
+				) -> None:
+					if percent is not None:
+						overall = int((_idx * 100 + percent) / totalCount)
+					else:
+						overall = None
+					wx.CallAfter(
+						self.set_status,
+						_("Downloading {current}/{total}: {package}").format(
+							current=_idx + 1, total=totalCount, package=_pkgId,
+						),
+						overall,
+					)
+				try:
+					voice_store.download_package(package, _progress)
+					succeeded += 1
+				except Exception as exc:
+					log.error("Failed to download %s: %s", package.id, exc)
+					failed.append(package.id)
+			return {"succeeded": succeeded, "failed": failed}
+
+		def done(result: Any | BaseException) -> None:
+			self.isBusy = False
+			if isinstance(result, BaseException):
+				self._refresh_buttons()
+				self.show_error(result)
+				return
+			self.refresh_lists()
+			succeeded = result["succeeded"]
+			failed = result["failed"]
+			if failed:
+				message = _(
+					"Downloaded {succeeded} of {total}. Failed: {failList}"
+				).format(
+					succeeded=succeeded,
+					total=totalCount,
+					failList=", ".join(failed),
+				)
+			elif succeeded == 1:
+				message = _("Downloaded {package}.").format(package=packages[0].id)
+			else:
+				message = _("Downloaded {count} voice packages.").format(count=succeeded)
+			self.set_status(message, 100)
+			ui.message(message)
+			self._focus_active_page()
+
+		self._run_worker(work, done)
 
 	def on_remove_selected(self, evt: wx.CommandEvent) -> None:
-		package = self._selected_package(self.installedList, self.installedPackages)
-		if package is None:
-			self.set_status(_("No installed voice package selected."), 0, announce=True)
+		packages = self._checked_packages(self.installedList, self.installedPackages)
+		if not packages:
+			self.set_status(_("No installed voice packages selected."), 0, announce=True)
 			return
+		if len(packages) == 1:
+			confirmMsg = _("Remove {package}?").format(package=packages[0].id)
+		else:
+			packageNames = ", ".join(pkg.id for pkg in packages)
+			confirmMsg = _("Remove {count} voice packages?\n{packages}").format(
+				count=len(packages), packages=packageNames,
+			)
 		answer = gui.messageBox(
-			_("Remove {package}?").format(package=package.id),
+			confirmMsg,
 			_("Google TTS Voice Manager"),
 			wx.YES_NO | wx.ICON_QUESTION,
 			self,
 		)
 		if answer != wx.YES:
 			return
-		self._run_worker(
-			lambda: voice_store.remove_package(package),
-			lambda result: self._finish_operation(result, _("Removed {package}.").format(package=package.id)),
-		)
+		totalCount = len(packages)
+
+		def work() -> dict[str, Any]:
+			succeeded = 0
+			failed: list[str] = []
+			for package in packages:
+				try:
+					voice_store.remove_package(package)
+					succeeded += 1
+				except Exception as exc:
+					log.error("Failed to remove %s: %s", package.id, exc)
+					failed.append(package.id)
+			return {"succeeded": succeeded, "failed": failed}
+
+		def done(result: Any | BaseException) -> None:
+			self.isBusy = False
+			if isinstance(result, BaseException):
+				self._refresh_buttons()
+				self.show_error(result)
+				return
+			self.refresh_lists()
+			succeeded = result["succeeded"]
+			failed = result["failed"]
+			if failed:
+				message = _(
+					"Removed {succeeded} of {total}. Failed: {failList}"
+				).format(
+					succeeded=succeeded,
+					total=totalCount,
+					failList=", ".join(failed),
+				)
+			elif succeeded == 1:
+				message = _("Removed {package}.").format(package=packages[0].id)
+			else:
+				message = _("Removed {count} voice packages.").format(count=succeeded)
+			self.set_status(message, 100)
+			ui.message(message)
+			self._focus_active_page()
+
+		self._run_worker(work, done)
 
 	def on_open_folder(self, evt: wx.CommandEvent) -> None:
 		try:
@@ -268,20 +382,6 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 
 		threading.Thread(target=run, name="googleTtsForNvda.voiceManager", daemon=True).start()
 
-	def _finish_operation(self, result: Any | BaseException, successMessage: str) -> None:
-		self.isBusy = False
-		if isinstance(result, BaseException):
-			self._refresh_buttons()
-			self.show_error(result)
-			return
-		self.refresh_lists()
-		self.set_status(successMessage, 100)
-		ui.message(successMessage)
-		self._focus_active_page()
-
-	def _post_progress(self, percent: int | None, message: str) -> None:
-		wx.CallAfter(self.set_status, message, percent)
-
 	def set_status(self, message: str, percent: int | None = None, announce: bool = False) -> None:
 		self.statusText.SetLabel(message)
 		if percent is not None:
@@ -301,7 +401,22 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		gui.messageBox(message, _("Google TTS Voice Manager"), wx.OK | wx.ICON_ERROR, self)
 
 	def _refresh_buttons(self) -> None:
+<<<<<<< Updated upstream
 		for control in (self.refreshButton, self.openFolderButton, self.installedList, self.downloadList):
+=======
+		for control in (
+			self.refreshButton,
+			self.openFolderButton,
+			self.removeButton,
+			self.downloadButton,
+			self.installedSelectAllButton,
+			self.installedUnselectAllButton,
+			self.downloadSelectAllButton,
+			self.downloadUnselectAllButton,
+			self.installedList,
+			self.downloadList,
+		):
+>>>>>>> Stashed changes
 			control.Enable(not self.isBusy)
 		self.removeButton.Enable(not self.isBusy and self.installedList.ItemCount > 0)
 		self.downloadButton.Enable(not self.isBusy and self.downloadList.ItemCount > 0)
