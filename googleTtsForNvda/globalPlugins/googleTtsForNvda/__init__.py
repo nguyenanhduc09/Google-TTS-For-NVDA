@@ -88,3 +88,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
 	def on_open_voice_manager(self, evt: Any) -> None:
 		_open_voice_manager()
+
+	def script_openVoiceManager(self, gesture: Any) -> None:
+		_open_voice_manager()
+
+	script_openVoiceManager.__doc__ = _("Opens the Google TTS voice manager.")
+
+	__gestures = {
+		"kb:NVDA+control+shift+g": "openVoiceManager",
+	}

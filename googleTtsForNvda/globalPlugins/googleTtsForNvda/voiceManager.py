@@ -89,45 +89,39 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 	def _build_installed_tab(self) -> None:
 		sizer = wx.BoxSizer(wx.VERTICAL)
 		self.installedPanel.SetSizer(sizer)
-		label = wx.StaticText(self.installedPanel, label=_("Installed voice packages"))
-		sizer.Add(label, 0, wx.EXPAND | wx.ALL, 8)
+		self.installedSelectAllCheck = wx.CheckBox(
+			self.installedPanel, label=_("Select &all voices"),
+		)
+		self.installedSelectAllCheck.Bind(wx.EVT_CHECKBOX, self.on_installed_select_all)
+		sizer.Add(self.installedSelectAllCheck, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 		self.installedList = self._create_list(self.installedPanel)
 		self.installedList.SetName(_("Installed voice packages"))
-		sizer.Add(self.installedList, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+		self.installedList.Bind(wx.EVT_LIST_ITEM_CHECKED, self._on_installed_item_check_changed)
+		self.installedList.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self._on_installed_item_check_changed)
+		sizer.Add(self.installedList, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 		buttonRow = wx.BoxSizer(wx.HORIZONTAL)
-		self.removeButton = wx.Button(self.installedPanel, label=_("&Remove checked"))
+		self.removeButton = wx.Button(self.installedPanel, label=_("&Remove checked voices"))
 		self.removeButton.Bind(wx.EVT_BUTTON, self.on_remove_selected)
-		self.installedSelectAllButton = wx.Button(self.installedPanel, label=_("Select &all"))
-		self.installedSelectAllButton.Bind(wx.EVT_BUTTON, lambda evt: self._on_check_all(self.installedList, True))
-		self.installedUnselectAllButton = wx.Button(self.installedPanel, label=_("&Unselect all"))
-		self.installedUnselectAllButton.Bind(wx.EVT_BUTTON, lambda evt: self._on_check_all(self.installedList, False))
 		buttonRow.Add(self.removeButton)
-		buttonRow.AddSpacer(8)
-		buttonRow.Add(self.installedSelectAllButton)
-		buttonRow.AddSpacer(8)
-		buttonRow.Add(self.installedUnselectAllButton)
 		sizer.Add(buttonRow, 0, wx.EXPAND | wx.ALL, 8)
 
 	def _build_download_tab(self) -> None:
 		sizer = wx.BoxSizer(wx.VERTICAL)
 		self.downloadPanel.SetSizer(sizer)
-		label = wx.StaticText(self.downloadPanel, label=_("Downloadable voice packages"))
-		sizer.Add(label, 0, wx.EXPAND | wx.ALL, 8)
+		self.downloadSelectAllCheck = wx.CheckBox(
+			self.downloadPanel, label=_("Select &all voices"),
+		)
+		self.downloadSelectAllCheck.Bind(wx.EVT_CHECKBOX, self.on_download_select_all)
+		sizer.Add(self.downloadSelectAllCheck, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 		self.downloadList = self._create_list(self.downloadPanel, includeStatus=False)
 		self.downloadList.SetName(_("Downloadable voice packages"))
-		sizer.Add(self.downloadList, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 8)
+		self.downloadList.Bind(wx.EVT_LIST_ITEM_CHECKED, self._on_download_item_check_changed)
+		self.downloadList.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self._on_download_item_check_changed)
+		sizer.Add(self.downloadList, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 		buttonRow = wx.BoxSizer(wx.HORIZONTAL)
-		self.downloadButton = wx.Button(self.downloadPanel, label=_("&Download checked"))
+		self.downloadButton = wx.Button(self.downloadPanel, label=_("&Download checked voices"))
 		self.downloadButton.Bind(wx.EVT_BUTTON, self.on_download_selected)
-		self.downloadSelectAllButton = wx.Button(self.downloadPanel, label=_("Select &all"))
-		self.downloadSelectAllButton.Bind(wx.EVT_BUTTON, lambda evt: self._on_check_all(self.downloadList, True))
-		self.downloadUnselectAllButton = wx.Button(self.downloadPanel, label=_("&Unselect all"))
-		self.downloadUnselectAllButton.Bind(wx.EVT_BUTTON, lambda evt: self._on_check_all(self.downloadList, False))
 		buttonRow.Add(self.downloadButton)
-		buttonRow.AddSpacer(8)
-		buttonRow.Add(self.downloadSelectAllButton)
-		buttonRow.AddSpacer(8)
-		buttonRow.Add(self.downloadUnselectAllButton)
 		sizer.Add(buttonRow, 0, wx.EXPAND | wx.ALL, 8)
 
 	def _create_list(self, parent: wx.Window, includeStatus: bool = False) -> wx.ListCtrl:
@@ -195,6 +189,8 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			self._insert_package_row(self.installedList, index, package)
 		if self.installedList.ItemCount:
 			self.installedList.Select(0)
+		# Reset the select-all toggle when list contents change.
+		self.installedSelectAllCheck.SetValue(False)
 
 	def _populate_download_list(self) -> None:
 		self.downloadList.DeleteAllItems()
@@ -202,6 +198,8 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			self._insert_package_row(self.downloadList, index, package, includeStatus=False)
 		if self.downloadList.ItemCount:
 			self.downloadList.Select(0)
+		# Reset the select-all toggle when list contents change.
+		self.downloadSelectAllCheck.SetValue(False)
 
 	def _insert_package_row(
 		self,
@@ -244,6 +242,32 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			return
 		for i in range(listCtrl.ItemCount):
 			listCtrl.CheckItem(i, check)
+
+	def on_installed_select_all(self, evt: wx.CommandEvent) -> None:
+		"""Toggle all checkboxes in the installed list to match the select-all checkbox."""
+		self._on_check_all(self.installedList, evt.IsChecked())
+
+	def on_download_select_all(self, evt: wx.CommandEvent) -> None:
+		"""Toggle all checkboxes in the download list to match the select-all checkbox."""
+		self._on_check_all(self.downloadList, evt.IsChecked())
+
+	def _on_installed_item_check_changed(self, evt: wx.ListEvent) -> None:
+		"""Keep the select-all checkbox in sync when individual items are toggled."""
+		count = self.installedList.ItemCount
+		if count == 0:
+			return
+		all_checked = all(self.installedList.IsItemChecked(i) for i in range(count))
+		self.installedSelectAllCheck.SetValue(all_checked)
+		evt.Skip()
+
+	def _on_download_item_check_changed(self, evt: wx.ListEvent) -> None:
+		"""Keep the select-all checkbox in sync when individual items are toggled."""
+		count = self.downloadList.ItemCount
+		if count == 0:
+			return
+		all_checked = all(self.downloadList.IsItemChecked(i) for i in range(count))
+		self.downloadSelectAllCheck.SetValue(all_checked)
+		evt.Skip()
 
 	def on_download_selected(self, evt: wx.CommandEvent) -> None:
 		packages = self._checked_packages(self.downloadList, self.downloadPackages)
@@ -415,8 +439,6 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 	def _refresh_buttons(self) -> None:
 		hasInstalledItems = self.installedList.ItemCount > 0
 		hasDownloadItems = self.downloadList.ItemCount > 0
-		hasInstalledChecks = hasattr(self.installedList, "CheckItem")
-		hasDownloadChecks = hasattr(self.downloadList, "CheckItem")
 		for control in (
 			self.refreshButton,
 			self.openFolderButton,
@@ -424,10 +446,8 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			self.downloadList,
 		):
 			control.Enable(not self.isBusy)
-		self.installedSelectAllButton.Enable(not self.isBusy and hasInstalledItems and hasInstalledChecks)
-		self.installedUnselectAllButton.Enable(not self.isBusy and hasInstalledItems and hasInstalledChecks)
-		self.downloadSelectAllButton.Enable(not self.isBusy and hasDownloadItems and hasDownloadChecks)
-		self.downloadUnselectAllButton.Enable(not self.isBusy and hasDownloadItems and hasDownloadChecks)
+		self.installedSelectAllCheck.Enable(not self.isBusy and hasInstalledItems)
+		self.downloadSelectAllCheck.Enable(not self.isBusy and hasDownloadItems)
 		self.removeButton.Enable(not self.isBusy and hasInstalledItems)
 		self.downloadButton.Enable(not self.isBusy and hasDownloadItems)
 
