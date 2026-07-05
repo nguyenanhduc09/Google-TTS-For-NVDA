@@ -6,10 +6,10 @@
 	let lastChunkAt = 0;
 	let stopped = false;
 	let initPromise = null;
-	const firstAudioPacketSamples = 48;
+	const firstAudioPacketSamples = 24;
 	const steadyAudioPacketSamples = 240;
 	const synthesisIdlePollMs = 5;
-	const synthesisIdleTailMs = 25;
+	const synthesisIdleTailMs = 20;
 	let emittedAudioPackets = 0;
 	let pendingAudioBuffers = [];
 	let pendingAudioSampleCount = 0;

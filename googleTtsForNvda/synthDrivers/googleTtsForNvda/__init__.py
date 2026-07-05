@@ -27,15 +27,16 @@ addonHandler.initTranslation()
 
 _CLAUSE_TARGET_CHARS = 220
 _CLAUSE_MAX_CHARS = 360
-_FAST_FIRST_CLAUSE_TARGET_CHARS = 100
-_FAST_FIRST_CLAUSE_MAX_CHARS = 160
-_FAST_FIRST_CLAUSE_MIN_CHARS = 30
+_FAST_FIRST_CLAUSE_TARGET_CHARS = 40
+_FAST_FIRST_CLAUSE_MAX_CHARS = 60
+_FAST_FIRST_CLAUSE_MIN_CHARS = 15
 _SHORT_CACHE_MAX_CHARS = 200
 _SHORT_CACHE_MAX_ITEMS = 256
 _SHORT_CACHE_MAX_BYTES = 12 * 1024 * 1024
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?;:])\s+")
 _CLAUSE_BOUNDARY_RE = re.compile(r"[,;:]\s+")
 _SpeechRequest = tuple[list[Any], str, int, int, int, threading.Event]
+_IndexMarker = tuple[Any, int]
 
 
 class SynthDriver(synthDriverHandler.SynthDriver):
@@ -218,21 +219,35 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		cancelEvent: threading.Event,
 	) -> Iterator[tuple[str, Any]]:
 		textParts: list[str] = []
+		textCharCount = 0
+		pendingIndexes: list[_IndexMarker] = []
 		firstTextSegment = True
 		activeVoice = voice
 
 		def flush_text() -> Iterator[tuple[str, Any]]:
-			nonlocal firstTextSegment
-			text = "".join(textParts).strip()
+			nonlocal firstTextSegment, textCharCount, pendingIndexes
+			rawText = "".join(textParts)
 			textParts.clear()
+			textCharCount = 0
+			leftTrimmed = len(rawText) - len(rawText.lstrip())
+			text = rawText.strip()
+			indexes = [
+				(index, max(0, min(len(text), charOffset - leftTrimmed)))
+				for index, charOffset in pendingIndexes
+			]
+			pendingIndexes = []
 			if not text:
+				for index, _charOffset in indexes:
+					if cancelEvent.is_set():
+						return
+					yield ("index", index)
 				return
 			options = self._speech_options(rate, pitch, volume, activeVoice)
-			for segment in self._iter_text_segments_for_latency(text, firstTextSegment):
+			for segment, segmentIndexes in self._iter_indexed_text_segments(text, indexes, firstTextSegment):
 				if cancelEvent.is_set():
 					return
 				firstTextSegment = False
-				yield ("text", (segment, options))
+				yield ("text", (segment, options, segmentIndexes))
 
 		for item in speechSequence:
 			if cancelEvent.is_set():
@@ -240,16 +255,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			itemType = type(item)
 			if itemType is str:
 				textParts.append(item)
+				textCharCount += len(item)
 			elif itemType is BreakCommand:
 				yield from flush_text()
 				if cancelEvent.is_set():
 					return
 				yield ("break", max(0, int(item.time)))
 			elif itemType is IndexCommand:
-				yield from flush_text()
-				if cancelEvent.is_set():
-					return
-				yield ("index", item.index)
+				pendingIndexes.append((item.index, textCharCount))
 			elif itemType is LangChangeCommand:
 				yield from flush_text()
 				if cancelEvent.is_set():
@@ -271,6 +284,41 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					return
 				volume = int(item.newValue)
 		yield from flush_text()
+
+	def _iter_indexed_text_segments(
+		self,
+		text: str,
+		indexes: list[_IndexMarker],
+		fastFirstSegment: bool,
+	) -> Iterator[tuple[str, list[_IndexMarker]]]:
+		if not indexes:
+			for segment in self._iter_text_segments_for_latency(text, fastFirstSegment):
+				yield segment, []
+			return
+		segments: list[tuple[str, int, int]] = []
+		searchStart = 0
+		for segment in self._iter_text_segments_for_latency(text, fastFirstSegment):
+			segmentStart = text.find(segment, searchStart)
+			if segmentStart < 0:
+				segmentStart = searchStart
+			segmentEnd = segmentStart + len(segment)
+			segments.append((segment, segmentStart, segmentEnd))
+			searchStart = segmentEnd
+		if not segments:
+			return
+		indexPosition = 0
+		for segmentPosition, (segment, segmentStart, segmentEnd) in enumerate(segments):
+			segmentIndexes: list[_IndexMarker] = []
+			while indexPosition < len(indexes) and indexes[indexPosition][1] <= segmentEnd:
+				index, charOffset = indexes[indexPosition]
+				segmentIndexes.append((index, max(0, min(len(segment), charOffset - segmentStart))))
+				indexPosition += 1
+			if segmentPosition == len(segments) - 1:
+				while indexPosition < len(indexes):
+					index, _charOffset = indexes[indexPosition]
+					segmentIndexes.append((index, len(segment)))
+					indexPosition += 1
+			yield segment, segmentIndexes
 
 	def _split_text_for_latency(self, text: str) -> list[str]:
 		return list(self._iter_text_segments_for_latency(text, False))
@@ -389,8 +437,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				if cancelEvent.is_set():
 					return
 				if kind == "text":
-					text, options = payload
-					self._speak_text(text, options, cancelEvent)
+					text, options, indexes = payload
+					self._speak_text(text, options, cancelEvent, indexes)
 				elif kind == "break":
 					self._feed_silence(payload)
 				elif kind == "index":
@@ -408,30 +456,103 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			if not cancelEvent.is_set():
 				synthDoneSpeaking.notify(synth=self)
 
-	def _speak_text(self, text: str, options: dict[str, Any], cancelEvent: threading.Event) -> None:
+	def _speak_text(
+		self,
+		text: str,
+		options: dict[str, Any],
+		cancelEvent: threading.Event,
+		indexes: list[_IndexMarker] | None = None,
+	) -> None:
+		indexes = indexes or []
+		leadingIndexes = [index for index, charOffset in indexes if charOffset <= 0]
+		remainingIndexes = [(index, charOffset) for index, charOffset in indexes if charOffset > 0]
+		for index in leadingIndexes:
+			if cancelEvent.is_set():
+				return
+			self._sync_player()
+			synthIndexReached.notify(synth=self, index=index)
+
+		hasInternalIndexes = any(0 < charOffset < len(text) for _index, charOffset in remainingIndexes)
+
 		cacheKey = self._short_cache_key(text, options)
 		if cacheKey is not None:
 			cached = self._get_cached_audio(cacheKey)
 			if cached is not None:
 				if not cancelEvent.is_set():
-					self._feed_audio(cached)
+					if hasInternalIndexes:
+						self._feed_audio_with_indexes(cached, remainingIndexes, len(text), cancelEvent)
+					else:
+						self._feed_audio(cached)
+						for index, _charOffset in remainingIndexes:
+							if cancelEvent.is_set():
+								return
+							self._sync_player()
+							synthIndexReached.notify(synth=self, index=index)
 				return
 		audioParts: list[bytes] = []
 
 		def on_audio(pcm: bytes) -> None:
 			if cancelEvent.is_set():
 				return
-			if cacheKey is not None and pcm:
+			if (cacheKey is not None or hasInternalIndexes) and pcm:
 				audioParts.append(pcm)
-			self._feed_audio(pcm)
+			if not hasInternalIndexes:
+				self._feed_audio(pcm)
 
 		self._bridge.speak(text, options, on_audio, cancelEvent)
-		if cacheKey is not None and audioParts and not cancelEvent.is_set():
-			self._put_cached_audio(cacheKey, b"".join(audioParts))
+		audio = b"".join(audioParts) if audioParts else b""
+		if hasInternalIndexes and not cancelEvent.is_set():
+			self._feed_audio_with_indexes(audio, remainingIndexes, len(text), cancelEvent)
+		elif remainingIndexes and not cancelEvent.is_set():
+			for index, _charOffset in remainingIndexes:
+				if cancelEvent.is_set():
+					return
+				self._sync_player()
+				synthIndexReached.notify(synth=self, index=index)
+		if cacheKey is not None and audio and not cancelEvent.is_set():
+			self._put_cached_audio(cacheKey, audio)
 
 	def _feed_audio(self, pcm: bytes) -> None:
 		if pcm:
 			self._player.feed(pcm)
+
+	def _feed_audio_with_indexes(
+		self,
+		pcm: bytes,
+		indexes: list[_IndexMarker],
+		totalCharacters: int,
+		cancelEvent: threading.Event,
+	) -> None:
+		if not indexes:
+			self._feed_audio(pcm)
+			return
+		if not pcm:
+			for index, _charOffset in indexes:
+				if cancelEvent.is_set():
+					return
+				self._sync_player()
+				synthIndexReached.notify(synth=self, index=index)
+			return
+		totalBytes = len(pcm)
+		totalCharacters = max(1, totalCharacters)
+		byteIndexes: list[tuple[Any, int]] = []
+		for index, charOffset in indexes:
+			clampedOffset = max(0, min(totalCharacters, charOffset))
+			byteOffset = int((clampedOffset / totalCharacters) * totalBytes)
+			byteOffset -= byteOffset % 2
+			byteIndexes.append((index, max(0, min(totalBytes, byteOffset))))
+		position = 0
+		for index, byteOffset in byteIndexes:
+			if cancelEvent.is_set():
+				return
+			if byteOffset > position:
+				self._feed_audio(pcm[position:byteOffset])
+				position = byteOffset
+			self._sync_player()
+			if not cancelEvent.is_set():
+				synthIndexReached.notify(synth=self, index=index)
+		if not cancelEvent.is_set() and position < totalBytes:
+			self._feed_audio(pcm[position:])
 
 	def _sync_player(self) -> None:
 		sync = getattr(self._player, "sync", None)
