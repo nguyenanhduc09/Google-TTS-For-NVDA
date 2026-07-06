@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from collections import OrderedDict, deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import suppress
-import re
+import hashlib
+import os
+import queue
 import threading
+import time
 from typing import Any
 
 import addonHandler
@@ -25,18 +28,100 @@ from . import voice_store
 addonHandler.initTranslation()
 
 
-_CLAUSE_TARGET_CHARS = 220
-_CLAUSE_MAX_CHARS = 360
-_FAST_FIRST_CLAUSE_TARGET_CHARS = 40
-_FAST_FIRST_CLAUSE_MAX_CHARS = 60
-_FAST_FIRST_CLAUSE_MIN_CHARS = 15
-_SHORT_CACHE_MAX_CHARS = 200
-_SHORT_CACHE_MAX_ITEMS = 256
-_SHORT_CACHE_MAX_BYTES = 12 * 1024 * 1024
-_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?;:])\s+")
-_CLAUSE_BOUNDARY_RE = re.compile(r"[,;:]\s+")
+_SHORT_CACHE_MAX_CHARS = 200000
+_SHORT_CACHE_MAX_ITEMS = 4096
+_SHORT_CACHE_MAX_BYTES = 100 * 1024 * 1024
 _SpeechRequest = tuple[list[Any], str, int, int, int, threading.Event]
 _IndexMarker = tuple[Any, int]
+
+
+class _PersistentDiskCache:
+	def __init__(self, cacheDir: os.PathLike[str] | str):
+		self._cacheDir = str(cacheDir)
+		self._queue: queue.Queue[tuple[str, bytes] | None] = queue.Queue()
+		self._shutdown = threading.Event()
+		with suppress(Exception):
+			os.makedirs(self._cacheDir, exist_ok=True)
+		self._writerThread = threading.Thread(
+			name="googleTtsForNvda.disk_cache_writer",
+			target=self._writer_loop,
+			daemon=True,
+		)
+		self._writerThread.start()
+
+	def _hash_key(self, key: tuple[Any, ...]) -> str:
+		return hashlib.sha256(repr(key).encode("utf-8", errors="replace")).hexdigest()
+
+	def _file_path(self, keyHash: str) -> str:
+		return os.path.join(self._cacheDir, f"{keyHash}.pcm")
+
+	def get(self, key: tuple[Any, ...]) -> bytes | None:
+		keyHash = self._hash_key(key)
+		filePath = self._file_path(keyHash)
+		try:
+			if os.path.exists(filePath):
+				with open(filePath, "rb") as f:
+					audio = f.read()
+				if audio:
+					self._queue.put((keyHash, b""))
+					return audio
+		except Exception:
+			log.debug("Persistent disk cache read failed for %s", keyHash, exc_info=True)
+		return None
+
+	def put(self, key: tuple[Any, ...], audio: bytes) -> None:
+		if not audio:
+			return
+		keyHash = self._hash_key(key)
+		self._queue.put((keyHash, audio))
+
+	def _writer_loop(self) -> None:
+		writeCount = 0
+		while not self._shutdown.is_set():
+			try:
+				item = self._queue.get(timeout=0.5)
+			except queue.Empty:
+				continue
+			if item is None:
+				break
+			keyHash, audio = item
+			filePath = self._file_path(keyHash)
+			try:
+				if audio:
+					with open(filePath, "wb") as f:
+						f.write(audio)
+					writeCount += 1
+				else:
+					if os.path.exists(filePath):
+						os.utime(filePath, None)
+				if writeCount >= 50:
+					writeCount = 0
+					self._evict_if_needed()
+			except Exception:
+				log.debug("Persistent disk cache write failed for %s", keyHash, exc_info=True)
+			finally:
+				self._queue.task_done()
+
+	def _evict_if_needed(self) -> None:
+		try:
+			files = [
+				(os.path.join(self._cacheDir, fname), os.path.getmtime(os.path.join(self._cacheDir, fname)))
+				for fname in os.listdir(self._cacheDir)
+				if fname.endswith(".pcm")
+			]
+			if len(files) > 5000:
+				files.sort(key=lambda x: x[1])
+				for fpath, _mtime in files[:-4000]:
+					with suppress(Exception):
+						os.remove(fpath)
+		except Exception:
+			pass
+
+	def close(self) -> None:
+		self._shutdown.set()
+		self._queue.put(None)
+		with suppress(Exception):
+			self._writerThread.join(timeout=1.0)
 
 
 class SynthDriver(synthDriverHandler.SynthDriver):
@@ -91,6 +176,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._cacheLock = threading.RLock()
 		self._shortAudioCache: OrderedDict[tuple[Any, ...], bytes] = OrderedDict()
 		self._shortAudioCacheBytes = 0
+		self._diskCache = _PersistentDiskCache(voice_store.data_root() / "audio_cache")
 		self._worker = threading.Thread(
 			name="googleTtsForNvda.speech",
 			target=self._speech_loop,
@@ -154,6 +240,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			self._speechCondition.notify_all()
 		with suppress(Exception):
 			self._bridge.terminate()
+		with suppress(Exception):
+			if hasattr(self, "_diskCache") and self._diskCache is not None:
+				self._diskCache.close()
 		with suppress(Exception):
 			self._player.close()
 
@@ -324,81 +413,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		return list(self._iter_text_segments_for_latency(text, False))
 
 	def _iter_text_segments_for_latency(self, text: str, fastFirstSegment: bool) -> Iterator[str]:
-		text = text.strip()
-		if not text:
-			return
-		useFastFirstSegment = fastFirstSegment
-		for sentence in self._iter_sentence_units(text):
-			if useFastFirstSegment and len(sentence) > _CLAUSE_TARGET_CHARS:
-				cut = self._find_punctuation_cut(
-					sentence,
-					_FAST_FIRST_CLAUSE_TARGET_CHARS,
-					_FAST_FIRST_CLAUSE_MAX_CHARS,
-					_FAST_FIRST_CLAUSE_MIN_CHARS,
-				)
-				if cut <= 0 and len(sentence) > _CLAUSE_MAX_CHARS:
-					cut = self._find_hard_word_cut(sentence, _FAST_FIRST_CLAUSE_MAX_CHARS)
-				if 0 < cut < len(sentence):
-					segment = sentence[:cut].strip()
-					if segment:
-						yield segment
-					sentence = sentence[cut:].strip()
-			useFastFirstSegment = False
-			if not sentence:
-				continue
-			if len(sentence) > _CLAUSE_TARGET_CHARS:
-				for segment in self._iter_long_text_segments(sentence):
-					yield segment
-				continue
-			yield sentence
-
-	def _iter_sentence_units(self, text: str) -> Iterator[str]:
-		start = 0
-		for match in _SENTENCE_BOUNDARY_RE.finditer(text):
-			sentence = text[start : match.start()].strip()
-			if sentence:
-				yield sentence
-			start = match.end()
-		sentence = text[start:].strip()
-		if sentence:
-			yield sentence
-
-	def _iter_long_text_segments(self, text: str) -> Iterator[str]:
 		remaining = text.strip()
-		while remaining:
-			if len(remaining) <= _CLAUSE_TARGET_CHARS:
-				yield remaining
-				return
-			cut = self._find_punctuation_cut(remaining, _CLAUSE_TARGET_CHARS, _CLAUSE_MAX_CHARS)
-			if cut <= 0:
-				if len(remaining) <= _CLAUSE_MAX_CHARS:
-					yield remaining
-					return
-				cut = self._find_hard_word_cut(remaining, _CLAUSE_MAX_CHARS)
-			segment = remaining[:cut].strip()
-			if segment:
-				yield segment
-			remaining = remaining[cut:].strip()
-
-	def _find_punctuation_cut(self, text: str, targetChars: int, maxChars: int, minChars: int | None = None) -> int:
-		best = -1
-		minChars = targetChars // 2 if minChars is None else minChars
-		for match in _CLAUSE_BOUNDARY_RE.finditer(text):
-			cut = match.start() + 1
-			if cut < minChars or cut > maxChars:
-				continue
-			if best < 0 or abs(cut - targetChars) <= abs(best - targetChars):
-				best = cut
-		return best
-
-	def _find_hard_word_cut(self, text: str, maxChars: int) -> int:
-		if len(text) <= maxChars:
-			return len(text)
-		window = text[:maxChars]
-		cut = window.rfind(" ")
-		if cut > max(1, _CLAUSE_TARGET_CHARS // 2):
-			return cut
-		return maxChars
+		if remaining:
+			yield remaining
 
 	def _speech_loop(self) -> None:
 		while not self._shutdownEvent.is_set():
@@ -489,27 +506,46 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 							self._sync_player()
 							synthIndexReached.notify(synth=self, index=index)
 				return
+
 		audioParts: list[bytes] = []
+		pendingIndexes = sorted(remainingIndexes, key=lambda item: item[1])
+
+		def notify_indexes_through(charOffset: int, *, sync: bool = False) -> None:
+			nonlocal pendingIndexes
+			while pendingIndexes and pendingIndexes[0][1] <= charOffset:
+				index, _indexOffset = pendingIndexes.pop(0)
+				if cancelEvent.is_set():
+					return
+				if sync:
+					self._sync_player()
+				synthIndexReached.notify(synth=self, index=index)
+
+		def on_mark(charOffset: int) -> None:
+			if not cancelEvent.is_set():
+				notify_indexes_through(max(0, min(len(text), charOffset)))
 
 		def on_audio(pcm: bytes) -> None:
-			if cancelEvent.is_set():
-				return
-			if (cacheKey is not None or hasInternalIndexes) and pcm:
+			if cacheKey is not None and pcm:
 				audioParts.append(pcm)
-			if not hasInternalIndexes:
+			if not cancelEvent.is_set():
 				self._feed_audio(pcm)
 
-		self._bridge.speak(text, options, on_audio, cancelEvent)
+		self._bridge.speak(
+			text,
+			options,
+			on_audio,
+			cancelEvent,
+			onMark=on_mark if hasInternalIndexes else None,
+		)
+
 		audio = b"".join(audioParts) if audioParts else b""
-		if hasInternalIndexes and not cancelEvent.is_set():
-			self._feed_audio_with_indexes(audio, remainingIndexes, len(text), cancelEvent)
-		elif remainingIndexes and not cancelEvent.is_set():
-			for index, _charOffset in remainingIndexes:
+		if pendingIndexes and not cancelEvent.is_set():
+			for index, _charOffset in pendingIndexes:
 				if cancelEvent.is_set():
 					return
 				self._sync_player()
 				synthIndexReached.notify(synth=self, index=index)
-		if cacheKey is not None and audio and not cancelEvent.is_set():
+		if cacheKey is not None and len(audio) >= 64 and not cancelEvent.is_set():
 			self._put_cached_audio(cacheKey, audio)
 
 	def _feed_audio(self, pcm: bytes) -> None:
@@ -586,16 +622,23 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def _get_cached_audio(self, key: tuple[Any, ...]) -> bytes | None:
 		with self._cacheLock:
 			audio = self._shortAudioCache.get(key)
-			if audio is None:
-				return None
-			self._shortAudioCache.move_to_end(key)
-			return audio
+			if audio is not None:
+				self._shortAudioCache.move_to_end(key)
+				return audio
+		if hasattr(self, "_diskCache") and self._diskCache is not None:
+			audio = self._diskCache.get(key)
+			if audio is not None:
+				self._put_cached_audio(key, audio, writeToDisk=False)
+				return audio
+		return None
 
-	def _put_cached_audio(self, key: tuple[Any, ...], audio: bytes) -> None:
+	def _put_cached_audio(self, key: tuple[Any, ...], audio: bytes, writeToDisk: bool = True) -> None:
 		if not audio:
 			return
 		if len(audio) > _SHORT_CACHE_MAX_BYTES:
 			return
+		if writeToDisk and hasattr(self, "_diskCache") and self._diskCache is not None:
+			self._diskCache.put(key, audio)
 		with self._cacheLock:
 			oldAudio = self._shortAudioCache.pop(key, None)
 			if oldAudio is not None:
@@ -651,25 +694,6 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def _normalize_language(self, lang: str | None) -> str:
 		return str(lang or "").replace("_", "-").lower()
 
-	def _warm_current_voice_async(self) -> None:
-		options = self._speech_options(self._rate, self._pitch, 0)
-		with suppress(Exception):
-			self._warmupCancelEvent.set()
-		cancelEvent = threading.Event()
-		self._warmupCancelEvent = cancelEvent
-
-		def warm() -> None:
-			try:
-				self._bridge.preload_voice(options, cancelEvent)
-			except CdpCancelled:
-				log.debug("Google TTS voice preload cancelled.")
-			except Exception:
-				log.debug("Google TTS voice preload failed.", exc_info=True)
-
-		thread = threading.Thread(name="googleTtsForNvda.preload", target=warm, daemon=True)
-		self._warmupThread = thread
-		thread.start()
-
 	def _rate_to_chrome(self, value: int) -> float:
 		percent = max(0, min(100, value)) / 100.0
 		rate = 0.35 + (2.0 - 0.35) * percent
@@ -689,6 +713,27 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			value = next(iter(self.availableVoices))
 		self.__voice = value
 		self._warm_current_voice_async()
+
+	def _warm_current_voice_async(self) -> None:
+		if self._shutdownEvent.is_set():
+			return
+		options = self._speech_options(self._rate, self._pitch, 0)
+		with suppress(Exception):
+			self._warmupCancelEvent.set()
+		cancelEvent = threading.Event()
+		self._warmupCancelEvent = cancelEvent
+
+		def warm() -> None:
+			try:
+				self._bridge.preload_voice(options, cancelEvent)
+			except CdpCancelled:
+				log.debug("Google TTS voice preload cancelled.")
+			except Exception:
+				log.debug("Google TTS voice preload failed.", exc_info=True)
+
+		thread = threading.Thread(name="googleTtsForNvda.preload", target=warm, daemon=True)
+		self._warmupThread = thread
+		thread.start()
 
 	def _get_language(self) -> str:
 		lang = self.catalog.language_for_voice(self.__voice)

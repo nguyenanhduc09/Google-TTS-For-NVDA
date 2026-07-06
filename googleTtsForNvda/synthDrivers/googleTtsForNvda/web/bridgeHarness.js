@@ -9,10 +9,13 @@
 	const firstAudioPacketSamples = 24;
 	const steadyAudioPacketSamples = 240;
 	const synthesisIdlePollMs = 5;
-	const synthesisIdleTailMs = 20;
+	const synthesisFallbackIdleMs = 250;
+	const workletEmptyDelayMs = 40;
 	let emittedAudioPackets = 0;
 	let pendingAudioBuffers = [];
 	let pendingAudioSampleCount = 0;
+	let sawSynthesisEnd = false;
+	let currentEndResolver = null;
 	const messageListeners = [];
 
 	function emit(message) {
@@ -26,6 +29,14 @@
 	function dispatchChromeMessage(message, callback) {
 		const run = async () => {
 			let response = { result: "stubbed" };
+			if (message && message.type === "offscreenTtsEventResponse") {
+				handleTtsEngineEvent(message.event);
+				response = { result: "handled" };
+				if (callback) {
+					callback(response);
+				}
+				return response;
+			}
 			for (const listener of messageListeners) {
 				let listenerResponse;
 				const maybePromise = listener(message, { id: "google-tts-for-nvda" }, (value) => {
@@ -159,6 +170,41 @@
 		emittedAudioPackets = 0;
 	}
 
+	function handleTtsEngineEvent(event) {
+		if (!event || !currentSessionId) {
+			return;
+		}
+		if (event.type === "word") {
+			emit({ type: "mark", charIndex: Math.max(0, Number(event.charIndex) || 0) });
+			return;
+		}
+		if (event.type === "end") {
+			sawSynthesisEnd = true;
+			if (currentEndResolver) {
+				currentEndResolver();
+			}
+			return;
+		}
+		if (event.type === "error") {
+			emit({ type: "error", message: "Chrome TTS synthesis failed." });
+		}
+	}
+
+	function scheduleWorkletEmpty(port) {
+		if (!port) {
+			return;
+		}
+		if (port._emptyTimer) {
+			clearTimeout(port._emptyTimer);
+		}
+		port._emptyTimer = setTimeout(() => {
+			port._emptyTimer = null;
+			if (!stopped && typeof port.onmessage === "function") {
+				port.onmessage({ data: { type: "empty" } });
+			}
+		}, workletEmptyDelayMs);
+	}
+
 	function flushAudioQueue() {
 		if (!pendingAudioSampleCount || stopped) {
 			resetAudioQueue();
@@ -188,7 +234,18 @@
 			this.port = {
 				onmessage: null,
 				postMessage(message) {
-					if (!message || message.command !== "addBuffer" || !message.buffer || stopped) {
+					if (!message || stopped) {
+						return;
+					}
+					if (message.command === "clearBuffers") {
+						resetAudioQueue();
+						if (this._emptyTimer) {
+							clearTimeout(this._emptyTimer);
+							this._emptyTimer = null;
+						}
+						return;
+					}
+					if (message.command !== "addBuffer" || !message.buffer) {
 						return;
 					}
 					const samples = message.buffer instanceof Float32Array
@@ -196,6 +253,7 @@
 						: new Float32Array(message.buffer);
 					lastChunkAt = performance.now();
 					queueAudio(samples);
+					scheduleWorkletEmpty(this);
 				},
 			};
 		}
@@ -208,18 +266,18 @@
 	window.webkitAudioContext = FakeAudioContext;
 	window.AudioWorkletNode = FakeAudioWorkletNode;
 
-	async function waitForSynthesisIdle(timeoutMs, idleMs) {
+	async function waitForSynthesisComplete(timeoutMs) {
 		const startedAt = performance.now();
-		let sawAudio = false;
 		while (performance.now() - startedAt < timeoutMs) {
-			await new Promise((resolve) => setTimeout(resolve, synthesisIdlePollMs));
-			if (stopped) {
+			if (stopped || sawSynthesisEnd) {
 				return;
 			}
-			if (lastChunkAt > 0) {
-				sawAudio = true;
-			}
-			if (sawAudio && performance.now() - lastChunkAt >= idleMs) {
+			await new Promise((resolve) => {
+				currentEndResolver = resolve;
+				setTimeout(resolve, synthesisIdlePollMs);
+			});
+			currentEndResolver = null;
+			if (lastChunkAt > 0 && performance.now() - lastChunkAt >= synthesisFallbackIdleMs) {
 				return;
 			}
 		}
@@ -244,6 +302,22 @@
 		return null;
 	}
 
+	const readyLanguages = new Set();
+
+	async function ensureLanguageReady(engine, lang) {
+		if (!lang || readyLanguages.has(lang)) {
+			return;
+		}
+		if (typeof engine.onInstallLanguageRequest === "function") {
+			try {
+				await engine.onInstallLanguageRequest(lang);
+				readyLanguages.add(lang);
+			} catch (error) {
+				console.warn("onInstallLanguageRequest failed for", lang, error);
+			}
+		}
+	}
+
 	async function ensureEngineInitialized() {
 		const engine = getTtsEngine();
 		if (!engine) {
@@ -260,6 +334,10 @@
 
 	async function stopActiveSynthesis() {
 		stopped = true;
+		if (currentEndResolver) {
+			currentEndResolver();
+			currentEndResolver = null;
+		}
 		resetAudioQueue();
 		const engine = getTtsEngine();
 		if (engine && typeof engine.onStop === "function") {
@@ -280,11 +358,15 @@
 		currentOutputGain = 0;
 		lastChunkAt = 0;
 		stopped = false;
+		sawSynthesisEnd = false;
 		resetAudioQueue();
 		await ensureEngineInitialized();
 		const engine = getTtsEngine();
 		if (!engine) {
 			throw new Error("Chrome WASM TTS engine was not loaded.");
+		}
+		if (!readyLanguages.has(payload.lang)) {
+			await ensureLanguageReady(engine, payload.lang);
 		}
 		await engine.onSpeak("", {
 			voiceName: payload.voiceName,
@@ -301,19 +383,23 @@
 
 	window.googleTtsForNvdaSpeak = async function googleTtsForNvdaSpeak(payload) {
 		try {
+			if (currentSessionId) {
+				await stopActiveSynthesis();
+			}
 			await ensureEngineInitialized();
 			const engine = getTtsEngine();
 			if (!engine) {
 				throw new Error("Chrome WASM TTS engine was not loaded.");
 			}
-			if (currentSessionId) {
-				await stopActiveSynthesis();
+			if (!readyLanguages.has(payload.lang)) {
+				await ensureLanguageReady(engine, payload.lang);
 			}
 			const sessionId = payload.sessionId;
 			currentSessionId = sessionId;
 			currentOutputGain = outputGainFromPayload(payload);
 			lastChunkAt = 0;
 			stopped = false;
+			sawSynthesisEnd = false;
 			resetAudioQueue();
 			emit({ type: "started" });
 			await engine.onSpeak(payload.text, {
@@ -323,9 +409,10 @@
 				pitch: payload.pitch,
 				volume: payload.volume,
 			});
-			await waitForSynthesisIdle(120000, synthesisIdleTailMs);
+			await waitForSynthesisComplete(120000);
 			flushAudioQueue();
 			emit({ type: "done" });
+			await stopActiveSynthesis();
 			if (currentSessionId === sessionId) {
 				currentSessionId = null;
 			}

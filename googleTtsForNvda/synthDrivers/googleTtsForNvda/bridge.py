@@ -59,11 +59,24 @@ class CdpCancelled(Exception):
 
 
 AudioCallback = Callable[[bytes], None]
+MarkCallback = Callable[[int], None]
 
 
 class _ThreadingTcpServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 	allow_reuse_address = True
 	daemon_threads = True
+
+	def handle_error(self, request: Any, client_address: Any) -> None:
+		exc_type, _exc_value, _tb = sys.exc_info()
+		if exc_type is not None and issubclass(exc_type, (ConnectionResetError, BrokenPipeError, OSError)):
+			return
+		super().handle_error(request, client_address)
+
+	def finish_request(self, request: Any, client_address: Any) -> None:
+		try:
+			super().finish_request(request, client_address)
+		except (ConnectionResetError, BrokenPipeError, OSError):
+			pass
 
 
 class _BridgeRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -217,6 +230,7 @@ class ChromeTtsBridge:
 		options: dict[str, Any],
 		onAudio: AudioCallback,
 		cancelEvent: threading.Event | None = None,
+		onMark: MarkCallback | None = None,
 	) -> dict[str, Any]:
 		if not text.strip():
 			return {"success": True, "empty": True}
@@ -275,6 +289,12 @@ class ChromeTtsBridge:
 						)
 					state["audioChunks"] += 1
 					onAudio(audio)
+			elif eventType == "mark":
+				if onMark is not None:
+					try:
+						onMark(max(0, int(event.get("charIndex") or 0)))
+					except (TypeError, ValueError):
+						pass
 			elif eventType == "done":
 				state["done"] = True
 			elif eventType == "error":
@@ -388,6 +408,13 @@ class ChromeTtsBridge:
 			"--disable-crash-reporter",
 			"--noerrdialogs",
 			"--autoplay-policy=no-user-gesture-required",
+			"--disable-background-timer-throttling",
+			"--disable-backgrounding-occluded-windows",
+			"--disable-renderer-backgrounding",
+			"--js-flags=--no-idle-gc --wasm-lazy-compilation=false",
+			"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
+			"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering",
+			"--enable-wasm-simd",
 			pageUrl,
 		]
 		self._chromeProcess = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -506,6 +533,13 @@ class ChromeTtsBridge:
 				while time.monotonic() < deadline:
 					if cancelEvent is not None and cancelEvent.is_set():
 						self._send_stop()
+						while True:
+							try:
+								self._ws.recv()
+							except websocket.WebSocketTimeoutException:
+								break
+							except Exception:
+								break
 						raise CdpCancelled()
 					try:
 						rawMessage = self._ws.recv()
