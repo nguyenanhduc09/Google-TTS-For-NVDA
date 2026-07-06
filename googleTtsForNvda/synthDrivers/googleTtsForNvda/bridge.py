@@ -349,13 +349,11 @@ class ChromeTtsBridge:
 		with self._lock:
 			self._close_websocket()
 			if self._chromeProcess is not None and self._chromeProcess.poll() is None:
-				try:
+				with suppress(Exception):
 					self._chromeProcess.terminate()
-					self._chromeProcess.wait(timeout=5)
-				except subprocess.TimeoutExpired:
+					self._chromeProcess.wait(timeout=2)
+				with suppress(Exception):
 					self._chromeProcess.kill()
-				except Exception:
-					pass
 			self._chromeProcess = None
 			self._debugPort = None
 			if self._server is not None:
@@ -383,7 +381,15 @@ class ChromeTtsBridge:
 
 	def _start_chrome(self, cancelEvent: threading.Event | None = None) -> None:
 		if self._chromeProcess is not None and self._chromeProcess.poll() is None:
-			return
+			if self._debugPort is not None:
+				return
+			with suppress(Exception):
+				self._chromeProcess.terminate()
+				self._chromeProcess.wait(timeout=2)
+			with suppress(Exception):
+				self._chromeProcess.kill()
+			self._chromeProcess = None
+			self._debugPort = None
 		_raise_if_cancelled(cancelEvent)
 		chromePath = self.find_chrome()
 		if not chromePath:
@@ -420,10 +426,12 @@ class ChromeTtsBridge:
 		self._chromeProcess = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 		try:
 			self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
-		except CdpCancelled:
+		except Exception:
 			with suppress(Exception):
 				self._chromeProcess.terminate()
 				self._chromeProcess.wait(timeout=2)
+			with suppress(Exception):
+				self._chromeProcess.kill()
 			self._chromeProcess = None
 			self._debugPort = None
 			self._remove_chrome_profile()
