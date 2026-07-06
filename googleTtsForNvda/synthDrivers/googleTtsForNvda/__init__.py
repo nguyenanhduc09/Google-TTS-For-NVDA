@@ -756,8 +756,19 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._warmupCancelEvent = cancelEvent
 
 		def warm() -> None:
+			time.sleep(0.25)
+			if cancelEvent.is_set() or self._shutdownEvent.is_set():
+				return
 			try:
 				self._bridge.preload_voice(options, cancelEvent)
+				for voiceId in list(self.availableVoices.keys()):
+					if cancelEvent.is_set() or self._shutdownEvent.is_set():
+						break
+					if voiceId == self.__voice:
+						continue
+					vOpts = self._speech_options(self._rate, self._pitch, 0, voiceId)
+					with suppress(Exception):
+						self._bridge.preload_voice(vOpts, cancelEvent)
 			except CdpCancelled:
 				log.debug("Google TTS voice preload cancelled.")
 			except Exception:

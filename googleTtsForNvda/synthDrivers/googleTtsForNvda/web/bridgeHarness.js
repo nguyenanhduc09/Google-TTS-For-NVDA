@@ -328,6 +328,7 @@
 	}
 
 	const readyLanguages = new Set();
+	const readyVoices = new Set();
 
 	async function ensureLanguageReady(engine, lang) {
 		if (!lang || readyLanguages.has(lang)) {
@@ -393,6 +394,12 @@
 		if (!readyLanguages.has(payload.lang)) {
 			await ensureLanguageReady(engine, payload.lang);
 		}
+		if (readyVoices.has(payload.voiceName)) {
+			if (currentSessionId === payload.sessionId) {
+				currentSessionId = null;
+			}
+			return { success: true, preloaded: true, cached: true };
+		}
 		await engine.onSpeak("", {
 			voiceName: payload.voiceName,
 			lang: payload.lang,
@@ -400,6 +407,7 @@
 			pitch: 1,
 			volume: 0,
 		});
+		readyVoices.add(payload.voiceName);
 		if (currentSessionId === payload.sessionId) {
 			currentSessionId = null;
 		}
@@ -434,6 +442,7 @@
 				pitch: payload.pitch,
 				volume: payload.volume,
 			});
+			readyVoices.add(payload.voiceName);
 			await waitForSynthesisComplete(120000);
 			flushAudioQueue();
 			emit({ type: "done" });

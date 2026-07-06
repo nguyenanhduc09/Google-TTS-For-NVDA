@@ -41,7 +41,7 @@ WEBSOCKET_CLIENT_DIR = BASE_DIR / "websocketClientRepo"
 BINDING_NAME = "googleTtsForNvdaBridge"
 SAMPLE_RATE = 24000
 RECV_POLL_TIMEOUT = 0.005
-STARTUP_POLL_INTERVAL = 0.05
+STARTUP_POLL_INTERVAL = 0.01
 STOP_EXPRESSION = "window.googleTtsForNvdaStop && window.googleTtsForNvdaStop()"
 
 if str(WEBSOCKET_CLIENT_DIR) not in sys.path:
@@ -444,8 +444,12 @@ class ChromeTtsBridge:
 		root = voice_store.data_root() / "chromeProfiles"
 		root.mkdir(parents=True, exist_ok=True)
 		self._cleanup_old_chrome_profiles(root)
-		self._profileDir = root / f"session-{os.getpid()}-{time.monotonic_ns()}"
-		self._profileDir.mkdir(parents=True, exist_ok=True)
+		profileDir = root / "persistentSession"
+		profileDir.mkdir(parents=True, exist_ok=True)
+		for lockName in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
+			with suppress(OSError):
+				(profileDir / lockName).unlink()
+		self._profileDir = profileDir
 		return self._profileDir
 
 	def _cleanup_old_chrome_profiles(self, root: Path) -> None:
