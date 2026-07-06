@@ -34,6 +34,7 @@ env/
 chromeProfiles/
 session-*/
 runtime/
+google tts voices.json
 
 # Editor / IDE configuration
 .vscode/
