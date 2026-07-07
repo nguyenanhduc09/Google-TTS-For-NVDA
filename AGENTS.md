@@ -357,7 +357,7 @@ $zip.Dispose()
 ### Version management
 
 - Version is in `googleTtsForNvda/manifest.ini`, field `version`.
-- Current version: `0.1.5`.
+- Current version: `0.2`.
 - Current authors: Dao Duc Trung and Nguyen Anh Duc.
 - NVDA compatibility: `minimumNVDAVersion = 2024.1.0`, `lastTestedNVDAVersion = 2026.1.0`.
 - Increment `manifest.ini` before producing a release build.
