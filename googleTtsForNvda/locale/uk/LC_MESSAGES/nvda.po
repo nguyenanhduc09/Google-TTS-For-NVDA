@@ -1,0 +1,538 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: \n"
+"POT-Creation-Date: 2026-07-06 18:58+0300\n"
+"PO-Revision-Date: 2026-07-06 19:32+0300\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"Language: uk\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 3.9\n"
+"X-Poedit-Basepath: ..\n"
+"X-Poedit-SearchPath-0: globalPlugins\n"
+"X-Poedit-SearchPath-1: synthDrivers\n"
+
+#: globalPlugins/googleTtsForNvda/__init__.py:63
+#: synthDrivers/googleTtsForNvda/__init__.py:231
+msgid "Google TTS For NVDA"
+msgstr "Google TTS для NVDA"
+
+#: globalPlugins/googleTtsForNvda/__init__.py:71
+msgid "Google TTS voice manager..."
+msgstr "Менеджер голосів Google TTS..."
+
+#: globalPlugins/googleTtsForNvda/__init__.py:72
+msgid "Download and remove Google TTS voice packages"
+msgstr "Завантаження та видалення голосових пакетів Google TTS"
+
+#: globalPlugins/googleTtsForNvda/__init__.py:95
+msgid "Opens the Google TTS voice manager."
+msgstr "Відкриває менеджер голосів Google TTS."
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:23
+msgid "Arabic"
+msgstr "Арабська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:24
+msgid "Assamese"
+msgstr "Ассамська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:25
+msgid "Bulgarian"
+msgstr "Болгарська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:26
+msgid "Bengali (Bangladesh)"
+msgstr "Бенгальська (Бангладеш)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:27
+msgid "Bengali (India)"
+msgstr "Бенгальська (Індія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:28
+msgid "Bodo"
+msgstr "Бодо"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:29
+msgid "Bosnian"
+msgstr "Боснійська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:30
+msgid "Catalan"
+msgstr "Каталонська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:31
+msgid "Mandarin Chinese (China)"
+msgstr "Китайська (мандаринська) (Китай)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:32
+msgid "Mandarin Chinese (Taiwan)"
+msgstr "Китайська (мандаринська) (Тайвань)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:33
+msgid "Czech"
+msgstr "Чеська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:34
+msgid "Welsh"
+msgstr "Валлійська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:35
+msgid "Danish"
+msgstr "Данська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:36
+msgid "German"
+msgstr "Німецька"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:37
+msgid "Dogri"
+msgstr "Догрі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:38
+msgid "Greek"
+msgstr "Грецька"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:39
+msgid "English (Australia)"
+msgstr "Англійська (Австралія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:40
+msgid "English (UK)"
+msgstr "Англійська (Велика Британія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:41
+msgid "English (India)"
+msgstr "Англійська (Індія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:42
+msgid "English (Nigeria)"
+msgstr "Англійська (Нігерія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:43
+msgid "English (US)"
+msgstr "Англійська (США)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:44
+msgid "Spanish (Spain)"
+msgstr "Іспанська (Іспанія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:45
+msgid "Spanish (US)"
+msgstr "Іспанська (США)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:46
+msgid "Estonian"
+msgstr "Естонська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:47
+msgid "Finnish"
+msgstr "Фінська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:48
+msgid "Filipino"
+msgstr "Філіппінська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:49
+msgid "French (Canada)"
+msgstr "Французька (Канада)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:50
+msgid "French (France)"
+msgstr "Французька (Франція)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:51
+msgid "Gujarati"
+msgstr "Гуджараті"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:52
+msgid "Hebrew"
+msgstr "Іврит"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:53
+msgid "Hindi"
+msgstr "Хінді"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:54
+msgid "Croatian"
+msgstr "Хорватська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:55
+msgid "Hungarian"
+msgstr "Угорська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:56
+msgid "Indonesian"
+msgstr "Індонезійська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:57
+msgid "Icelandic"
+msgstr "Ісландська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:58
+msgid "Italian"
+msgstr "Італійська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:59
+msgid "Japanese"
+msgstr "Японська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:60
+msgid "Javanese"
+msgstr "Яванська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:61
+msgid "Khmer"
+msgstr "Кхмерська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:62
+msgid "Kannada"
+msgstr "Каннада"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:63
+msgid "Korean"
+msgstr "Корейська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:64
+msgid "Konkani"
+msgstr "Конкані"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:65
+msgid "Kashmiri"
+msgstr "Кашмірська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:66
+msgid "Lithuanian"
+msgstr "Литовська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:67
+msgid "Latvian"
+msgstr "Латиська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:68
+msgid "Maithili"
+msgstr "Майтхілі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:69
+msgid "Malayalam"
+msgstr "Малаялам"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:70
+msgid "Manipuri"
+msgstr "Маніпурі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:71
+msgid "Marathi"
+msgstr "Маратхі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:72
+msgid "Malay"
+msgstr "Малайська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:73
+msgid "Norwegian Bokmål"
+msgstr "Норвезька (букмол)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:74
+msgid "Nepali"
+msgstr "Непальська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:75
+msgid "Flemish"
+msgstr "Фламандська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:76
+msgid "Dutch"
+msgstr "Нідерландська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:77
+msgid "Odia"
+msgstr "Одія"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:78
+msgid "Punjabi"
+msgstr "Пенджабі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:79
+msgid "Polish"
+msgstr "Польська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:80
+msgid "Portuguese (Brazil)"
+msgstr "Португальська (Бразилія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:81
+msgid "Portuguese (Portugal)"
+msgstr "Португальська (Португалія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:82
+msgid "Romanian"
+msgstr "Румунська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:83
+msgid "Russian"
+msgstr "Російська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:84
+msgid "Sanskrit"
+msgstr "Санскрит"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:85
+msgid "Santali"
+msgstr "Санталі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:86
+msgid "Sindhi"
+msgstr "Сіндхі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:87
+msgid "Sinhala"
+msgstr "Сингальська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:88
+msgid "Slovak"
+msgstr "Словацька"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:89
+msgid "Slovenian"
+msgstr "Словенська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:90
+msgid "Albanian"
+msgstr "Албанська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:91
+msgid "Serbian"
+msgstr "Сербська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:92
+msgid "Sundanese"
+msgstr "Суданська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:93
+msgid "Swedish"
+msgstr "Шведська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:94
+msgid "Swahili"
+msgstr "Суахілі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:95
+msgid "Tamil"
+msgstr "Тамільська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:96
+msgid "Telugu"
+msgstr "Телугу"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:97
+msgid "Thai"
+msgstr "Тайська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:98
+msgid "Turkish"
+msgstr "Турецька"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:99
+msgid "Ukrainian"
+msgstr "Українська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:100
+msgid "Urdu (India)"
+msgstr "Урду (Індія)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:101
+msgid "Urdu (Pakistan)"
+msgstr "Урду (Пакистан)"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:102
+msgid "Vietnamese"
+msgstr "В'єтнамська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:103
+msgid "Cantonese"
+msgstr "Кантонська"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:123
+#: globalPlugins/googleTtsForNvda/voiceManager.py:500
+#: globalPlugins/googleTtsForNvda/voiceManager.py:588
+#: globalPlugins/googleTtsForNvda/voiceManager.py:612
+msgid "Google TTS Voice Manager"
+msgstr "Менеджер голосів Google TTS"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:153
+msgid "Installed"
+msgstr "Встановлено"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:154
+msgid "Download"
+msgstr "Завантажити"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:159
+msgid "Ready."
+msgstr "Готовий."
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:160
+#: globalPlugins/googleTtsForNvda/voiceManager.py:251
+msgid "Status"
+msgstr "Статус"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:162
+msgid "Progress"
+msgstr "Перебіг виконання"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:169
+msgid "&Refresh"
+msgstr "&Оновити"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:170
+msgid "&Open voices folder"
+msgstr "&Відкрити папку з голосами"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:187
+#: globalPlugins/googleTtsForNvda/voiceManager.py:216
+msgid "&Filter by language:"
+msgstr "&Відфільтрувати за мовою:"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:189
+msgid "Filter installed voices by language"
+msgstr "Відфільтрувати встановлені голоси за мовою"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:196
+#: globalPlugins/googleTtsForNvda/voiceManager.py:225
+msgid "Select &all voices"
+msgstr "Вибрати всі голоси"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:201
+msgid "Installed voice packages"
+msgstr "Встановлені голосові пакети"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:206
+msgid "&Remove checked voices"
+msgstr "&Видалити вибрані голоси"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:218
+msgid "Filter downloadable voices by language"
+msgstr "Відфільтрувати голоси для завантаження за мовою"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:230
+msgid "Downloadable voice packages"
+msgstr "Голосові пакети, доступні для завантаження"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:235
+msgid "&Download checked voices"
+msgstr "&Завантажити вибрані голоси"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:245
+msgid "Language"
+msgstr "Мова"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:246
+msgid "Package"
+msgstr "Пакет"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:247
+msgid "Voices"
+msgstr "Голоси"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:248
+msgid "Size"
+msgstr "Розмір"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:258
+msgid "All"
+msgstr "Усі"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:309
+#, python-brace-format
+msgid "{installed} installed, {available} available - Google TTS Voice Manager"
+msgstr ""
+"{installed} встановлено, {available} доступно — Менеджер голосів Google TTS"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:373
+msgid "installed"
+msgstr "встановлено"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:373
+msgid "not installed"
+msgstr "не встановлено"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:383
+#, python-brace-format
+msgid "{size:.1f} MB"
+msgstr "{size:.1f} МБ"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:426
+#: globalPlugins/googleTtsForNvda/voiceManager.py:489
+msgid "No voice packages selected."
+msgstr "Голосові пакети не вибрано."
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:446
+#, python-brace-format
+msgid "Downloading {current}/{total}: {package}"
+msgstr "Завантаження {current}/{total}: {package}"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:470
+#, python-brace-format
+msgid "Downloaded {succeeded} of {total}. Failed: {failList}"
+msgstr "Завантажено {succeeded} з {total}. Не вдалося: {failList}"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:477
+#, python-brace-format
+msgid "Downloaded {package}."
+msgstr "Завантажено {package}."
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:479
+#, python-brace-format
+msgid "Downloaded {count} voice packages."
+msgstr "Завантажено {count} голосових пакетів."
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:492
+#, python-brace-format
+msgid "Remove {package}?"
+msgstr "Видалити {package}?"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:495
+#, python-brace-format
+msgid ""
+"Remove {count} voice packages?\n"
+"{packages}"
+msgstr "Видалити {count} голосових пакетів? {packages}"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:531
+#, python-brace-format
+msgid "Removed {succeeded} of {total}. Failed: {failList}"
+msgstr "Видалено {succeeded} з {total}. Не вдалося: {failList}"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:538
+#, python-brace-format
+msgid "Removed {package}."
+msgstr "Видалено {package}."
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:540
+#, python-brace-format
+msgid "Removed {count} voice packages."
+msgstr "Видалено {count} голосових пакетів."
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:561
+msgid "Working..."
+msgstr "Обробка..."
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:587
+#, python-brace-format
+msgid "Failed: {message}"
+msgstr "Не вдалося: {message}"
+
+#: globalPlugins/googleTtsForNvda/voiceManager.py:611
+msgid "A voice operation is still running."
+msgstr "Голосова операція все ще виконується."
+
+#: synthDrivers/googleTtsForNvda/__init__.py:230
+msgid ""
+"Google Chrome was not found. Install Google Chrome or set CHROME_PATH to "
+"chrome.exe."
+msgstr ""
+"Не знайдено Google Chrome. Встановіть Google Chrome або вкажіть для змінної "
+"CHROME_PATH шлях до файлу chrome.exe."
