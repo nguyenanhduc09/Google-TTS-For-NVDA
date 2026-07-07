@@ -131,6 +131,49 @@ def _raise_if_cancelled(cancelEvent: threading.Event | None) -> None:
 		raise CdpCancelled()
 
 
+def _hidden_chrome_startup_kwargs() -> dict[str, Any]:
+	if os.name != "nt":
+		return {}
+	startupInfo = subprocess.STARTUPINFO()
+	startupInfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+	startupInfo.wShowWindow = 0
+	return {
+		"startupinfo": startupInfo,
+		"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+	}
+
+
+def _hide_chrome_windows(processId: int) -> None:
+	if os.name != "nt":
+		return
+	try:
+		import ctypes
+		from ctypes import wintypes
+
+		windowProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+		user32 = ctypes.windll.user32
+		user32.EnumWindows.argtypes = [windowProc, wintypes.LPARAM]
+		user32.EnumWindows.restype = wintypes.BOOL
+		user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+		user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+		user32.IsWindowVisible.argtypes = [wintypes.HWND]
+		user32.IsWindowVisible.restype = wintypes.BOOL
+		user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+		user32.ShowWindow.restype = wintypes.BOOL
+
+		@windowProc
+		def enum_window(hwnd: int, _param: int) -> bool:
+			ownerProcessId = wintypes.DWORD()
+			user32.GetWindowThreadProcessId(hwnd, ctypes.byref(ownerProcessId))
+			if ownerProcessId.value == processId and user32.IsWindowVisible(hwnd):
+				user32.ShowWindow(hwnd, 0)
+			return True
+
+		user32.EnumWindows(enum_window, 0)
+	except Exception:
+		log.debug("Could not hide Google TTS Chrome helper window.", exc_info=True)
+
+
 class ChromeTtsBridge:
 	def __init__(self, catalog: VoiceCatalog | None = None) -> None:
 		self.catalog = catalog or VoiceCatalog.load()
@@ -412,8 +455,11 @@ class ChromeTtsBridge:
 			"--disable-background-networking",
 			"--disable-breakpad",
 			"--disable-crash-reporter",
+			"--disable-gpu",
 			"--noerrdialogs",
 			"--autoplay-policy=no-user-gesture-required",
+			"--window-position=-32000,-32000",
+			"--window-size=1,1",
 			"--disable-background-timer-throttling",
 			"--disable-backgrounding-occluded-windows",
 			"--disable-renderer-backgrounding",
@@ -423,9 +469,16 @@ class ChromeTtsBridge:
 			"--enable-wasm-simd",
 			pageUrl,
 		]
-		self._chromeProcess = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+		self._chromeProcess = subprocess.Popen(
+			args,
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+			**_hidden_chrome_startup_kwargs(),
+		)
+		_hide_chrome_windows(self._chromeProcess.pid)
 		try:
 			self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
+			_hide_chrome_windows(self._chromeProcess.pid)
 		except Exception:
 			with suppress(Exception):
 				self._chromeProcess.terminate()
@@ -477,6 +530,8 @@ class ChromeTtsBridge:
 	def _read_devtools_port(self, devToolsFile: Path, cancelEvent: threading.Event | None = None) -> int:
 		for _ in range(400):
 			_raise_if_cancelled(cancelEvent)
+			if self._chromeProcess is not None:
+				_hide_chrome_windows(self._chromeProcess.pid)
 			if self._chromeProcess is not None and self._chromeProcess.poll() is not None:
 				exitCode = self._chromeProcess.returncode
 				self._chromeProcess = None
@@ -501,6 +556,8 @@ class ChromeTtsBridge:
 			raise CdpError("Chrome DevTools port is not ready.")
 		for _ in range(200):
 			_raise_if_cancelled(cancelEvent)
+			if self._chromeProcess is not None:
+				_hide_chrome_windows(self._chromeProcess.pid)
 			try:
 				targets = _read_json_endpoint(self._debugPort, "/json/list", timeout=0.5)
 			except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
