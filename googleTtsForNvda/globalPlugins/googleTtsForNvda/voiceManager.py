@@ -136,6 +136,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self._build_ui()
 		self.SetMinSize((720, 520))
 		self.SetEscapeId(wx.ID_CLOSE)
+		self.Bind(wx.EVT_CHAR_HOOK, self.on_char_hook)
 		self.Bind(wx.EVT_CLOSE, self.on_close)
 		self.Bind(wx.EVT_WINDOW_DESTROY, self.on_destroy)
 		self.refresh_lists()
@@ -339,6 +340,51 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 
 	def _focus_download_tab(self) -> None:
 		self.notebook.SetFocus()
+
+	def on_char_hook(self, evt: wx.KeyEvent) -> None:
+		if evt.GetKeyCode() != wx.WXK_TAB or not evt.ControlDown():
+			evt.Skip()
+			return
+		pageCount = self.notebook.GetPageCount()
+		if pageCount <= 1:
+			evt.Skip()
+			return
+		currentPage = self.notebook.GetSelection()
+		if currentPage == wx.NOT_FOUND:
+			currentPage = 0
+		direction = -1 if evt.ShiftDown() else 1
+		newPage = (currentPage + direction) % pageCount
+		self.notebook.SetSelection(newPage)
+		tabName = self.notebook.GetPageText(newPage).replace("&", "")
+		ui.message(_("{tab} tab selected").format(tab=tabName))
+		wx.CallLater(100, self._focus_first_control_on_active_page)
+
+	def _focus_first_control_on_active_page(self) -> None:
+		if self.notebook.GetSelection() == 1:
+			candidates: tuple[wx.Window, ...] = (
+				self.downloadLanguageCombo,
+				self.downloadSelectAllCheck,
+				self.downloadList,
+				self.downloadButton,
+			)
+		else:
+			candidates = (
+				self.installedLanguageCombo,
+				self.installedSelectAllCheck,
+				self.installedList,
+				self.removeButton,
+			)
+		for control in candidates:
+			if self._can_focus(control):
+				control.SetFocus()
+				return
+		self.notebook.SetFocus()
+
+	def _can_focus(self, control: wx.Window) -> bool:
+		if not control.IsEnabled() or not control.IsShown():
+			return False
+		canAcceptFocus = getattr(control, "CanAcceptFocus", None)
+		return bool(canAcceptFocus()) if callable(canAcceptFocus) else True
 
 	def _populate_installed_list(self) -> None:
 		self.installedList.DeleteAllItems()
