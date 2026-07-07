@@ -1,3 +1,4 @@
+[readme.md](https://github.com/user-attachments/files/29732263/readme.md)
 # Google TTS для NVDA
 
 Додаток для NVDA, що використовує синтез мовлення WebAssembly (WASM) із Google Chrome для отримання якісних природних голосів в офлайн-режимі.
