@@ -753,7 +753,11 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._warmupCancelEvent = cancelEvent
 
 		def warm() -> None:
-			time.sleep(0.25)
+			try:
+				self._bridge.ensure_connection()
+			except Exception:
+				log.debug("Google TTS bridge eager connection failed.", exc_info=True)
+				return
 			if cancelEvent.is_set() or self._shutdownEvent.is_set():
 				return
 			try:

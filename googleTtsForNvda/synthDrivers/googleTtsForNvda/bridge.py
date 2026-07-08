@@ -247,25 +247,21 @@ class ChromeTtsBridge:
 				return candidate
 		return None
 
-	def ensure_connection(self, cancelEvent: threading.Event | None = None) -> None:
+	def ensure_connection(self) -> None:
 		with self._lock:
-			_raise_if_cancelled(cancelEvent)
 			if self._ws is not None and self._ws.connected:
 				return
 			try:
 				self._start_server()
-				_raise_if_cancelled(cancelEvent)
-				self._start_chrome(cancelEvent)
-				_raise_if_cancelled(cancelEvent)
-				wsUrl = self._get_page_websocket_url(cancelEvent)
-				_raise_if_cancelled(cancelEvent)
+				self._start_chrome()
+				wsUrl = self._get_page_websocket_url()
 				self._ws = websocket.create_connection(wsUrl, timeout=15)
 				self._ws.settimeout(RECV_POLL_TIMEOUT)
-				self._cdp_request("Runtime.enable", timeout=15, cancelEvent=cancelEvent)
-				self._cdp_request("Page.enable", timeout=15, cancelEvent=cancelEvent)
-				self._cdp_request("Runtime.addBinding", {"name": BINDING_NAME}, timeout=15, cancelEvent=cancelEvent)
-				self._wait_until_ready(cancelEvent)
-			except CdpCancelled:
+				self._cdp_request("Runtime.enable", timeout=15)
+				self._cdp_request("Page.enable", timeout=15)
+				self._cdp_request("Runtime.addBinding", {"name": BINDING_NAME}, timeout=15)
+				self._wait_until_ready()
+			except Exception:
 				self._close_websocket()
 				raise
 
@@ -273,7 +269,8 @@ class ChromeTtsBridge:
 		package = self.catalog.package_for_voice(str(options["voiceId"]))
 		if not voice_store.is_package_installed(package):
 			raise CdpError(f"Google TTS voice package is not installed: {package.id}")
-		self.ensure_connection(cancelEvent)
+		self.ensure_connection()
+		_raise_if_cancelled(cancelEvent)
 		payload = {
 			"sessionId": f"preload-{time.monotonic_ns()}",
 			"voiceName": options["voiceName"],
@@ -307,7 +304,8 @@ class ChromeTtsBridge:
 		package = self.catalog.package_for_voice(str(options["voiceId"]))
 		if not voice_store.is_package_installed(package):
 			raise CdpError(f"Google TTS voice package is not installed: {package.id}")
-		self.ensure_connection(cancelEvent)
+		self.ensure_connection()
+		_raise_if_cancelled(cancelEvent)
 		sessionId = f"{time.monotonic_ns()}"
 		payload = {
 			"sessionId": sessionId,
@@ -432,7 +430,7 @@ class ChromeTtsBridge:
 			self._server = None
 			self._serverThread = None
 			self._serverPort = None
-			self._remove_chrome_profile()
+			self._release_chrome_profile()
 
 	def _start_server(self) -> None:
 		if self._server is not None:
@@ -526,11 +524,18 @@ class ChromeTtsBridge:
 		root.mkdir(parents=True, exist_ok=True)
 		self._cleanup_old_chrome_profiles(root)
 		profileDir = root / "persistentSession"
+		reused = profileDir.exists()
 		profileDir.mkdir(parents=True, exist_ok=True)
 		for lockName in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
 			with suppress(OSError):
 				(profileDir / lockName).unlink()
+		with suppress(OSError):
+			(profileDir / "DevToolsActivePort").unlink()
 		self._profileDir = profileDir
+		log.debug(
+			"Chrome profile directory: %s (reused=%s)",
+			profileDir, reused,
+		)
 		return self._profileDir
 
 	def _cleanup_old_chrome_profiles(self, root: Path) -> None:
@@ -544,8 +549,40 @@ class ChromeTtsBridge:
 				shutil.rmtree(child, ignore_errors=True)
 			except OSError:
 				continue
+		# Guard against unbounded persistent profile growth.
+		persistent = root / "persistentSession"
+		if persistent.is_dir():
+			try:
+				totalSize = sum(
+					f.stat().st_size for f in persistent.rglob("*") if f.is_file()
+				)
+				if totalSize > 500 * 1024 * 1024:  # 500 MB
+					log.debug(
+						"Persistent Chrome profile exceeds 500 MB (%d bytes), resetting.",
+						totalSize,
+					)
+					shutil.rmtree(persistent, ignore_errors=True)
+			except OSError:
+				pass
+
+	def _release_chrome_profile(self) -> None:
+		"""Release the profile directory reference without deleting it.
+
+		Preserves the persistent profile (including Chrome's compiled WASM
+		code cache) so the next startup can skip WASM recompilation.  Only
+		transient files (lock files, DevToolsActivePort) are cleaned up.
+		"""
+		profileDir = self._profileDir
+		self._profileDir = None
+		if profileDir is None:
+			return
+		for name in ("SingletonLock", "SingletonCookie", "SingletonSocket",
+					 "lockfile", "DevToolsActivePort"):
+			with suppress(OSError):
+				(profileDir / name).unlink()
 
 	def _remove_chrome_profile(self) -> None:
+		"""Fully delete the profile directory (used on Chrome startup failure)."""
 		profileDir = self._profileDir
 		self._profileDir = None
 		if profileDir is None:
@@ -687,6 +724,8 @@ class ChromeTtsBridge:
 		typeof window.googleTtsForNvdaSpeak === "function"
 		&& typeof window.googleTtsForNvdaPreload === "function"
 		&& typeof window.googleTtsForNvdaBridge === "function"
+		&& typeof window.googleTtsForNvdaReady === "function"
+		&& window.googleTtsForNvdaReady() === true
 		"""
 		for _ in range(400):
 			_raise_if_cancelled(cancelEvent)

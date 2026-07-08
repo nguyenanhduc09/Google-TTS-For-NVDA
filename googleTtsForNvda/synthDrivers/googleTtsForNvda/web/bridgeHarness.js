@@ -414,6 +414,10 @@
 		return { success: true, preloaded: true };
 	};
 
+	window.googleTtsForNvdaReady = function googleTtsForNvdaReady() {
+		return getTtsEngine() !== null;
+	};
+
 	window.googleTtsForNvdaSpeak = async function googleTtsForNvdaSpeak(payload) {
 		try {
 			if (currentSessionId) {
