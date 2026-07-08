@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from contextlib import suppress
+import re
 import threading
 import time
 from typing import Any
@@ -25,12 +26,39 @@ from . import voice_store
 addonHandler.initTranslation()
 
 
-_SHORT_CACHE_MAX_CHARS = 200
+_SHORT_CACHE_MAX_CHARS = 5000
 _SHORT_CACHE_MAX_ITEMS = 4096
-_SHORT_CACHE_MAX_BYTES = 100 * 1024 * 1024
+_SHORT_CACHE_MAX_BYTES = 200 * 1024 * 1024
 _OUTPUT_GAIN_MAKEUP = 2.0
 _SpeechRequest = tuple[list[Any], str, int, int, int, threading.Event]
 _IndexMarker = tuple[Any, int]
+_FAST_FIRST_SEGMENT_MIN_CHARS = 30
+_REGULAR_SEGMENT_MIN_CHARS = 110
+
+_COMMON_ABBREVIATIONS = {
+	# English
+	"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "rev", "gen", "col", "maj", "capt", "lt", "sgt",
+	"hon", "gov", "sen", "rep", "esq", "vs", "etc", "inc", "ltd", "co", "corp", "no", "fig", "eq",
+	"vol", "ch", "p", "pp", "sec", "min", "max", "approx", "est", "dept", "dist", "ave", "blvd", "rd",
+	"jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+	"ph", "phd", "md", "ba", "ma", "bsc", "msc", "jd", "llb", "llm",
+	# German
+	"usw", "bzw", "ca", "evtl", "ggf", "inkl", "nr", "ing", "mag",
+	# French
+	"mme", "mlle", "mgr", "ex",
+	# Spanish / Portuguese
+	"sra", "srta", "dra", "profa", "num", "pag", "cap", "ej", "av",
+	# Vietnamese
+	"tp", "ths", "ts", "gs", "pgs", "bs", "ks", "cn", "tx", "tt", "qd", "nd",
+	# Russian / Cyrillic
+	"ул", "им", "обл", "рис", "см", "стр", "тд", "тп", "пр", "руб", "коп", "тыс", "млн", "млрд", "др", "г", "гор", "пер", "пл", "просп",
+}
+
+_SENTENCE_TERMINATOR_RE = re.compile(
+	r"([。！？；｡।॥؟։።፧፨]+|[.!?;]+)"
+	r"(['\"\)\]\}”’」』）》〉»\u2018-\u201F\u3009\u300B\u300D\u300F\u3011\uFF09\uFF3D\uFF5D]*)"
+	r"(\s*)"
+)
 
 
 class SynthDriver(synthDriverHandler.SynthDriver):
@@ -86,6 +114,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._cacheLock = threading.RLock()
 		self._shortAudioCache: OrderedDict[tuple[Any, ...], bytes] = OrderedDict()
 		self._shortAudioCacheBytes = 0
+		self._audioChunksSinceDeviceCheck = 0
 		self._worker = threading.Thread(
 			name="googleTtsForNvda.speech",
 			target=self._speech_loop,
@@ -275,11 +304,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					yield ("index", index)
 				return
 			options = self._speech_options(rate, pitch, volume, activeVoice)
-			for segment, segmentIndexes in self._iter_indexed_text_segments(text, indexes, firstTextSegment):
+			segments = list(self._iter_indexed_text_segments(text, indexes, firstTextSegment))
+			for i, (segment, segmentIndexes) in enumerate(segments):
 				if cancelEvent.is_set():
 					return
 				firstTextSegment = False
 				yield ("text", (segment, options, segmentIndexes))
+				if i < len(segments) - 1:
+					yield ("break", 95)
 
 		for item in speechSequence:
 			if cancelEvent.is_set():
@@ -355,10 +387,57 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def _split_text_for_latency(self, text: str) -> list[str]:
 		return list(self._iter_text_segments_for_latency(text, False))
 
+	def _find_sentence_splits(self, text: str) -> list[int]:
+		splits: list[int] = []
+		for m in _SENTENCE_TERMINATOR_RE.finditer(text):
+			terminator = m.group(1)
+			trailing_ws = m.group(3)
+			end = m.end()
+			if end == len(text):
+				continue
+			if terminator[0] in "。！？；｡।॥؟։።፧፨":
+				splits.append(end)
+				continue
+			if not trailing_ws:
+				continue
+			if terminator[0] == ".":
+				start = m.start()
+				w_start = start - 1
+				while w_start >= 0 and text[w_start].isalnum():
+					w_start -= 1
+				word_before = text[w_start + 1 : start].lower()
+				if word_before.isdigit():
+					continue
+				if len(word_before) == 1 and word_before.isalpha():
+					continue
+				if word_before in _COMMON_ABBREVIATIONS:
+					continue
+				if w_start >= 0 and text[w_start] == ".":
+					continue
+			splits.append(end)
+		return splits
+
 	def _iter_text_segments_for_latency(self, text: str, fastFirstSegment: bool) -> Iterator[str]:
 		remaining = text.strip()
-		if remaining:
+		if not remaining:
+			return
+		splits = self._find_sentence_splits(text)
+		if not splits:
 			yield remaining
+			return
+
+		chunk_start = 0
+		all_boundaries = splits + [len(text)]
+		first_yield = True
+		for end_idx in all_boundaries:
+			candidate = text[chunk_start:end_idx].strip()
+			if not candidate:
+				continue
+			target_len = _FAST_FIRST_SEGMENT_MIN_CHARS if (first_yield and fastFirstSegment) else _REGULAR_SEGMENT_MIN_CHARS
+			if len(candidate) >= target_len or end_idx == len(text):
+				yield candidate
+				chunk_start = end_idx
+				first_yield = False
 
 	def _speech_loop(self) -> None:
 		while not self._shutdownEvent.is_set():
@@ -386,6 +465,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		cancelEvent: threading.Event,
 	) -> None:
 		try:
+			self._ensure_current_output_device()
+			self._audioChunksSinceDeviceCheck = 0
 			for kind, payload in self._iter_speech_chunks(
 				speechSequence,
 				voice,
@@ -493,7 +574,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 	def _feed_audio(self, pcm: bytes) -> None:
 		if pcm:
-			self._ensure_current_output_device()
+			self._audioChunksSinceDeviceCheck += 1
+			if self._audioChunksSinceDeviceCheck >= 50:
+				self._ensure_current_output_device()
+				self._audioChunksSinceDeviceCheck = 0
 			self._player.feed(pcm)
 
 	def _feed_audio_with_indexes(
@@ -594,7 +678,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		if milliseconds <= 0:
 			return
 		frameCount = int(SAMPLE_RATE * milliseconds / 1000)
-		self._ensure_current_output_device()
+		self._audioChunksSinceDeviceCheck += 1
+		if self._audioChunksSinceDeviceCheck >= 50:
+			self._ensure_current_output_device()
+			self._audioChunksSinceDeviceCheck = 0
 		self._player.feed(b"\x00\x00" * frameCount)
 
 	def _speech_options(self, rate: int, pitch: int, volume: int, voice: str | None = None) -> dict[str, Any]:

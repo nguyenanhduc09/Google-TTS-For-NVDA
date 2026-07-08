@@ -7,12 +7,12 @@
 	let lastChunkAt = 0;
 	let stopped = false;
 	let initPromise = null;
-	const firstAudioPacketSamples = 24;
+	const firstAudioPacketSamples = 12;
 	const steadyAudioPacketSamples = 240;
 	const peakLimiterCeiling = 0.98;
 	const peakLimiterReleaseStep = 0.05;
-	const synthesisIdlePollMs = 5;
-	const synthesisFallbackIdleMs = 250;
+	const synthesisIdlePollMs = 2;
+	const synthesisFallbackIdleMs = 80;
 	const workletEmptyDelayMs = 40;
 	let emittedAudioPackets = 0;
 	let pendingAudioBuffers = [];

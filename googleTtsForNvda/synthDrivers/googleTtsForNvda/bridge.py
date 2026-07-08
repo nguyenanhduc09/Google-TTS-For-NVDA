@@ -40,7 +40,7 @@ WEB_DIR = BASE_DIR / "web"
 WEBSOCKET_CLIENT_DIR = BASE_DIR / "websocketClientRepo"
 BINDING_NAME = "googleTtsForNvdaBridge"
 SAMPLE_RATE = 24000
-RECV_POLL_TIMEOUT = 0.005
+RECV_POLL_TIMEOUT = 0.001
 STARTUP_POLL_INTERVAL = 0.01
 STOP_EXPRESSION = "window.googleTtsForNvdaStop && window.googleTtsForNvdaStop()"
 
@@ -172,6 +172,22 @@ def _hide_chrome_windows(processId: int) -> None:
 		user32.EnumWindows(enum_window, 0)
 	except Exception:
 		log.debug("Could not hide Google TTS Chrome helper window.", exc_info=True)
+
+
+def _elevate_chrome_priority(processId: int) -> None:
+	if os.name != "nt":
+		return
+	try:
+		import ctypes
+
+		ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+		kernel32 = ctypes.windll.kernel32
+		handle = kernel32.OpenProcess(0x0200, False, processId)
+		if handle:
+			kernel32.SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
+			kernel32.CloseHandle(handle)
+	except Exception:
+		log.debug("Could not elevate Google TTS Chrome process priority.", exc_info=True)
 
 
 class ChromeTtsBridge:
@@ -463,9 +479,9 @@ class ChromeTtsBridge:
 			"--disable-background-timer-throttling",
 			"--disable-backgrounding-occluded-windows",
 			"--disable-renderer-backgrounding",
-			"--js-flags=--no-idle-gc --wasm-lazy-compilation=false",
+			"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
 			"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
-			"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering",
+			"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
 			"--enable-wasm-simd",
 			pageUrl,
 		]
@@ -476,6 +492,7 @@ class ChromeTtsBridge:
 			**_hidden_chrome_startup_kwargs(),
 		)
 		_hide_chrome_windows(self._chromeProcess.pid)
+		_elevate_chrome_priority(self._chromeProcess.pid)
 		try:
 			self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
 			_hide_chrome_windows(self._chromeProcess.pid)
