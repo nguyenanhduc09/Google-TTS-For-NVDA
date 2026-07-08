@@ -7,6 +7,7 @@ import threading
 from typing import Any
 
 import addonHandler
+import config
 import gui
 import ui
 import wx
@@ -18,6 +19,8 @@ from synthDrivers.googleTtsForNvda import voice_store
 
 
 addonHandler.initTranslation()
+
+SYNTH_NAME = "googleTtsForNvda"
 
 LANGUAGE_NAMES: dict[str, str] = {
 	"ar-XA": _("Arabic"),
@@ -421,6 +424,72 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			return [packages[i] for i in range(count) if listCtrl.IsItemChecked(i)]
 		return []
 
+	def _with_installed_dependents(self, packages: list[VoicePackage]) -> list[VoicePackage]:
+		expanded = list(packages)
+		includedIds = {pkg.id for pkg in expanded}
+		while True:
+			added = False
+			for package in self._allInstalledPackages:
+				if package.id in includedIds:
+					continue
+				if package.dependentVoiceId in includedIds:
+					expanded.append(package)
+					includedIds.add(package.id)
+					added = True
+			if not added:
+				return expanded
+
+	def _dependency_depth(self, package: VoicePackage, packagesById: dict[str, VoicePackage]) -> int:
+		depth = 0
+		seen: set[str] = set()
+		current = package
+		while current.dependentVoiceId and current.dependentVoiceId not in seen:
+			seen.add(current.id)
+			parent = packagesById.get(current.dependentVoiceId)
+			if parent is None:
+				break
+			depth += 1
+			current = parent
+		return depth
+
+	def _dependents_first(self, packages: list[VoicePackage]) -> list[VoicePackage]:
+		packagesById = {pkg.id: pkg for pkg in self._allInstalledPackages}
+		return sorted(
+			packages,
+			key=lambda package: self._dependency_depth(package, packagesById),
+			reverse=True,
+		)
+
+	def _package_list_text(self, packages: list[VoicePackage]) -> str:
+		return ", ".join(pkg.id for pkg in packages)
+
+	def _first_voice_id(self, packages: list[VoicePackage]) -> str | None:
+		catalog = VoiceCatalog(packages)
+		for speaker in catalog.speakers:
+			if speaker.language == "en-US":
+				return speaker.id
+		if catalog.speakers:
+			return catalog.speakers[0].id
+		return None
+
+	def _reset_configured_voice_if_removed(self, removedPackageIds: set[str]) -> str | None:
+		try:
+			configuredVoice = str(config.conf["speech"][SYNTH_NAME]["voice"])
+		except Exception:
+			return None
+		removedPrefix = tuple(f"{packageId}:" for packageId in removedPackageIds)
+		if not configuredVoice.startswith(removedPrefix):
+			return None
+		fallbackVoice = self._first_voice_id(self._allInstalledPackages)
+		if not fallbackVoice:
+			return None
+		try:
+			config.conf["speech"][SYNTH_NAME]["voice"] = fallbackVoice
+		except Exception:
+			log.debug("Could not reset removed Google TTS configured voice.", exc_info=True)
+			return None
+		return fallbackVoice
+
 	def _on_check_all(self, listCtrl: wx.ListCtrl, check: bool) -> None:
 		if not hasattr(listCtrl, "CheckItem"):
 			return
@@ -517,14 +586,29 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self._run_worker(work, done)
 
 	def on_remove_selected(self, evt: wx.CommandEvent) -> None:
-		packages = self._checked_packages(self.installedList, self.installedPackages)
-		if not packages:
+		selectedPackages = self._checked_packages(self.installedList, self.installedPackages)
+		if not selectedPackages:
 			self.set_status(_("No voice packages selected."), 0, announce=True)
 			return
+		selectedIds = {pkg.id for pkg in selectedPackages}
+		packages = self._with_installed_dependents(selectedPackages)
+		dependentPackages = [pkg for pkg in packages if pkg.id not in selectedIds]
 		if len(packages) == 1:
 			confirmMsg = _("Remove {package}?").format(package=packages[0].id)
+		elif dependentPackages:
+			selectedNames = self._package_list_text(selectedPackages)
+			dependentNames = self._package_list_text(dependentPackages)
+			confirmMsg = _(
+				"Remove {count} voice packages?\n"
+				"Selected: {selected}\n"
+				"Also remove dependent packages: {dependents}"
+			).format(
+				count=len(packages),
+				selected=selectedNames,
+				dependents=dependentNames,
+			)
 		else:
-			packageNames = ", ".join(pkg.id for pkg in packages)
+			packageNames = self._package_list_text(packages)
 			confirmMsg = _("Remove {count} voice packages?\n{packages}").format(
 				count=len(packages), packages=packageNames,
 			)
@@ -536,19 +620,25 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		)
 		if answer != wx.YES:
 			return
+		packages = self._dependents_first(packages)
+		self._remove_packages(packages)
+
+	def _remove_packages(self, packages: list[VoicePackage]) -> None:
 		totalCount = len(packages)
 
 		def work() -> dict[str, Any]:
 			succeeded = 0
 			failed: list[str] = []
+			removedIds: list[str] = []
 			for package in packages:
 				try:
 					voice_store.remove_package(package)
 					succeeded += 1
+					removedIds.append(package.id)
 				except Exception as exc:
 					log.error("Failed to remove %s: %s", package.id, exc)
 					failed.append(package.id)
-			return {"succeeded": succeeded, "failed": failed}
+			return {"succeeded": succeeded, "failed": failed, "removedIds": removedIds}
 
 		def done(result: Any | BaseException) -> None:
 			self.isBusy = False
@@ -559,6 +649,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			self.refresh_lists()
 			succeeded = result["succeeded"]
 			failed = result["failed"]
+			resetVoice = self._reset_configured_voice_if_removed(set(result.get("removedIds", [])))
 			if failed:
 				message = _(
 					"Removed {succeeded} of {total}. Failed: {failList}"
@@ -571,6 +662,11 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 				message = _("Removed {package}.").format(package=packages[0].id)
 			else:
 				message = _("Removed {count} voice packages.").format(count=succeeded)
+			if resetVoice:
+				message = _("{message} Current voice was reset to {voice}.").format(
+					message=message,
+					voice=resetVoice,
+				)
 			self.set_status(message, 100)
 			ui.message(message)
 			self._focus_active_page()
