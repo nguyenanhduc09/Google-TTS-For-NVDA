@@ -173,8 +173,12 @@ def is_package_installed(package: VoicePackage) -> bool:
 	return True
 
 
+def physically_installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
+	return [package for package in catalog.packages if is_package_installed(package)]
+
+
 def installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
-	installed = [package for package in catalog.packages if is_package_installed(package)]
+	installed = physically_installed_packages(catalog)
 	installedIds = {package.id for package in installed}
 	return [
 		package
