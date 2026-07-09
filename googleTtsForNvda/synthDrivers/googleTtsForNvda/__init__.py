@@ -233,7 +233,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				gui.mainFrame,
 			)
 		except Exception:
-			log.exception("Could not show Google Chrome missing message.", exc_info=True)
+			log.exception("Could not show supported browser missing message.", exc_info=True)
 
 	def terminate(self) -> None:
 		with suppress(Exception):

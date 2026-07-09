@@ -1,6 +1,6 @@
 # Google TTS For NVDA
 
-An NVDA screen reader synthesizer add-on that leverages Google's WebAssembly (WASM) Text-to-Speech engine through Microsoft Edge or Google Chrome to provide high-quality, natural-sounding voices offline.
+An NVDA screen reader synthesizer add-on that leverages Google's WebAssembly (WASM) Text-to-Speech engine through a supported browser runtime (Microsoft Edge or Google Chrome) to provide high-quality, natural-sounding voices offline.
 
 *This add-on is co-developed by [Nguyen Anh Duc](https://github.com/nguyenanhduc09) and [Dao Duc Trung](https://github.com/daoductrung).*
 
@@ -19,7 +19,7 @@ We highly welcome and appreciate any feedback from the community to help us impr
 ## Features
 
 * **Comprehensive Voice Support**: Supports all languages and voices available in WasmTtsEngine. This includes Chrome OS packages (optimized for frequent use and high-speed screen reading) and Google Natural packages (designed for higher quality, standard text reading).
-* **100% Offline Speech**: Speech is rendered locally via a headless Microsoft Edge or Google Chrome process.
+* **100% Offline Speech**: Speech is rendered locally via a supported headless browser runtime (Microsoft Edge or Google Chrome).
 * **Low Latency**: Uses advanced text segmentation (smaller first clause) to ensure instant speech responses.
 * **Volatile Audio Cache**: In-memory cache for short phrases (under 5000 characters) to optimize repeated announcements safely.
 * **Voice Manager**: Check, download, or remove voice packages in batches using a multi-select checkbox interface.

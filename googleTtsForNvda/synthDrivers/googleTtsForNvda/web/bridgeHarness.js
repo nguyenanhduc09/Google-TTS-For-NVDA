@@ -213,7 +213,7 @@
 			return;
 		}
 		if (event.type === "error") {
-			emit({ type: "error", message: "Chrome TTS synthesis failed." });
+			emit({ type: "error", message: "Browser speech synthesis failed." });
 		}
 	}
 
@@ -312,7 +312,7 @@
 				return;
 			}
 		}
-		throw new Error("Timed out waiting for Chrome TTS audio.");
+		throw new Error("Timed out waiting for browser speech audio.");
 	}
 
 	function getTtsEngine() {
@@ -353,7 +353,7 @@
 	async function ensureEngineInitialized() {
 		const engine = getTtsEngine();
 		if (!engine) {
-			throw new Error("Chrome WASM TTS engine was not loaded.");
+			throw new Error("WASM TTS engine was not loaded.");
 		}
 		if (!initPromise) {
 			initPromise = engine.init("google-tts-for-nvda").catch((error) => {
@@ -397,7 +397,7 @@
 		await ensureEngineInitialized();
 		const engine = getTtsEngine();
 		if (!engine) {
-			throw new Error("Chrome WASM TTS engine was not loaded.");
+			throw new Error("WASM TTS engine was not loaded.");
 		}
 		if (!readyLanguages.has(payload.lang)) {
 			await ensureLanguageReady(engine, payload.lang);
@@ -442,7 +442,7 @@
 			await ensureEngineInitialized();
 			const engine = getTtsEngine();
 			if (!engine) {
-				throw new Error("Chrome WASM TTS engine was not loaded.");
+				throw new Error("WASM TTS engine was not loaded.");
 			}
 			if (!readyLanguages.has(payload.lang)) {
 				await ensureLanguageReady(engine, payload.lang);

@@ -199,7 +199,7 @@ def _hide_chrome_windows(processId: int) -> None:
 
 		user32.EnumWindows(enum_window, 0)
 	except Exception:
-		log.debug("Could not hide Google TTS Chrome helper window.", exc_info=True)
+		log.debug("Could not hide Google TTS browser helper window.", exc_info=True)
 
 
 def _elevate_chrome_priority(processId: int) -> None:
@@ -215,7 +215,7 @@ def _elevate_chrome_priority(processId: int) -> None:
 			kernel32.SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
 			kernel32.CloseHandle(handle)
 	except Exception:
-		log.debug("Could not elevate Google TTS Chrome process priority.", exc_info=True)
+		log.debug("Could not elevate Google TTS browser process priority.", exc_info=True)
 
 
 def _normalize_browser_runtime(runtime: str | None) -> str:
@@ -484,7 +484,7 @@ class ChromeTtsBridge:
 			elif eventType == "done":
 				state["done"] = True
 			elif eventType == "error":
-				detail = str(event.get("message") or "Chrome TTS failed.")
+				detail = str(event.get("message") or "Browser speech synthesis failed.")
 				raise _friendly_cdp_error(
 					"Google TTS For NVDA could not synthesize this text.",
 					detail,
@@ -511,7 +511,7 @@ class ChromeTtsBridge:
 		if result.get("subtype") == "error":
 			raise _friendly_cdp_error(
 				"Google TTS For NVDA could not start speech in the browser runtime.",
-				result.get("description") or "Chrome TTS evaluation failed.",
+				result.get("description") or "Browser speech evaluation failed.",
 			)
 		value = result.get("value")
 		if isinstance(value, dict):
@@ -532,7 +532,7 @@ class ChromeTtsBridge:
 				timeout=5,
 			)
 		except Exception:
-			log.debug("Could not stop Chrome TTS runtime.", exc_info=True)
+			log.debug("Could not stop Google TTS browser runtime.", exc_info=True)
 
 	def cancel_current(self) -> None:
 		if self._runtimeBusy:
@@ -697,7 +697,7 @@ class ChromeTtsBridge:
 				)
 				if totalSize > 500 * 1024 * 1024:  # 500 MB
 					log.debug(
-						"Persistent Chrome profile exceeds 500 MB (%d bytes), resetting.",
+						"Persistent browser profile exceeds 500 MB (%d bytes), resetting.",
 						totalSize,
 					)
 					shutil.rmtree(persistent, ignore_errors=True)
@@ -755,7 +755,7 @@ class ChromeTtsBridge:
 			time.sleep(STARTUP_POLL_INTERVAL)
 		raise _friendly_cdp_error(
 			"Timed out waiting for the browser runtime to start.",
-			"Timed out waiting for Chrome DevTools.",
+			"Timed out waiting for browser DevTools.",
 		)
 
 	def _page_url(self) -> str:
@@ -771,7 +771,7 @@ class ChromeTtsBridge:
 		if self._debugPort is None:
 			raise _friendly_cdp_error(
 				"The browser runtime is not ready yet.",
-				"Chrome DevTools port is not ready.",
+				"Browser DevTools port is not ready.",
 			)
 		for _ in range(200):
 			_raise_if_cancelled(cancelEvent)
@@ -796,7 +796,7 @@ class ChromeTtsBridge:
 			time.sleep(STARTUP_POLL_INTERVAL)
 		raise _friendly_cdp_error(
 			"Google TTS For NVDA could not find its speech page in the browser runtime.",
-			"Could not find Chrome TTS page target.",
+			"Could not find browser speech page target.",
 		)
 
 	def _next_msg_id(self) -> int:
@@ -815,7 +815,7 @@ class ChromeTtsBridge:
 		if self._ws is None:
 			raise _friendly_cdp_error(
 				"Google TTS For NVDA is not connected to the browser runtime.",
-				"Chrome DevTools websocket is not connected.",
+				"Browser DevTools websocket is not connected.",
 			)
 		msgId = self._next_msg_id()
 		command = {"id": msgId, "method": method, "params": params or {}}
@@ -842,7 +842,7 @@ class ChromeTtsBridge:
 					if not rawMessage:
 						raise _friendly_cdp_error(
 							"The browser runtime connection closed unexpectedly.",
-							"Chrome DevTools websocket closed.",
+							"Browser DevTools websocket closed.",
 						)
 					message = json.loads(rawMessage)
 					if eventHandler is not None:
@@ -889,7 +889,7 @@ class ChromeTtsBridge:
 				}
 				ws.send(json.dumps(command))
 			except Exception:
-				log.debug("Could not send fast Chrome TTS stop command.", exc_info=True)
+				log.debug("Could not send fast browser speech stop command.", exc_info=True)
 
 	def _wait_until_ready(self, cancelEvent: threading.Event | None = None) -> None:
 		expression = """
@@ -912,7 +912,7 @@ class ChromeTtsBridge:
 			time.sleep(STARTUP_POLL_INTERVAL)
 		raise _friendly_cdp_error(
 			"Google TTS For NVDA could not finish loading the browser speech engine.",
-			"Chrome TTS harness did not finish loading.",
+			"Browser speech harness did not finish loading.",
 		)
 
 	def _close_websocket(self) -> None:
@@ -930,4 +930,4 @@ class ChromeTtsBridge:
 			return str(exception["description"])
 		if exceptionDetails.get("text"):
 			return str(exceptionDetails["text"])
-		return "Chrome DevTools runtime exception."
+		return "Browser DevTools runtime exception."
