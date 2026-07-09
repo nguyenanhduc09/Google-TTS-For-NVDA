@@ -1,6 +1,6 @@
 # Google TTS For NVDA
 
-An NVDA screen reader synthesizer add-on that leverages Google Chrome's WebAssembly (WASM) Text-to-Speech engine to provide high-quality, natural-sounding voices offline.
+An NVDA screen reader synthesizer add-on that leverages Google's WebAssembly (WASM) Text-to-Speech engine through Microsoft Edge or Google Chrome to provide high-quality, natural-sounding voices offline.
 
 *This add-on is co-developed by [Nguyen Anh Duc](https://github.com/nguyenanhduc09) and [Dao Duc Trung](https://github.com/daoductrung).*
 
@@ -19,10 +19,10 @@ We highly welcome and appreciate any feedback from the community to help us impr
 ## Features
 
 * **Comprehensive Voice Support**: Supports all languages and voices available in WasmTtsEngine. This includes Chrome OS packages (optimized for frequent use and high-speed screen reading) and Google Natural packages (designed for higher quality, standard text reading).
-* **100% Offline Speech**: Speech is rendered locally via a headless Google Chrome process.
-* **Low Latency**: Utilizes advanced text segmentation (smaller first clause) to ensure instant speech responses.
-* **Volatile Audio Cache**: In-memory cache for short phrases (under 200 characters) to optimize repeated announcements safely.
-* **Voice Manager GUI**: Check, download, or remove voices in batches using a multi-select checkbox interface.
+* **100% Offline Speech**: Speech is rendered locally via a headless Microsoft Edge or Google Chrome process.
+* **Low Latency**: Uses advanced text segmentation (smaller first clause) to ensure instant speech responses.
+* **Volatile Audio Cache**: In-memory cache for short phrases (under 5000 characters) to optimize repeated announcements safely.
+* **Voice Manager**: Check, download, or remove voice packages in batches using a multi-select checkbox interface.
 * **Background Operations**: Non-blocking downloads and removals on background threads.
 * **Accessible Shortcut**: Press **`NVDA+Ctrl+Shift+G`** to open the Voice Manager instantly.
 
@@ -31,7 +31,7 @@ We highly welcome and appreciate any feedback from the community to help us impr
 ## Requirements
 
 * **NVDA**: Version 2024.1 or newer.
-* **Google Chrome**: An installation of Google Chrome must be present on the system. The add-on will search common paths or check your registry automatically. You can also specify a custom path using the `CHROME_PATH` environment variable.
+* **Browser runtime**: Microsoft Edge or Google Chrome must be present on the system. The add-on will search common paths or check your registry automatically. You can also specify a custom path using the `EDGE_PATH` or `CHROME_PATH` environment variable.
 
 ---
 
@@ -39,20 +39,20 @@ We highly welcome and appreciate any feedback from the community to help us impr
 
 1. Download the latest `.nvda-addon` package from the [Releases](https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases) page.
 2. Open the package (or use NVDA's Add-on Store -> Install from external source) and follow the prompts to install it.
-3. Upon first selecting **Google TTS For NVDA** as your synthesizer, if no voices are installed, NVDA will notify you and automatically open the **Google TTS voice manager...** dialog so you can download at least one voice to use.
-4. Alternatively, you can also press **`NVDA+Ctrl+Shift+G`** or go to **NVDA Menu -> Tools -> Google TTS voice manager...** at any time to manage your packages.
-5. Check the boxes next to the voices you want, and click **Download checked voices**.
+3. Upon first selecting **Google TTS For NVDA** as your synthesizer, if no voice packages are installed, NVDA will notify you and automatically open the **Google TTS Voice Manager...** dialog so you can download at least one voice package to use.
+4. Alternatively, you can also press **`NVDA+Ctrl+Shift+G`** or go to **NVDA Menu -> Tools -> Google TTS Voice Manager...** at any time to manage your voice packages.
+5. Check the boxes next to the voice packages you want, and click **Download checked voice packages**.
 
 ---
 
 ## Configuration Settings
 
 The synthesizer supports the standard NVDA Speech settings ring:
-* **Voice**: Choose from your downloaded speaker/language packages.
-* **Rate**: Speech rate (maps to Chrome's 0.35x - 2.0x speed).
+* **Voice**: Choose from your installed speaker/language voice packages.
+* **Rate**: Speech rate (maps to the browser runtime's 0.35x - 2.0x speed).
 * **Rate Boost**: Enable to double the computed speech rate for fast reading.
 * **Pitch**: Speech pitch adjustment.
-* **Volume**: Speech volume (maps to Chrome's 0.0 - 1.0 volume range).
+* **Volume**: Speech volume (maps to the browser runtime's 0.0 - 1.0 volume range).
 
 ---
 

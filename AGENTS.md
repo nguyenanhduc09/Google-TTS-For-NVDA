@@ -1,6 +1,6 @@
 # Google TTS For NVDA — Agent Engineering Guide
 
-You are working on **Google TTS For NVDA**, an NVDA screen-reader synthesizer add-on. Act as **Codex, a software engineering agent maintaining a production accessibility add-on**, not as an end user. Your job is to make safe, minimal, testable changes that preserve NVDA responsiveness, accessibility, packaging correctness, and the Google Chrome WASM TTS bridge.
+You are working on **Google TTS For NVDA**, an NVDA screen-reader synthesizer add-on. Act as **Codex, a software engineering agent maintaining a production accessibility add-on**, not as an end user. Your job is to make safe, minimal, testable changes that preserve NVDA responsiveness, accessibility, packaging correctness, and the Microsoft Edge / Google Chrome WASM TTS bridge.
 
 This file is the operating manual for coding agents. Follow it before making or suggesting code changes.
 
@@ -12,19 +12,19 @@ This file is the operating manual for coding agents. Follow it before making or 
 
 - Treat every request as an engineering task: inspect the relevant files, reason about side effects, make the smallest useful change, and verify it.
 - Codex may inspect, edit, test, build, and package files in this workspace and may use online research when the task requires current external technical context.
-- Codex can run local smoke tests and syntax checks, but must not claim a real interactive NVDA/Chrome user test unless that exact runtime test was actually performed.
+- Codex can run local smoke tests and syntax checks, but must not claim a real interactive NVDA/browser-runtime user test unless that exact runtime test was actually performed.
 - Prefer implementation over explanation when the user asks for code changes.
 - Do not redesign the architecture unless the request explicitly requires it or the current design blocks correctness.
 - Preserve existing public behavior unless the user asks to change it.
 - Keep changes localized. Avoid broad refactors mixed with bug fixes.
 - Do not introduce network access, downloads, telemetry, background services, or new dependencies without a clear requirement.
-- Never block NVDA's main thread with synthesis, Chrome, filesystem-heavy, or network work.
+- Never block NVDA's main thread with synthesis, browser startup/runtime work, filesystem-heavy work, or network work.
 
 ### Before editing
 
 1. Identify the affected layer:
    - NVDA synth driver: `synthDrivers/googleTtsForNvda/__init__.py`
-   - Chrome/CDP bridge: `synthDrivers/googleTtsForNvda/bridge.py`
+   - Browser/CDP bridge: `synthDrivers/googleTtsForNvda/bridge.py`
    - Voice catalog and storage: `catalog.py`, `voice_store.py`
    - Browser harness: `web/bridgeHarness.js`, `web/index.html`
    - Voice Manager UI: `globalPlugins/googleTtsForNvda/voiceManager.py`
@@ -37,7 +37,7 @@ This file is the operating manual for coding agents. Follow it before making or 
 
 - Maintain compatibility with NVDA add-on conventions.
 - Preserve thread cancellation paths and cleanup paths.
-- Add concise comments only where behavior is non-obvious, especially for Chrome/WASM quirks.
+- Add concise comments only where behavior is non-obvious, especially for browser-runtime/WASM quirks.
 - Keep user-facing strings translatable with `_('...')` where used in NVDA UI code.
 - Do not silently swallow exceptions that affect speech, downloads, or packaging. Log enough context for debugging.
 
@@ -51,13 +51,13 @@ This file is the operating manual for coding agents. Follow it before making or 
 
 ## 2. Project Overview
 
-Workspace: `C:\Trung\projects\Chrome_TTS`
+Workspace: `C:\Users\hungv\Documents\Codex\Google-TTS-For-NVDA`
 
-**Google TTS For NVDA** exposes Google's Chrome WASM TTS voices to NVDA through:
+**Google TTS For NVDA** exposes Google's WASM TTS voices to NVDA through:
 
 - an NVDA synth driver,
-- a managed headless Chrome process,
-- a Chrome DevTools Protocol (CDP) WebSocket bridge,
+- a managed headless Microsoft Edge or Google Chrome process,
+- a browser DevTools Protocol (CDP) WebSocket bridge,
 - a browser-side JavaScript harness that captures PCM audio from the WASM engine,
 - runtime-downloaded `.zvoice` voice packages stored in the user's NVDA config directory.
 
@@ -67,11 +67,11 @@ Workspace: `C:\Trung\projects\Chrome_TTS`
 NVDA process
 ├─ synthDrivers/googleTtsForNvda/
 │  ├─ __init__.py        SynthDriver; NVDA integration and settings ring
-│  ├─ bridge.py          ChromeTtsBridge; HTTP server, Chrome lifecycle, CDP/WS
+│  ├─ bridge.py          ChromeTtsBridge; HTTP server, browser lifecycle, CDP/WS
 │  ├─ catalog.py         VoiceCatalog, VoicePackage, Speaker models
 │  ├─ voice_store.py     Download, copy, verify, remove voice packages
 │  ├─ web/
-│  │  ├─ index.html      Loaded in headless Chrome
+│  │  ├─ index.html      Loaded in the headless browser runtime
 │  │  └─ bridgeHarness.js
 │  │     Shims chrome.* APIs, calls WASM engine, captures AudioWorklet PCM,
 │  │     sends base64 chunks through the CDP binding
@@ -90,8 +90,8 @@ NVDA process
 
 1. NVDA calls `SynthDriver.speak()` with a speech sequence.
 2. The driver segments text, builds options for voice/rate/pitch/volume, and queues synthesis on a background thread.
-3. `ChromeTtsBridge.speak()` verifies the required voice package is installed, ensures Chrome and CDP are connected, then evaluates `window.googleTtsForNvdaSpeak(...)` via `Runtime.evaluate`.
-4. `bridgeHarness.js` calls the Chrome WASM TTS engine through `window.Uh.onSpeak`, intercepts `AudioWorkletNode` buffers, converts float32 audio to int16 PCM, and sends base64 audio chunks through the `googleTtsForNvdaBridge` CDP binding.
+3. `ChromeTtsBridge.speak()` verifies the required voice package is installed, ensures the browser runtime and CDP are connected, then evaluates `window.googleTtsForNvdaSpeak(...)` via `Runtime.evaluate`.
+4. `bridgeHarness.js` calls the Google WASM TTS engine through `window.Uh.onSpeak`, intercepts `AudioWorkletNode` buffers, converts float32 audio to int16 PCM, and sends base64 audio chunks through the `googleTtsForNvdaBridge` CDP binding.
 5. Python receives `Runtime.bindingCalled`, decodes PCM, and feeds it to `nvwave.WavePlayer`.
 
 ---
@@ -136,10 +136,10 @@ If no voice packages are installed when the synth starts:
 Current supported settings:
 
 - `VoiceSetting()` — voice selection
-- `RateSetting()` — speech rate, 0-100, maps to Chrome rate 0.35-2.0
-- `RateBoostSetting()` — boolean, doubles computed Chrome rate when enabled
+- `RateSetting()` — speech rate, 0-100, maps to browser-runtime rate 0.35-2.0
+- `RateBoostSetting()` — boolean, doubles computed browser-runtime rate when enabled
 - `PitchSetting()` — pitch, 0-100, maps through the existing semitone curve
-- `VolumeSetting()` — volume, 0-100, maps to Chrome volume 0.0-1.0
+- `VolumeSetting()` — volume, 0-100, maps to browser-runtime volume 0.0-1.0
 
 Do **not** re-add:
 
@@ -152,7 +152,7 @@ These were removed and must stay removed unless the user explicitly requests a n
 
 - Repeated short phrases are cached as PCM in the `SynthDriver` instance only.
 - The short-phrase cache is volatile: it is not written to disk and clears when NVDA exits, NVDA restarts, or the PC reboots.
-- The current short-phrase cache threshold is 200 characters.
+- The current short-phrase cache threshold is 5000 characters.
 - Do not add persistent speech-audio caching without an explicit product decision, because cached speech can contain sensitive screen-reader text.
 
 ---
@@ -163,7 +163,7 @@ These were removed and must stay removed unless the user explicitly requests a n
 - Use NVDA-style property methods: `_get_propertyName()` and `_set_propertyName()`.
 - Keep `cachePropertiesByDefault = False`.
 - Support `synthIndexReached` and `synthDoneSpeaking` notifications.
-- Speech cancellation must be responsive and must not leave Chrome/CDP calls hanging.
+- Speech cancellation must be responsive and must not leave browser-runtime/CDP calls hanging.
 - Do not import NVDA-only modules unguarded in modules that may be imported by tests. Existing try/except patterns for `logHandler`, `addonHandler`, and `globalVars` are intentional.
 - UI operations must run on the wx/NVDA GUI thread. Use `wx.CallAfter()` when returning from worker threads.
 - User-facing UI strings should be wrapped in `_('...')` after `addonHandler.initTranslation()` has been initialized.
@@ -174,24 +174,24 @@ These were removed and must stay removed unless the user explicitly requests a n
 
 - Synthesis runs on daemon background threads named like `googleTtsForNvda.speech`.
 - Voice preloading runs on a separate cancellable thread named like `googleTtsForNvda.preload`.
-- The Chrome bridge protects WebSocket access with `threading.RLock`.
+- The browser bridge protects WebSocket access with `threading.RLock`.
 - Voice Manager download/install/remove operations must not block the main thread.
 - GUI updates from workers must use `wx.CallAfter()`.
 - Cancellation should be checked before long operations, between synthesis segments, and before feeding new audio.
-- Cleanup must terminate Chrome/session resources when the synth shuts down.
+- Cleanup must terminate browser-runtime/session resources when the synth shuts down.
 
 Never do these on the NVDA main thread:
 
 - HTTP downloads
 - SHA-256 hashing of large voice packages
-- Chrome startup
+- browser runtime startup
 - WebSocket/CDP waits
 - speech synthesis waits
 - package extraction/copying
 
 ---
 
-## 6. Chrome, CDP, and WASM Bridge Rules
+## 6. Browser Runtime, CDP, and WASM Bridge Rules
 
 ### Required cross-origin isolation headers
 
@@ -205,13 +205,13 @@ Cross-Origin-Resource-Policy: same-origin
 
 They are required for `SharedArrayBuffer` support. Do not remove or weaken them.
 
-### Chrome engine quirks
+### Browser engine quirks
 
 - `offscreen_compiled.js` expects installed packages at root URLs like `/{packageId}.zvoice`.
 - The bridge HTTP server must route root `.zvoice` requests to `voice_store.voice_dir()`.
 - The runtime `voices.json` written at bridge startup must mark installed packages as `"remote": false` in the generated JSON model so the engine loads local packages.
 - The engine init entry point is called via dynamically resolving the engine object (e.g. `window.Vh.init(extensionId)` in `20260625.1` or `window.Uh.init(...)` in earlier versions).
-- The engine global symbol (`window.Vh`, `window.Uh`, etc.) is an obfuscated name from compiled Chrome extension code that changes across versions. `bridgeHarness.js` resolves this dynamically using `getTtsEngine()`. Do not assume any fixed global name will remain stable across future engine updates.
+- The engine global symbol (`window.Vh`, `window.Uh`, etc.) is an obfuscated name from compiled browser extension code that changes across versions. `bridgeHarness.js` resolves this dynamically using `getTtsEngine()`. Do not assume any fixed global name will remain stable across future engine updates.
 - `bridgeHarness.js` should remain strict-mode and IIFE-wrapped.
 - Avoid changing PCM conversion semantics unless fixing a documented audio bug.
 
@@ -234,7 +234,7 @@ They are required for `SharedArrayBuffer` support. Do not remove or weaken them.
 | Add-on data root | `{configPath}/googleTtsForNvda/` |
 | Downloaded voices | `{configPath}/googleTtsForNvda/voices/` |
 | Runtime voices.json | `{configPath}/googleTtsForNvda/runtime/voices.json` |
-| Chrome profiles | `{configPath}/googleTtsForNvda/chromeProfiles/session-*` |
+| Browser profiles | `{configPath}/googleTtsForNvda/chromeProfiles/session-*` |
 | Master catalog | `WasmTtsEngine/20260625.1/voices.json` |
 
 ### `voice_store` contract
@@ -371,7 +371,7 @@ $zip.Dispose()
 
 1. Confirm it belongs in the NVDA settings ring.
 2. Add or update `_get_...` / `_set_...` methods in the synth driver.
-3. Map NVDA 0-100 values to Chrome/WASM-compatible values in one place.
+3. Map NVDA 0-100 values to browser-runtime/WASM-compatible values in one place.
 4. Preserve `RateBoostSetting()` behavior.
 5. Do not re-add `Transposition` or `AccelerationMode` accidentally.
 6. Update documentation and tests/checks.
@@ -416,7 +416,7 @@ $zip.Dispose()
 
 - Do not import NVDA modules at module level in test-friendly modules unless guarded.
 - Do not use pip for `websocket-client`; the project vendors it.
-- Do not commit or package temporary Chrome profiles.
+- Do not commit or package temporary browser profiles.
 - Do not commit or package `.zvoice` files.
 - Do not bypass SHA-256 verification for voice packages.
 - Do not forget to invalidate `_verifiedPackageCache` after package changes.
@@ -436,4 +436,4 @@ When completing a task, respond with:
 2. **Verified**: exact commands/checks run and their result.
 3. **Notes/Risks**: anything not tested, compatibility concerns, or required follow-up.
 
-If you could not complete a requested change, say what blocked it and provide the best partial result. Do not pretend a runtime NVDA/Chrome test was performed unless it actually was.
+If you could not complete a requested change, say what blocked it and provide the best partial result. Do not pretend a runtime NVDA/browser-runtime test was performed unless it actually was.
