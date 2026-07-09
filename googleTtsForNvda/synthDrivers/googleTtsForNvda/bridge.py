@@ -12,6 +12,7 @@ import shutil
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -43,6 +44,10 @@ SAMPLE_RATE = 24000
 RECV_POLL_TIMEOUT = 0.001
 STARTUP_POLL_INTERVAL = 0.01
 STOP_EXPRESSION = "window.googleTtsForNvdaStop && window.googleTtsForNvdaStop()"
+LOCAL_CACHE_DIR_NAME = "googleTtsForNvda"
+CHROME_PROFILE_DIR_NAME = "chromeProfiles"
+EDGE_PROFILE_DIR_NAME = "edgeProfiles"
+PERSISTENT_PROFILE_DIR_NAME = "persistentSession"
 
 if str(WEBSOCKET_CLIENT_DIR) not in sys.path:
 	sys.path.insert(1, str(WEBSOCKET_CLIENT_DIR))
@@ -462,7 +467,7 @@ class ChromeTtsBridge:
 		chromePath = self.find_chrome()
 		if not chromePath:
 			raise CdpError("Microsoft Edge or Google Chrome was not found. Install Chrome or set CHROME_PATH.")
-		profileDir = self._get_chrome_profile_dir()
+		profileDir = self._get_chrome_profile_dir(chromePath)
 		devToolsFile = profileDir / "DevToolsActivePort"
 		try:
 			devToolsFile.unlink()
@@ -516,14 +521,14 @@ class ChromeTtsBridge:
 			self._remove_chrome_profile()
 			raise
 
-	def _get_chrome_profile_dir(self) -> Path:
+	def _get_chrome_profile_dir(self, browserPath: str) -> Path:
 		if self._profileDir is not None:
 			self._profileDir.mkdir(parents=True, exist_ok=True)
 			return self._profileDir
-		root = voice_store.data_root() / "chromeProfiles"
+		root = self._browser_profile_root(browserPath)
 		root.mkdir(parents=True, exist_ok=True)
 		self._cleanup_old_chrome_profiles(root)
-		profileDir = root / "persistentSession"
+		profileDir = root / PERSISTENT_PROFILE_DIR_NAME
 		reused = profileDir.exists()
 		profileDir.mkdir(parents=True, exist_ok=True)
 		for lockName in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
@@ -533,10 +538,21 @@ class ChromeTtsBridge:
 			(profileDir / "DevToolsActivePort").unlink()
 		self._profileDir = profileDir
 		log.debug(
-			"Chrome profile directory: %s (reused=%s)",
+			"Google TTS browser profile directory: %s (reused=%s)",
 			profileDir, reused,
 		)
 		return self._profileDir
+
+	def _browser_profile_root(self, browserPath: str) -> Path:
+		base = os.environ.get("LOCALAPPDATA")
+		root = Path(base) if base else Path(tempfile.gettempdir())
+		return root / LOCAL_CACHE_DIR_NAME / self._browser_profile_dir_name(browserPath)
+
+	def _browser_profile_dir_name(self, browserPath: str) -> str:
+		exeName = Path(browserPath).name.lower()
+		if exeName in ("msedge.exe", "msedge"):
+			return EDGE_PROFILE_DIR_NAME
+		return CHROME_PROFILE_DIR_NAME
 
 	def _cleanup_old_chrome_profiles(self, root: Path) -> None:
 		cutoff = time.time() - 2 * 24 * 60 * 60
@@ -550,7 +566,7 @@ class ChromeTtsBridge:
 			except OSError:
 				continue
 		# Guard against unbounded persistent profile growth.
-		persistent = root / "persistentSession"
+		persistent = root / PERSISTENT_PROFILE_DIR_NAME
 		if persistent.is_dir():
 			try:
 				totalSize = sum(
