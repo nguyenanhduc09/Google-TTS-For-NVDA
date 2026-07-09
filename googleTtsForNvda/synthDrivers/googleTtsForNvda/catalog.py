@@ -11,8 +11,35 @@ from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent
 ENGINE_VERSION = "20260625.1"
-ENGINE_DIR = BASE_DIR / "WasmTtsEngine" / ENGINE_VERSION
+ENGINE_ROOT = BASE_DIR / "WasmTtsEngine"
+ENGINE_DIR = ENGINE_ROOT / ENGINE_VERSION
 CATALOG_PATH = ENGINE_DIR / "voices.json"
+REQUIRED_ENGINE_FILES = (
+	"bindings_main.js",
+	"bindings_main.wasm",
+	"manifest.json",
+	"offscreen_compiled.js",
+	"streaming_worklet_processor.js",
+	"voices.json",
+)
+
+
+class EngineLibraryError(RuntimeError):
+	def __init__(
+		self,
+		kind: str,
+		*,
+		supportedVersion: str = ENGINE_VERSION,
+		foundVersions: tuple[str, ...] = (),
+		missingFiles: tuple[str, ...] = (),
+		technicalDetail: str = "",
+	) -> None:
+		super().__init__(technicalDetail or kind)
+		self.kind = kind
+		self.supportedVersion = supportedVersion
+		self.foundVersions = foundVersions
+		self.missingFiles = missingFiles
+		self.technicalDetail = technicalDetail or kind
 
 
 @dataclass(frozen=True)
@@ -62,6 +89,55 @@ def _safe_str(value: Any, default: str = "") -> str:
 	return str(value)
 
 
+def inspect_engine_library() -> None:
+	if not ENGINE_ROOT.is_dir():
+		raise EngineLibraryError(
+			"missing",
+			technicalDetail=f"WASM TTS Engine folder was not found: {ENGINE_ROOT}",
+		)
+	foundVersions = tuple(sorted(child.name for child in ENGINE_ROOT.iterdir() if child.is_dir()))
+	if not foundVersions:
+		raise EngineLibraryError(
+			"missing",
+			technicalDetail=f"WASM TTS Engine folder is empty: {ENGINE_ROOT}",
+		)
+	if not ENGINE_DIR.is_dir():
+		raise EngineLibraryError(
+			"unsupportedVersion",
+			foundVersions=foundVersions,
+			technicalDetail=(
+				f"Supported WASM TTS Engine version {ENGINE_VERSION} was not found. "
+				f"Found versions: {', '.join(foundVersions)}"
+			),
+		)
+	missingFiles = tuple(name for name in REQUIRED_ENGINE_FILES if not (ENGINE_DIR / name).is_file())
+	if missingFiles:
+		raise EngineLibraryError(
+			"incomplete",
+			foundVersions=foundVersions,
+			missingFiles=missingFiles,
+			technicalDetail=f"WASM TTS Engine is missing files: {', '.join(missingFiles)}",
+		)
+	try:
+		manifest = json.loads((ENGINE_DIR / "manifest.json").read_text(encoding="utf-8"))
+		manifestVersion = str(manifest.get("version") or "").strip() if isinstance(manifest, dict) else ""
+	except (OSError, json.JSONDecodeError) as exc:
+		raise EngineLibraryError(
+			"incomplete",
+			foundVersions=foundVersions,
+			technicalDetail=f"WASM TTS Engine manifest could not be read: {exc}",
+		) from exc
+	if manifestVersion != ENGINE_VERSION:
+		raise EngineLibraryError(
+			"unsupportedVersion",
+			foundVersions=(manifestVersion or "unknown",),
+			technicalDetail=(
+				f"WASM TTS Engine manifest version {manifestVersion or 'unknown'} "
+				f"does not match supported version {ENGINE_VERSION}."
+			),
+		)
+
+
 class VoiceCatalog:
 	def __init__(self, packages: list[VoicePackage]) -> None:
 		self.packages = sorted(packages, key=lambda pkg: (pkg.language.lower(), pkg.id.lower()))
@@ -72,7 +148,24 @@ class VoiceCatalog:
 	@classmethod
 	def load(cls, path: Path | None = None) -> "VoiceCatalog":
 		catalogPath = path or CATALOG_PATH
-		raw = json.loads(catalogPath.read_text(encoding="utf-8"))
+		if path is None:
+			inspect_engine_library()
+		try:
+			raw = json.loads(catalogPath.read_text(encoding="utf-8"))
+		except OSError as exc:
+			if path is None:
+				raise EngineLibraryError(
+					"invalidCatalog",
+					technicalDetail=f"WASM TTS Engine voice catalog could not be opened: {exc}",
+				) from exc
+			raise
+		except json.JSONDecodeError as exc:
+			if path is None:
+				raise EngineLibraryError(
+					"invalidCatalog",
+					technicalDetail=f"WASM TTS Engine voice catalog could not be read: {exc}",
+				) from exc
+			raise
 		packages: list[VoicePackage] = []
 		for item in raw:
 			if not isinstance(item, dict):

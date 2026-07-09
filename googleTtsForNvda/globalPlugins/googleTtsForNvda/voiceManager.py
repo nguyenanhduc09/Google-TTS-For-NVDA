@@ -5,6 +5,7 @@ from collections.abc import Callable
 import os
 import threading
 from typing import Any
+import urllib.error
 
 import addonHandler
 import config
@@ -175,7 +176,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 
 		buttonRow = wx.BoxSizer(wx.HORIZONTAL)
 		self.refreshButton = wx.Button(self, label=_("&Refresh"))
-		self.openFolderButton = wx.Button(self, label=_("&Open voices folder"))
+		self.openFolderButton = wx.Button(self, label=_("&Open voice packages folder"))
 		self.closeButton = wx.Button(self, id=wx.ID_CLOSE)
 		self.refreshButton.Bind(wx.EVT_BUTTON, lambda evt: self.refresh_lists())
 		self.openFolderButton.Bind(wx.EVT_BUTTON, self.on_open_folder)
@@ -194,14 +195,14 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		filterRow = wx.BoxSizer(wx.HORIZONTAL)
 		self.installedFilterLabel = wx.StaticText(self.installedPanel, label=_("&Filter by language:"))
 		self.installedLanguageCombo = wx.Choice(self.installedPanel)
-		self.installedLanguageCombo.SetName(_("Filter installed voices by language"))
+		self.installedLanguageCombo.SetName(_("Filter installed voice packages by language"))
 		self.installedLanguageCombo.Bind(wx.EVT_CHOICE, self.on_installed_language_filter_changed)
 		filterRow.Add(self.installedFilterLabel, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 		filterRow.Add(self.installedLanguageCombo, 1, wx.ALIGN_CENTER_VERTICAL)
 		sizer.Add(filterRow, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
 		self.installedSelectAllCheck = wx.CheckBox(
-			self.installedPanel, label=_("Select &all voices"),
+			self.installedPanel, label=_("Select &all voice packages"),
 		)
 		self.installedSelectAllCheck.Bind(wx.EVT_CHECKBOX, self.on_installed_select_all)
 		sizer.Add(self.installedSelectAllCheck, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
@@ -211,7 +212,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self.installedList.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self._on_installed_item_check_changed)
 		sizer.Add(self.installedList, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 		buttonRow = wx.BoxSizer(wx.HORIZONTAL)
-		self.removeButton = wx.Button(self.installedPanel, label=_("&Remove checked voices"))
+		self.removeButton = wx.Button(self.installedPanel, label=_("&Remove checked voice packages"))
 		self.removeButton.Bind(wx.EVT_BUTTON, self.on_remove_selected)
 		buttonRow.Add(self.removeButton)
 		sizer.Add(buttonRow, 0, wx.EXPAND | wx.ALL, 8)
@@ -223,14 +224,14 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		filterRow = wx.BoxSizer(wx.HORIZONTAL)
 		self.downloadFilterLabel = wx.StaticText(self.downloadPanel, label=_("&Filter by language:"))
 		self.downloadLanguageCombo = wx.Choice(self.downloadPanel)
-		self.downloadLanguageCombo.SetName(_("Filter downloadable voices by language"))
+		self.downloadLanguageCombo.SetName(_("Filter downloadable voice packages by language"))
 		self.downloadLanguageCombo.Bind(wx.EVT_CHOICE, self.on_download_language_filter_changed)
 		filterRow.Add(self.downloadFilterLabel, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
 		filterRow.Add(self.downloadLanguageCombo, 1, wx.ALIGN_CENTER_VERTICAL)
 		sizer.Add(filterRow, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 
 		self.downloadSelectAllCheck = wx.CheckBox(
-			self.downloadPanel, label=_("Select &all voices"),
+			self.downloadPanel, label=_("Select &all voice packages"),
 		)
 		self.downloadSelectAllCheck.Bind(wx.EVT_CHECKBOX, self.on_download_select_all)
 		sizer.Add(self.downloadSelectAllCheck, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
@@ -240,7 +241,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		self.downloadList.Bind(wx.EVT_LIST_ITEM_UNCHECKED, self._on_download_item_check_changed)
 		sizer.Add(self.downloadList, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
 		buttonRow = wx.BoxSizer(wx.HORIZONTAL)
-		self.downloadButton = wx.Button(self.downloadPanel, label=_("&Download checked voices"))
+		self.downloadButton = wx.Button(self.downloadPanel, label=_("&Download checked voice packages"))
 		self.downloadButton.Bind(wx.EVT_BUTTON, self.on_download_selected)
 		buttonRow.Add(self.downloadButton)
 		sizer.Add(buttonRow, 0, wx.EXPAND | wx.ALL, 8)
@@ -315,7 +316,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		installedIds = {pkg.id for pkg in self._allInstalledPackages}
 		self._allDownloadPackages = [pkg for pkg in self.catalog.packages if pkg.id not in installedIds]
 
-		title = _("{installed} installed, {available} available - Google TTS Voice Manager").format(
+		title = _("{installed} installed voice packages, {available} available to download - Google TTS Voice Manager").format(
 			installed=len(self._allInstalledPackages),
 			available=len(self._allDownloadPackages),
 		)
@@ -416,7 +417,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		if package.dependentVoiceId:
 			installedIds = {pkg.id for pkg in self._allInstalledPackages}
 			if package.dependentVoiceId not in installedIds:
-				return _("Missing dependency: {dependency}").format(
+				return _("Missing required package: {dependency}").format(
 					dependency=package.dependentVoiceId,
 				)
 		return _("Installed")
@@ -514,8 +515,10 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		packageNames = self._package_list_text(packages)
 		answer = gui.messageBox(
 			_(
-				"Make sure you have saved your NVDA configuration before removing this only remaining "
-				"Google TTS voice package.\n\nPackages to remove: {packages}"
+				"You are removing the last installed Google TTS For NVDA voice package. "
+				"After it is removed, Google TTS For NVDA will have no voices available "
+				"until you download another voice package.\n\n"
+				"Packages to remove: {packages}"
 			).format(packages=packageNames),
 			_("Google TTS Voice Manager"),
 			wx.OK | wx.CANCEL | wx.ICON_WARNING,
@@ -527,12 +530,12 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		packageNames = self._package_list_text(packages)
 		answer = gui.messageBox(
 			_(
-				"You are removing the only remaining Google TTS voice package. "
-				"If it is removed, no Google TTS voice will remain available.\n\n"
+				"You are removing the last installed Google TTS For NVDA voice package. "
+				"Google TTS For NVDA is currently selected as your synthesizer, so it needs "
+				"at least one voice package to keep speaking.\n\n"
 				"Packages to remove: {packages}\n\n"
-				"Choose Yes to open Select Synthesizer and choose another synthesizer before removal. "
-				"After choosing another synthesizer, press NVDA+Control+C to save the current configuration "
-				"if you turned off Save configuration when exiting NVDA in General Settings."
+				"Choose Yes to open Select Synthesizer and switch to another synthesizer before removal. "
+				"Choose No to keep this voice package installed."
 			).format(packages=packageNames),
 			_("Google TTS Voice Manager"),
 			wx.YES_NO | wx.ICON_WARNING,
@@ -543,7 +546,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 	def _schedule_remove_after_synth_switch(self, packages: list[VoicePackage]) -> None:
 		self._pendingRemoveAfterSynthSwitch = packages
 		self.set_status(
-			_("Waiting for another synthesizer before removing Google TTS voices."),
+			_("Waiting for you to switch from Google TTS For NVDA to another synthesizer before removing the last voice package."),
 			0,
 			announce=True,
 		)
@@ -569,7 +572,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		if attempts >= 600:
 			self._pendingRemoveAfterSynthSwitch = None
 			self.set_status(
-				_("Voice packages were not removed because Google TTS is still the current synthesizer."),
+				_("The last voice package was not removed because Google TTS For NVDA is still the current synthesizer."),
 				0,
 				announce=True,
 			)
@@ -638,7 +641,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 	def on_download_selected(self, evt: wx.CommandEvent) -> None:
 		packages = self._checked_packages(self.downloadList, self.downloadPackages)
 		if not packages:
-			self.set_status(_("No voice packages selected."), 0, announce=True)
+			self.set_status(_("No voice packages selected for download."), 0, announce=True)
 			return
 		totalCount = len(packages)
 
@@ -682,7 +685,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			failed = result["failed"]
 			if failed:
 				message = _(
-					"Downloaded {succeeded} of {total}. Failed: {failList}"
+					"Downloaded {succeeded} of {total} voice packages. Could not download: {failList}"
 				).format(
 					succeeded=succeeded,
 					total=totalCount,
@@ -696,19 +699,19 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			ui.message(message)
 			self._focus_active_page()
 
-		self._run_worker(work, done)
+		self._run_worker(work, done, _("Downloading voice packages..."))
 
 	def on_remove_selected(self, evt: wx.CommandEvent) -> None:
 		if self._pendingRemoveAfterSynthSwitch is not None:
 			self.set_status(
-				_("Waiting for another synthesizer before removing Google TTS voices."),
+				_("Waiting for you to switch from Google TTS For NVDA to another synthesizer before removing the last voice package."),
 				0,
 				announce=True,
 			)
 			return
 		selectedPackages = self._checked_packages(self.installedList, self.installedPackages)
 		if not selectedPackages:
-			self.set_status(_("No voice packages selected."), 0, announce=True)
+			self.set_status(_("No voice packages selected for removal."), 0, announce=True)
 			return
 		selectedIds = {pkg.id for pkg in selectedPackages}
 		packages = self._with_installed_dependents(selectedPackages)
@@ -724,14 +727,14 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 				return
 		else:
 			if len(packages) == 1:
-				confirmMsg = _("Remove {package}?").format(package=packages[0].id)
+				confirmMsg = _("Remove voice package {package}?").format(package=packages[0].id)
 			elif dependentPackages:
 				selectedNames = self._package_list_text(selectedPackages)
 				dependentNames = self._package_list_text(dependentPackages)
 				confirmMsg = _(
 					"Remove {count} voice packages?\n"
 					"Selected: {selected}\n"
-					"Also remove dependent packages: {dependents}"
+					"Also remove voice packages that depend on them: {dependents}"
 				).format(
 					count=len(packages),
 					selected=selectedNames,
@@ -782,7 +785,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			resetVoice = self._reset_configured_voice_if_removed(set(result.get("removedIds", [])))
 			if failed:
 				message = _(
-					"Removed {succeeded} of {total}. Failed: {failList}"
+					"Removed {succeeded} of {total} voice packages. Could not remove: {failList}"
 				).format(
 					succeeded=succeeded,
 					total=totalCount,
@@ -793,7 +796,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			else:
 				message = _("Removed {count} voice packages.").format(count=succeeded)
 			if resetVoice:
-				message = _("{message} Current voice was reset to {voice}.").format(
+				message = _("{message} The current voice was reset to {voice}.").format(
 					message=message,
 					voice=resetVoice,
 				)
@@ -801,7 +804,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 			ui.message(message)
 			self._focus_active_page()
 
-		self._run_worker(work, done)
+		self._run_worker(work, done, _("Removing voice packages..."))
 
 	def on_open_folder(self, evt: wx.CommandEvent) -> None:
 		try:
@@ -810,14 +813,19 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		except Exception as exc:
 			self.show_error(exc)
 
-	def _run_worker(self, work: Callable[[], Any], done: Callable[[Any | BaseException], None]) -> None:
+	def _run_worker(
+		self,
+		work: Callable[[], Any],
+		done: Callable[[Any | BaseException], None],
+		busyMessage: str,
+	) -> None:
 		if self.isBusy:
 			return
 		self.isBusy = True
 		self._lastProgressAnnouncement = -1
 		self.closeButton.SetFocus()
 		self._refresh_buttons()
-		self.set_status(_("Working..."), 0, announce=True)
+		self.set_status(busyMessage, 0, announce=True)
 
 		def run() -> None:
 			try:
@@ -840,10 +848,26 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		if announce:
 			ui.message(message)
 
+	def _user_friendly_error_message(self, error: BaseException) -> str:
+		if isinstance(error, PermissionError):
+			return _("Could not write to the voice packages folder. Check folder permissions and try again.")
+		if isinstance(error, FileNotFoundError):
+			return _("The selected voice package file could not be found.")
+		if isinstance(error, (urllib.error.URLError, TimeoutError)):
+			return _("Could not download the voice package. Check your internet connection and try again.")
+		if isinstance(error, OSError):
+			return _(
+				"A file system error occurred while managing voice packages. "
+				"Check the voice packages folder and try again."
+			)
+		message = str(error).strip()
+		return message or _("An unexpected error occurred while managing voice packages.")
+
 	def show_error(self, error: BaseException) -> None:
-		message = str(error)
-		log.error("Google TTS voice manager operation failed: %s", message)
-		self.set_status(_("Failed: {message}").format(message=message), 0)
+		message = self._user_friendly_error_message(error)
+		technicalMessage = str(error).strip() or error.__class__.__name__
+		log.error("Google TTS voice manager operation failed: %s", technicalMessage)
+		self.set_status(_("Voice package operation failed: {message}").format(message=message), 0)
 		gui.messageBox(message, _("Google TTS Voice Manager"), wx.OK | wx.ICON_ERROR, self)
 
 	def _refresh_buttons(self) -> None:
@@ -867,7 +891,7 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
 		if self.isBusy:
 			evt.Veto()
 			gui.messageBox(
-				_("A voice operation is still running."),
+				_("A voice package operation is still running."),
 				_("Google TTS Voice Manager"),
 				wx.OK | wx.ICON_INFORMATION,
 				self,

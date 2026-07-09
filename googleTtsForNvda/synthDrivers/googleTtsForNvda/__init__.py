@@ -19,7 +19,7 @@ from speech.commands import BreakCommand, IndexCommand, LangChangeCommand, Pitch
 from synthDriverHandler import VoiceInfo, synthDoneSpeaking, synthIndexReached
 
 from .bridge import CdpCancelled, ChromeTtsBridge, SAMPLE_RATE
-from .catalog import VoiceCatalog
+from .catalog import EngineLibraryError, VoiceCatalog
 from . import voice_store
 
 
@@ -89,19 +89,32 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 	def __init__(self) -> None:
 		super().__init__()
-		fullCatalog = VoiceCatalog.load()
+		try:
+			fullCatalog = VoiceCatalog.load()
+		except EngineLibraryError as exc:
+			wx.CallAfter(self._show_engine_library_error, exc)
+			raise RuntimeError(self._engine_library_error_message(exc)) from exc
 		installedPackages = voice_store.installed_packages(fullCatalog)
 		if not installedPackages:
 			# Defer UI until after this constructor aborts so synth startup is
 			# not blocked by a modal dialog waiting for user input.
 			wx.CallAfter(self._prompt_for_voice_install)
-			raise RuntimeError("No Google TTS voice packages are installed.")
+			raise RuntimeError(
+				"No Google TTS For NVDA voice packages are installed. "
+				"Open Google TTS Voice Manager to download a voice package."
+			)
 		self.catalog = VoiceCatalog(installedPackages)
 		if not self.catalog.speakers:
-			raise RuntimeError("Installed Google TTS voice packages do not contain usable voices.")
+			raise RuntimeError(
+				"Installed Google TTS For NVDA voice packages do not contain any usable voices. "
+				"Open Google TTS Voice Manager to install another voice package."
+			)
 		if ChromeTtsBridge.find_chrome() is None:
 			wx.CallAfter(self._show_missing_chrome_error)
-			raise RuntimeError("Microsoft Edge or Google Chrome was not found.")
+			raise RuntimeError(
+				"Microsoft Edge or Google Chrome was not found. "
+				"Install one of them or set EDGE_PATH/CHROME_PATH."
+			)
 		self.availableVoices = self._build_available_voices()
 		self.availableLanguages = {speaker.language for speaker in self.catalog.speakers}
 		self._bridge = ChromeTtsBridge(self.catalog)
@@ -153,8 +166,11 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 				answer = gui.messageBox(
 					_(
-						"No Google TTS voice packages are installed. "
-						"Download voices now?"
+						"No Google TTS For NVDA voices are installed.\n\n"
+						"Press OK to open Google TTS Voice Manager and download a voice package.\n"
+						"Press Cancel to keep using your current synthesizer.\n\n"
+						"You can also open Voice Manager later from NVDA Menu > Tools > "
+						"Google TTS Voice Manager, or press NVDA+Ctrl+Shift+G."
 					),
 					_("Google TTS For NVDA"),
 					wx.OK | wx.CANCEL | wx.ICON_QUESTION,
@@ -168,6 +184,43 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		# Start checking after 250ms to allow NVDA to catch the RuntimeError,
 		# restore the fallback synthesizer, and display its own warning message box.
 		wx.CallLater(250, prompt_when_ready)
+
+	def _engine_library_error_message(self, error: EngineLibraryError) -> str:
+		if error.kind == "unsupportedVersion":
+			found = ", ".join(error.foundVersions) if error.foundVersions else _("another version")
+			return _(
+				"Google TTS For NVDA could not be loaded because the WASM TTS Engine version is not supported.\n\n"
+				"This add-on supports WASM TTS Engine version {supported}, but found: {found}.\n\n"
+				"Install a Google TTS For NVDA package that includes the supported WASM TTS Engine."
+			).format(supported=error.supportedVersion, found=found)
+		if error.kind == "missing":
+			return _(
+				"Google TTS For NVDA could not be loaded because the WASM TTS Engine library is missing.\n\n"
+				"Reinstall Google TTS For NVDA with the included WASM TTS Engine library."
+			)
+		if error.kind == "incomplete":
+			return _(
+				"Google TTS For NVDA could not be loaded because the WASM TTS Engine library is incomplete.\n\n"
+				"Reinstall Google TTS For NVDA with the complete WASM TTS Engine library."
+			)
+		return _(
+			"Google TTS For NVDA could not be loaded because the WASM TTS Engine voice catalog could not be read.\n\n"
+			"Reinstall Google TTS For NVDA with a supported WASM TTS Engine library."
+		)
+
+	def _show_engine_library_error(self, error: EngineLibraryError) -> None:
+		try:
+			import gui
+
+			log.error("Google TTS WASM TTS Engine error: %s", error.technicalDetail)
+			gui.messageBox(
+				self._engine_library_error_message(error),
+				_("Google TTS For NVDA"),
+				wx.OK | wx.ICON_ERROR,
+				gui.mainFrame,
+			)
+		except Exception:
+			log.exception("Could not show Google TTS WASM TTS Engine error.", exc_info=True)
 
 	def _show_missing_chrome_error(self) -> None:
 		try:

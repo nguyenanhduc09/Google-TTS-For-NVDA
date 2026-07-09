@@ -71,7 +71,9 @@ import websocket  # type: ignore
 
 
 class CdpError(Exception):
-	pass
+	def __init__(self, message: str, technicalDetail: str | None = None) -> None:
+		super().__init__(message)
+		self.technicalDetail = technicalDetail
 
 
 class CdpCancelled(Exception):
@@ -149,6 +151,12 @@ def _read_json_endpoint(port: int, path: str, method: str = "GET", timeout: floa
 def _raise_if_cancelled(cancelEvent: threading.Event | None) -> None:
 	if cancelEvent is not None and cancelEvent.is_set():
 		raise CdpCancelled()
+
+
+def _friendly_cdp_error(message: str, technicalDetail: str | None = None) -> CdpError:
+	if technicalDetail:
+		log.debug("Google TTS browser runtime detail: %s", technicalDetail)
+	return CdpError(message, technicalDetail)
 
 
 def _hidden_chrome_startup_kwargs() -> dict[str, Any]:
@@ -372,7 +380,10 @@ class ChromeTtsBridge:
 	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
 		package = self.catalog.package_for_voice(str(options["voiceId"]))
 		if not voice_store.is_package_installed(package):
-			raise CdpError(f"Google TTS voice package is not installed: {package.id}")
+			raise _friendly_cdp_error(
+				"This Google TTS For NVDA voice package is not installed. Open Google TTS Voice Manager to install it.",
+				f"Missing voice package: {package.id}.",
+			)
 		self.ensure_connection()
 		_raise_if_cancelled(cancelEvent)
 		payload = {
@@ -407,7 +418,10 @@ class ChromeTtsBridge:
 			return {"success": True, "empty": True}
 		package = self.catalog.package_for_voice(str(options["voiceId"]))
 		if not voice_store.is_package_installed(package):
-			raise CdpError(f"Google TTS voice package is not installed: {package.id}")
+			raise _friendly_cdp_error(
+				"This Google TTS For NVDA voice package is not installed. Open Google TTS Voice Manager to install it.",
+				f"Missing voice package: {package.id}.",
+			)
 		self.ensure_connection()
 		_raise_if_cancelled(cancelEvent)
 		sessionId = f"{time.monotonic_ns()}"
@@ -470,7 +484,11 @@ class ChromeTtsBridge:
 			elif eventType == "done":
 				state["done"] = True
 			elif eventType == "error":
-				raise CdpError(str(event.get("message") or "Chrome TTS failed."))
+				detail = str(event.get("message") or "Chrome TTS failed.")
+				raise _friendly_cdp_error(
+					"Google TTS For NVDA could not synthesize this text.",
+					detail,
+				)
 
 		expression = f"window.googleTtsForNvdaSpeak({json.dumps(payload, ensure_ascii=False)})"
 		try:
@@ -491,7 +509,10 @@ class ChromeTtsBridge:
 			raise
 		result = response.get("result", {}).get("result", {})
 		if result.get("subtype") == "error":
-			raise CdpError(result.get("description") or "Chrome TTS evaluation failed.")
+			raise _friendly_cdp_error(
+				"Google TTS For NVDA could not start speech in the browser runtime.",
+				result.get("description") or "Chrome TTS evaluation failed.",
+			)
 		value = result.get("value")
 		if isinstance(value, dict):
 			value.update(state)
@@ -565,7 +586,10 @@ class ChromeTtsBridge:
 		_raise_if_cancelled(cancelEvent)
 		chromePath = self.find_chrome()
 		if not chromePath:
-			raise CdpError("Microsoft Edge or Google Chrome was not found. Install Chrome or set CHROME_PATH.")
+			raise _friendly_cdp_error(
+				"Microsoft Edge or Google Chrome was not found. Install one of them or set EDGE_PATH/CHROME_PATH.",
+				"No supported browser runtime executable was found.",
+			)
 		profileDir = self._get_chrome_profile_dir(chromePath)
 		devToolsFile = profileDir / "DevToolsActivePort"
 		try:
@@ -716,24 +740,39 @@ class ChromeTtsBridge:
 				exitCode = self._chromeProcess.returncode
 				self._chromeProcess = None
 				if exitCode == 21:
-					raise CdpError("The Google TTS Chrome profile is already in use.")
-				raise CdpError(f"Chrome exited before DevTools became available: {exitCode}")
+					raise _friendly_cdp_error(
+						"The browser profile used by Google TTS For NVDA is already in use. Restart NVDA, or close any leftover Microsoft Edge or Google Chrome helper processes.",
+						"Browser runtime exited with profile-in-use code 21.",
+					)
+				raise _friendly_cdp_error(
+					"The browser runtime closed before Google TTS For NVDA was ready.",
+					f"Browser runtime exited before DevTools became available: {exitCode}",
+				)
 			if devToolsFile.is_file():
 				lines = devToolsFile.read_text(encoding="utf-8").splitlines()
 				if lines:
 					return int(lines[0])
 			time.sleep(STARTUP_POLL_INTERVAL)
-		raise CdpError("Timed out waiting for Chrome DevTools.")
+		raise _friendly_cdp_error(
+			"Timed out waiting for the browser runtime to start.",
+			"Timed out waiting for Chrome DevTools.",
+		)
 
 	def _page_url(self) -> str:
 		if self._serverPort is None:
-			raise CdpError("Bridge HTTP server is not running.")
+			raise _friendly_cdp_error(
+				"Google TTS For NVDA could not start its local browser bridge.",
+				"Bridge HTTP server is not running.",
+			)
 		return f"http://127.0.0.1:{self._serverPort}/"
 
 	def _get_page_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
 		pageUrl = self._page_url()
 		if self._debugPort is None:
-			raise CdpError("Chrome DevTools port is not ready.")
+			raise _friendly_cdp_error(
+				"The browser runtime is not ready yet.",
+				"Chrome DevTools port is not ready.",
+			)
 		for _ in range(200):
 			_raise_if_cancelled(cancelEvent)
 			if self._chromeProcess is not None:
@@ -755,7 +794,10 @@ class ChromeTtsBridge:
 					if target.get("url") == pageUrl:
 						return wsUrl
 			time.sleep(STARTUP_POLL_INTERVAL)
-		raise CdpError("Could not find Chrome TTS page target.")
+		raise _friendly_cdp_error(
+			"Google TTS For NVDA could not find its speech page in the browser runtime.",
+			"Could not find Chrome TTS page target.",
+		)
 
 	def _next_msg_id(self) -> int:
 		with self._msgIdLock:
@@ -771,7 +813,10 @@ class ChromeTtsBridge:
 		cancelEvent: threading.Event | None = None,
 	) -> dict[str, Any]:
 		if self._ws is None:
-			raise CdpError("Chrome DevTools websocket is not connected.")
+			raise _friendly_cdp_error(
+				"Google TTS For NVDA is not connected to the browser runtime.",
+				"Chrome DevTools websocket is not connected.",
+			)
 		msgId = self._next_msg_id()
 		command = {"id": msgId, "method": method, "params": params or {}}
 		with self._lock:
@@ -795,21 +840,33 @@ class ChromeTtsBridge:
 					except websocket.WebSocketTimeoutException:
 						continue
 					if not rawMessage:
-						raise CdpError("Chrome DevTools websocket closed.")
+						raise _friendly_cdp_error(
+							"The browser runtime connection closed unexpectedly.",
+							"Chrome DevTools websocket closed.",
+						)
 					message = json.loads(rawMessage)
 					if eventHandler is not None:
 						eventHandler(message)
 					if message.get("id") != msgId:
 						continue
 					if "error" in message:
-						raise CdpError(f"CDP error for {method}: {message['error']}")
+						raise _friendly_cdp_error(
+							"The browser runtime reported an error while processing speech.",
+							f"CDP error for {method}: {message['error']}",
+						)
 					exceptionDetails = message.get("result", {}).get("exceptionDetails")
 					if isinstance(exceptionDetails, dict):
-						raise CdpError(self._format_exception(exceptionDetails))
+						raise _friendly_cdp_error(
+							"The browser runtime reported an error while preparing speech.",
+							self._format_exception(exceptionDetails),
+						)
 					return message
 			finally:
 				self._runtimeBusy = False
-		raise CdpError(f"Timed out waiting for {method}.")
+		raise _friendly_cdp_error(
+			"Timed out waiting for the browser runtime to respond.",
+			f"Timed out waiting for {method}.",
+		)
 
 	def _send_stop(self) -> None:
 		ws = self._ws
@@ -853,7 +910,10 @@ class ChromeTtsBridge:
 			if response.get("result", {}).get("result", {}).get("value") is True:
 				return
 			time.sleep(STARTUP_POLL_INTERVAL)
-		raise CdpError("Chrome TTS harness did not finish loading.")
+		raise _friendly_cdp_error(
+			"Google TTS For NVDA could not finish loading the browser speech engine.",
+			"Chrome TTS harness did not finish loading.",
+		)
 
 	def _close_websocket(self) -> None:
 		if self._ws is None:

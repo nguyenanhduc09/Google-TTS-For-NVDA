@@ -202,7 +202,7 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
 			progress(100, f"{package.id} is already installed.")
 		return package_file(package)
 	if not package.url:
-		raise RuntimeError(f"No download URL is available for {package.id}.")
+		raise RuntimeError(f"No download link is available for voice package {package.id}.")
 	target = package_file(package)
 	target.parent.mkdir(parents=True, exist_ok=True)
 	tmp = target.with_suffix(".download")
@@ -225,12 +225,12 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
 				progress(min(99, int(downloaded * 100 / total)), f"Downloading {package.id}.")
 	if package.compressedSize and tmp.stat().st_size != package.compressedSize:
 		tmp.unlink(missing_ok=True)
-		raise RuntimeError(f"Downloaded size mismatch for {package.id}.")
+		raise RuntimeError(f"Voice package {package.id} did not pass verification after download. Please try downloading it again.")
 	if package.sha256Checksum:
 		actualHash = sha256(tmp)
 		if actualHash.lower() != package.sha256Checksum.lower():
 			tmp.unlink(missing_ok=True)
-			raise RuntimeError(f"Downloaded checksum mismatch for {package.id}.")
+			raise RuntimeError(f"Voice package {package.id} did not pass verification after download. Please try downloading it again.")
 	else:
 		actualHash = None
 	os.replace(tmp, target)
@@ -247,5 +247,5 @@ def copy_existing_package(source: Path, package: VoicePackage) -> Path:
 	_forget_verified_package(package.id)
 	if not is_package_installed(package):
 		target.unlink(missing_ok=True)
-		raise RuntimeError(f"Copied package did not pass verification: {package.id}.")
+		raise RuntimeError(f"Voice package {package.id} did not pass verification after import.")
 	return target
