@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import addonHandler
@@ -31,6 +32,35 @@ _dialog: VoiceManagerDialog | None = None
 _originalSetSynth: Any | None = None
 _originalSettingsDialogSetSynth: Any | None = None
 _missingVoicesPromptActive = False
+
+
+def _call_set_synth_compat(
+	setSynth: Any,
+	name: str | None,
+	isFallback: bool = False,
+	_leftToTry: list[str] | None = None,
+) -> bool:
+	try:
+		signature = inspect.signature(setSynth)
+	except (TypeError, ValueError):
+		try:
+			return setSynth(name, isFallback=isFallback, _leftToTry=_leftToTry)
+		except TypeError as exc:
+			if "_leftToTry" not in str(exc):
+				raise
+			return setSynth(name, isFallback=isFallback)
+
+	parameters = signature.parameters
+	acceptsKwargs = any(
+		parameter.kind == inspect.Parameter.VAR_KEYWORD
+		for parameter in parameters.values()
+	)
+	kwargs: dict[str, Any] = {}
+	if acceptsKwargs or "isFallback" in parameters:
+		kwargs["isFallback"] = isFallback
+	if acceptsKwargs or "_leftToTry" in parameters:
+		kwargs["_leftToTry"] = _leftToTry
+	return setSynth(name, **kwargs)
 
 
 def _clear_dialog_reference(dialog: VoiceManagerDialog) -> None:
@@ -170,7 +200,7 @@ def _set_synth_with_google_tts_voice_prompt(
 			return True
 	if _originalSetSynth is None:
 		return False
-	return _originalSetSynth(name, isFallback=isFallback, _leftToTry=_leftToTry)
+	return _call_set_synth_compat(_originalSetSynth, name, isFallback, _leftToTry)
 
 
 def _patch_synth_selection() -> None:
