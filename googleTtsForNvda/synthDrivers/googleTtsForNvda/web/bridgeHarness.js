@@ -760,6 +760,16 @@
 						lang: payload.lang,
 						rate: payload.rate,
 						pitch: payload.pitch,
+						// Forwarded for architectural parity with rate/pitch/volume
+						// (same single-scalar-per-utterance pattern NVDA's eSpeak/IBM
+						// TTS drivers use for their own Inflection setting). The
+						// compiled WASM engine (offscreen_compiled.js /
+						// bindings_main.js) does not currently read this key -- it
+						// only consumes rate/pitch/volume from this options object.
+						// Wiring it up end-to-end here means a future contributor
+						// only needs to add support on the engine side, not rebuild
+						// this plumbing.
+						inflectionScale: payload.inflectionScale,
 						volume: payload.volume,
 					});
 				} finally {

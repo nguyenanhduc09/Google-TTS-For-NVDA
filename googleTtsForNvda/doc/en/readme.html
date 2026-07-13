@@ -48,12 +48,15 @@
 	<h3>Speech Settings</h3>
 	<p>In NVDA's Voice settings dialog (<kbd>NVDA+Ctrl+V</kbd>), you can adjust:</p>
 	<ul>
-		<li><strong>Voice:</strong> Choose a voice from your installed voice packages.</li>
+		<li><strong>Voice:</strong> Choose a language (e.g., English, Vietnamese) from your installed voice packages.</li>
+		<li><strong>Variant:</strong> Choose a specific voice within the selected language (the same Voice/Variant split used by synthesizers like eSpeak and IBM TTS).</li>
 		<li><strong>Rate:</strong> Adjust the reading speed.</li>
 		<li><strong>Rate Boost:</strong> Enable to double the speech rate for high-speed reading.</li>
 		<li><strong>Pitch:</strong> Adjust the pitch of the voice.</li>
+		<li><strong>Inflection:</strong> Present to match NVDA's standard voice settings layout (between Pitch and Volume), but <em>does not currently produce an audible change</em> -- see Notes below.</li>
 		<li><strong>Volume:</strong> Adjust the speech volume.</li>
 	</ul>
+	<p>An additional <strong>Language detection</strong> setting (Off / Conservative / Aggressive) is available further down in the same Voice settings dialog. When enabled, the add-on automatically switches to an appropriate voice when it detects the text being read has switched language (for example, English words within Vietnamese text). It's an advanced, opt-in feature, so unlike the settings above it does not appear on the synth settings ring (<kbd>NVDA+Ctrl+Shift+arrow keys</kbd>) -- open the full Voice settings dialog to turn it on.</p>
 
 	<h3>Add-on Settings</h3>
 	<p>Under <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>, you can configure:</p>
@@ -66,6 +69,7 @@
 		<li>You do not need to keep a Microsoft Edge or Google Chrome browser window open while using NVDA. The add-on automatically connects and processes speech in the background.</li>
 		<li>When NVDA first speaks after startup, voices may take a brief moment to initialize.</li>
 		<li>Voice packages are stored locally on your computer and managed securely through Google TTS Voice Manager.</li>
+		<li><strong>Inflection currently has no effect:</strong> This is not a missing connection in the add-on -- the Google TTS engine (adapted from Chrome/ChromeOS's built-in "Google text-to-speech" extension) has never supported an inflection/pitch-range parameter separate from pitch; it only supports rate, pitch, and volume. Fixing this for real would require the underlying WASM engine itself to add that capability, which is outside what this add-on's source code can control. The full technical investigation (in English) is documented in the <code>_speech_options</code> function in <code>synthDrivers/googleTtsForNvda/__init__.py</code>.</li>
 	</ul>
 
 	<h2>Support &amp; Contact</h2>

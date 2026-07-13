@@ -48,11 +48,14 @@
 	<h3>Cấu Hình Giọng Đọc</h3>
 	<p>Trong hộp thoại Cấu hình giọng đọc của NVDA (<kbd>NVDA+Ctrl+V</kbd>), bạn có thể tùy chỉnh:</p>
 	<ul>
-		<li><strong>Giọng:</strong> Chọn giọng nói từ các gói giọng đã cài đặt.</li>
+		<li><strong>Giọng:</strong> Chọn ngôn ngữ (ví dụ: Tiếng Việt, Tiếng Anh) từ các gói giọng đã cài đặt.</li>
+		<li><strong>Biến thể:</strong> Chọn giọng đọc cụ thể trong ngôn ngữ đã chọn ở trên (tương tự cách eSpeak/IBM TTS phân chia Giọng/Biến thể).</li>
 		<li><strong>Tốc độ:</strong> Điều chỉnh tốc độ đọc.</li>
 		<li><strong>Tăng tốc độ:</strong> Bật để tăng gấp đôi tốc độ cho việc đọc lướt nhanh.</li>
 		<li><strong>Cao độ:</strong> Điều chỉnh độ cao của giọng nói.</li>
+		<li><strong>Ngữ điệu:</strong> Có mặt trong hộp thoại để giữ đúng bố cục chuẩn của NVDA (giữa Cao độ và Âm lượng), nhưng <em>hiện chưa tạo ra thay đổi âm thanh thật sự</em> — xem mục Lưu Ý bên dưới.</li>
 		<li><strong>Âm lượng:</strong> Điều chỉnh âm lượng của giọng nói.</li>
+		<li><strong>Phát hiện ngôn ngữ:</strong> Tắt / Thận trọng / Mạnh. Khi bật, add-on tự động đổi giọng đọc phù hợp khi phát hiện đoạn văn bản chuyển sang tiếng Anh hoặc ngôn ngữ khác trong lúc đọc.</li>
 	</ul>
 
 	<h3>Cấu Hình Add-on</h3>
@@ -66,6 +69,7 @@
 		<li>Bạn không cần mở sẵn cửa sổ trình duyệt Microsoft Edge hay Google Chrome khi sử dụng. Add-on tự động kết nối và xử lý âm thanh ở chế độ nền.</li>
 		<li>Khi NVDA đọc lần đầu tiên sau khi khởi động, giọng đọc có thể mất một chút thời gian để khởi tạo.</li>
 		<li>Các gói giọng được lưu trữ cục bộ trên máy tính và quản lý an toàn thông qua Trình quản lý giọng Google TTS.</li>
+		<li><strong>Ngữ điệu (Inflection) hiện không có tác dụng:</strong> Đây không phải lỗi thiếu kết nối trong add-on — bộ máy tổng hợp giọng nói Google TTS (vốn được lấy từ tiện ích "Google text-to-speech" có sẵn của Chrome/ChromeOS) chưa từng hỗ trợ điều chỉnh ngữ điệu tách biệt khỏi cao độ, chỉ có tốc độ/cao độ/âm lượng. Muốn khắc phục thật sự cần bản thân bộ máy WASM được cập nhật để hỗ trợ thêm tham số này — nằm ngoài khả năng sửa từ phía mã nguồn add-on. Chi tiết kỹ thuật (đã điều tra kỹ, bằng tiếng Anh) nằm ngay trong code, ở hàm <code>_speech_options</code> trong <code>synthDrivers/googleTtsForNvda/__init__.py</code>.</li>
 	</ul>
 
 	<h2>Hỗ Trợ &amp; Liên Hệ</h2>

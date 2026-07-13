@@ -453,6 +453,11 @@ class ChromeTtsBridge:
 			"rate": options["rate"],
 			"artificialRate": options.get("artificialRate", 1),
 			"pitch": options["pitch"],
+			# NOTE: forwarded as-is to window.googleTtsForNvdaSpeak; whether the
+			# bundled WASM TTS engine's JS actually reads this key and applies
+			# it (e.g. to widen/flatten the pitch contour) depends on that
+			# engine's bindings, which are not part of this Python package.
+			"inflectionScale": options.get("inflectionScale", 1.0),
 			"volume": options["volume"],
 			"outputGain": options.get("outputGain", options["volume"]),
 		}

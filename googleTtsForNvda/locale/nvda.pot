@@ -48,6 +48,10 @@ msgstr ""
 msgid "Active browser runtime: {runtime}"
 msgstr ""
 
+#: synthDrivers/googleTtsForNvda/__init__.py:545
+msgid "Aggressive"
+msgstr ""
+
 #: globalPlugins/googleTtsForNvda/voiceManager.py:102
 msgid "Albanian"
 msgstr ""
@@ -61,7 +65,7 @@ msgid "An unexpected error occurred while managing voice packages."
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/__init__.py:88
-#: synthDrivers/googleTtsForNvda/__init__.py:230
+#: synthDrivers/googleTtsForNvda/__init__.py:353
 msgid "another version"
 msgstr ""
 
@@ -124,6 +128,10 @@ msgstr ""
 #: globalPlugins/googleTtsForNvda/voiceManager.py:342
 #: globalPlugins/googleTtsForNvda/voiceManager.py:371
 msgid "Check &all voice packages"
+msgstr ""
+
+#: synthDrivers/googleTtsForNvda/__init__.py:542
+msgid "Conservative"
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:1126
@@ -265,15 +273,15 @@ msgstr ""
 #: globalPlugins/googleTtsForNvda/settings.py:149
 #: globalPlugins/googleTtsForNvda/settings.py:48
 #: manifest.ini:summary
-#: synthDrivers/googleTtsForNvda/__init__.py:215
-#: synthDrivers/googleTtsForNvda/__init__.py:258
-#: synthDrivers/googleTtsForNvda/__init__.py:271
-#: synthDrivers/googleTtsForNvda/__init__.py:90
+#: synthDrivers/googleTtsForNvda/__init__.py:170
+#: synthDrivers/googleTtsForNvda/__init__.py:338
+#: synthDrivers/googleTtsForNvda/__init__.py:381
+#: synthDrivers/googleTtsForNvda/__init__.py:394
 msgid "Google TTS For NVDA"
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/__init__.py:100
-#: synthDrivers/googleTtsForNvda/__init__.py:242
+#: synthDrivers/googleTtsForNvda/__init__.py:365
 msgid ""
 "Google TTS For NVDA could not be loaded because the WASM TTS Engine library is incomplete.\n"
 "\n"
@@ -281,7 +289,7 @@ msgid ""
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/__init__.py:95
-#: synthDrivers/googleTtsForNvda/__init__.py:237
+#: synthDrivers/googleTtsForNvda/__init__.py:360
 msgid ""
 "Google TTS For NVDA could not be loaded because the WASM TTS Engine library is missing.\n"
 "\n"
@@ -289,7 +297,7 @@ msgid ""
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/__init__.py:89
-#: synthDrivers/googleTtsForNvda/__init__.py:231
+#: synthDrivers/googleTtsForNvda/__init__.py:354
 msgid ""
 "Google TTS For NVDA could not be loaded because the WASM TTS Engine version is not supported.\n"
 "\n"
@@ -299,34 +307,34 @@ msgid ""
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/__init__.py:104
-#: synthDrivers/googleTtsForNvda/__init__.py:246
+#: synthDrivers/googleTtsForNvda/__init__.py:369
 msgid ""
 "Google TTS For NVDA could not be loaded because the WASM TTS Engine voice catalog could not be read.\n"
 "\n"
 "Reinstall Google TTS For NVDA with a supported WASM TTS Engine library."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:824
+#: synthDrivers/googleTtsForNvda/bridge.py:829
 msgid "Google TTS For NVDA could not find its speech page in the browser runtime."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:940
+#: synthDrivers/googleTtsForNvda/bridge.py:945
 msgid "Google TTS For NVDA could not finish loading the browser speech engine."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:512
+#: synthDrivers/googleTtsForNvda/bridge.py:517
 msgid "Google TTS For NVDA could not speak this text."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:790
+#: synthDrivers/googleTtsForNvda/bridge.py:795
 msgid "Google TTS For NVDA could not start its local browser bridge."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:536
+#: synthDrivers/googleTtsForNvda/bridge.py:541
 msgid "Google TTS For NVDA could not start speech in the browser runtime."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:843
+#: synthDrivers/googleTtsForNvda/bridge.py:848
 msgid "Google TTS For NVDA is not connected to the browser runtime."
 msgstr ""
 
@@ -433,6 +441,11 @@ msgstr ""
 msgid "Language"
 msgstr ""
 
+#: synthDrivers/googleTtsForNvda/__init__.py:193
+#: synthDrivers/googleTtsForNvda/__init__.py:202
+msgid "Language detection"
+msgstr ""
+
 #: globalPlugins/googleTtsForNvda/voiceManager.py:79
 msgid "Latvian"
 msgstr ""
@@ -469,9 +482,9 @@ msgstr ""
 msgid "Marathi"
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/__init__.py:151
-#: synthDrivers/googleTtsForNvda/__init__.py:270
-#: synthDrivers/googleTtsForNvda/bridge.py:613
+#: synthDrivers/googleTtsForNvda/__init__.py:258
+#: synthDrivers/googleTtsForNvda/__init__.py:393
+#: synthDrivers/googleTtsForNvda/bridge.py:618
 msgid "Microsoft Edge or Google Chrome was not found. Install one of them, or set EDGE_PATH/CHROME_PATH to a browser executable."
 msgstr ""
 
@@ -488,12 +501,12 @@ msgstr ""
 msgid "No download link is available for voice package {package}."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/__init__.py:127
+#: synthDrivers/googleTtsForNvda/__init__.py:234
 msgid "No Google TTS For NVDA voice packages are installed. Open Google TTS Voice Manager to download a voice package."
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/__init__.py:127
-#: synthDrivers/googleTtsForNvda/__init__.py:208
+#: synthDrivers/googleTtsForNvda/__init__.py:331
 msgid ""
 "No Google TTS For NVDA voices are installed.\n"
 "\n"
@@ -504,7 +517,7 @@ msgid ""
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/__init__.py:164
-#: synthDrivers/googleTtsForNvda/__init__.py:136
+#: synthDrivers/googleTtsForNvda/__init__.py:243
 msgid ""
 "No installed Google TTS For NVDA voices can be used.\n"
 "\n"
@@ -535,6 +548,10 @@ msgstr ""
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:89
 msgid "Odia"
+msgstr ""
+
+#: synthDrivers/googleTtsForNvda/__init__.py:538
+msgid "Off"
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/__init__.py:253
@@ -684,35 +701,35 @@ msgstr ""
 msgid "Thai"
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:767
+#: synthDrivers/googleTtsForNvda/bridge.py:772
 msgid "The browser profile used by Google TTS For NVDA is already in use. Restart NVDA, or close any leftover Microsoft Edge or Google Chrome helper processes."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:774
+#: synthDrivers/googleTtsForNvda/bridge.py:779
 msgid "The browser runtime closed before Google TTS For NVDA was ready."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:870
+#: synthDrivers/googleTtsForNvda/bridge.py:875
 msgid "The browser runtime connection closed unexpectedly."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:893
+#: synthDrivers/googleTtsForNvda/bridge.py:898
 msgid "The browser runtime did not respond in time."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:783
+#: synthDrivers/googleTtsForNvda/bridge.py:788
 msgid "The browser runtime did not start in time."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:799
+#: synthDrivers/googleTtsForNvda/bridge.py:804
 msgid "The browser runtime is not ready yet."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:886
+#: synthDrivers/googleTtsForNvda/bridge.py:891
 msgid "The browser runtime reported an error while preparing speech."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/bridge.py:880
+#: synthDrivers/googleTtsForNvda/bridge.py:885
 msgid "The browser runtime reported an error while processing speech."
 msgstr ""
 
@@ -724,7 +741,7 @@ msgstr ""
 msgid "The checked voice packages are not supported by the bundled Google TTS engine."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/__init__.py:143
+#: synthDrivers/googleTtsForNvda/__init__.py:250
 msgid "The installed Google TTS For NVDA voice packages do not include any voices this engine can use. Open Google TTS Voice Manager to install another voice package."
 msgstr ""
 

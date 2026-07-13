@@ -12,6 +12,7 @@ from typing import Any
 
 import addonHandler
 import config
+import languageHandler
 import synthDriverHandler
 import wx
 from logHandler import log
@@ -34,7 +35,7 @@ _OUTPUT_GAIN_MAKEUP = 2.0
 _PROTECTED_ENGINE_RATE = 1.0
 _MIN_ARTIFICIAL_RATE = 0.5
 _MAX_ARTIFICIAL_RATE = 2.2
-_SpeechRequest = tuple[list[Any], str, int, int, int, threading.Event]
+_SpeechRequest = tuple[list[Any], str, int, int, int, int, str, threading.Event]
 _IndexMarker = tuple[Any, int]
 _FAST_FIRST_SEGMENT_MIN_CHARS = 30
 _REGULAR_SEGMENT_MIN_CHARS = 110
@@ -85,15 +86,121 @@ _SENTENCE_TERMINATOR_RE = re.compile(
 )
 
 
+# --- Automatic language detection ---------------------------------------
+#
+# Mode identifiers, in display order for the NVDA Voice Settings dialog.
+_LANGUAGE_DETECTION_OFF = "off"
+_LANGUAGE_DETECTION_CONSERVATIVE = "conservative"
+_LANGUAGE_DETECTION_AGGRESSIVE = "aggressive"
+
+# Minimum share (0.0-1.0) of "foreign" script characters a text segment must
+# contain before a mode will consider switching voices, and the minimum
+# segment length (in characters) required for a switch to happen.
+# Aggressive mode uses much looser thresholds so it reacts to short phrases;
+# conservative mode requires a longer, more confidently foreign segment.
+_LANG_DETECT_THRESHOLDS = {
+	_LANGUAGE_DETECTION_CONSERVATIVE: {"minRatio": 0.6, "minChars": 12},
+	_LANGUAGE_DETECTION_AGGRESSIVE: {"minRatio": 0.2, "minChars": 2},
+}
+
+# Unicode code point ranges used to classify a character into a rough script
+# category. This is a lightweight, dependency-free heuristic: it is good at
+# telling scripts apart (Latin vs Cyrillic vs CJK vs Arabic, etc.) but cannot
+# distinguish two languages that share the same script (e.g. English vs.
+# French), aside from the Vietnamese-specific diacritics check below.
+_SCRIPT_RANGES: tuple[tuple[str, int, int], ...] = (
+	("cyrillic", 0x0400, 0x04FF),
+	("greek", 0x0370, 0x03FF),
+	("arabic", 0x0600, 0x06FF),
+	("hebrew", 0x0590, 0x05FF),
+	("hangul", 0xAC00, 0xD7A3),
+	("hiragana", 0x3040, 0x309F),
+	("katakana", 0x30A0, 0x30FF),
+	("han", 0x4E00, 0x9FFF),
+	("thai", 0x0E00, 0x0E7F),
+	("devanagari", 0x0900, 0x097F),
+)
+# Maps a detected script to a representative language tag that is looked up
+# against installed voices via `_voice_for_language`. Scripts that map to
+# more than one plausible language (e.g. Han -> Chinese) use the most common
+# case; `_voice_for_language` already falls back gracefully when no voice
+# for that exact tag is installed.
+_SCRIPT_TO_LANGUAGE = {
+	"cyrillic": "ru-RU",
+	"greek": "el-GR",
+	"arabic": "ar-XA",
+	"hebrew": "he-IL",
+	"hangul": "ko-KR",
+	"hiragana": "ja-JP",
+	"katakana": "ja-JP",
+	"han": "cmn-CN",
+	"thai": "th-TH",
+	"devanagari": "hi-IN",
+}
+
+# Latin letters that only appear in Vietnamese, used to tell Vietnamese text
+# apart from other Latin-script languages such as English.
+_VIETNAMESE_CHARS = set("àáâãèéêìíòóôõùúýăđĩũơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ")
+
+# Vietnamese and English share the Latin alphabet, so script ranges alone
+# can't tell them apart once Vietnamese diacritics are absent. These are
+# purely grammatical/function words with (essentially) zero use as Vietnamese
+# loanwords, so matching one is a strong, low-false-positive signal that a
+# run of plain Latin letters is English rather than undiacritized Vietnamese.
+_ENGLISH_COMMON_WORDS = frozenset({
+	"the", "and", "is", "are", "was", "were", "have", "has", "had", "having",
+	"this", "that", "these", "those", "with", "without", "from", "your",
+	"you", "for", "not", "but", "what", "when", "where", "which", "who",
+	"whom", "how", "why", "will", "would", "should", "could", "about",
+	"there", "their", "they", "them", "then", "than", "into", "onto",
+	"over", "under", "between", "because", "please", "thanks", "welcome",
+	"yes", "okay", "sorry", "today", "tomorrow", "yesterday", "again",
+	"still", "already", "always", "never", "often", "sometimes", "just",
+	"very", "really", "also", "only", "even", "some", "any", "each",
+	"other", "more", "most", "much", "many", "such", "before", "after",
+	"here", "does", "doesn't", "don't", "isn't", "aren't", "can't", "won't",
+	"hello", "hi", "hey", "bye", "goodbye", "yeah", "yep", "nope",
+})
+
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
 class SynthDriver(synthDriverHandler.SynthDriver):
 	name = "googleTtsForNvda"
 	description = _("Google TTS For NVDA")
 	supportedSettings = (
+		# Voice = language (e.g. "Vietnamese (vi-VN)"); Variant = the specific
+		# speaker within that language. This mirrors the eSpeak/IBM TTS
+		# convention the user asked for, rather than Voice already being one
+		# exact speaker.
 		synthDriverHandler.SynthDriver.VoiceSetting(),
+		synthDriverHandler.SynthDriver.VariantSetting(),
 		synthDriverHandler.SynthDriver.RateSetting(),
 		synthDriverHandler.SynthDriver.RateBoostSetting(),
 		synthDriverHandler.SynthDriver.PitchSetting(),
+		# Inflection sits between Pitch and Volume in the Voice Settings dialog.
+		synthDriverHandler.SynthDriver.InflectionSetting(),
 		synthDriverHandler.SynthDriver.VolumeSetting(),
+		# Custom setting: automatic language detection (Off / Conservative /
+		# Aggressive). NVDA renders a choice-type DriverSetting like this as a
+		# single-select combo box in the Voice Settings dialog -- selecting one
+		# option deselects the others, the same exclusive behaviour as a radio
+		# button group.
+		synthDriverHandler.DriverSetting(
+			"languageDetection",
+			# Translators: Label for the language detection setting in the
+			# NVDA Voice Settings dialog.
+			_("Language detection"),
+			# Deliberately NOT in the settings ring: this is an advanced,
+			# opt-in feature (unlike Rate/Variant/Voice/Volume/Inflection/
+			# Pitch/Rate boost, which are basic settings every synth
+			# exposes on the ring). No mainstream NVDA driver puts a
+			# feature like this on the ring by default -- users who want
+			# it can turn it on from the full Voice Settings dialog.
+			availableInSettingsRing=False,
+			defaultVal=_LANGUAGE_DETECTION_OFF,
+			displayName=_("Language detection"),
+		),
 	)
 	supportedCommands = {
 		BreakCommand,
@@ -173,10 +280,26 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		)
 		self._worker.start()
 		self.__voice = self._initial_voice()
+		self.availableVariants = self._build_available_variants(self.__voice)
+		self.__variant = self._initial_variant(self.__voice)
 		self._rate = 50
 		self._rateBoost = False
 		self._pitch = 50
+		self._inflection = 50
+		# TODO(inflection): logged once at startup so this is discoverable
+		# without reading source -- see the long comment in _speech_options()
+		# for the full investigation. Short version: the bundled WASM TTS
+		# Engine (Chrome/ChromeOS's built-in Google TTS extension) has no
+		# pitch-range/inflection parameter anywhere in its API, so this
+		# setting currently changes only the NVDA UI value, not the audio.
+		log.debug(
+			"googleTtsForNvda: the Inflection setting has no audible effect -- "
+			"the underlying WASM TTS Engine does not support a pitch-range/"
+			"inflection parameter. See the comment in _speech_options() for details."
+		)
 		self._volume = 100
+		self.availableLanguagedetections = self._build_available_language_detections()
+		self._languageDetection = self._initial_language_detection()
 		self._warmupThread: threading.Thread | None = None
 		self._warmupCancelEvent = threading.Event()
 		self._warm_current_voice_async()
@@ -290,16 +413,22 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def speak(self, speechSequence: list[Any]) -> None:
 		sequence = list(speechSequence)
 		cancelEvent = threading.Event()
-		voice = self.__voice
+		# The pipeline below (and _speech_options) works in terms of an actual
+		# speaker id -- that is `variant` now that `voice` is a language.
+		voice = self.__variant
 		rate = self._rate
 		pitch = self._pitch
+		inflection = self._inflection
 		volume = self._volume
+		languageDetection = self._languageDetection
 		with suppress(Exception):
 			self._warmupCancelEvent.set()
 		with self._speechCondition:
 			if self._shutdownEvent.is_set():
 				return
-			self._speechQueue.append((sequence, voice, rate, pitch, volume, cancelEvent))
+			self._speechQueue.append(
+				(sequence, voice, rate, pitch, inflection, volume, languageDetection, cancelEvent)
+			)
 			self._speechCondition.notify()
 
 	def cancel(self) -> None:
@@ -347,11 +476,25 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._player = self._create_wave_player(outputDevice)
 
 	def _build_available_voices(self) -> "OrderedDict[str, VoiceInfo]":
+		# "Voice" lists languages, not individual speakers -- see the comment
+		# on supportedSettings. One entry per unique language, in the same
+		# order languages first appear in the (already language-sorted) catalog.
 		voices: OrderedDict[str, VoiceInfo] = OrderedDict()
 		for speaker in self.catalog.speakers:
-			label = f"{speaker.name} ({speaker.language})"
-			voices[speaker.id] = VoiceInfo(speaker.id, label, speaker.language)
+			language = speaker.language
+			if language in voices:
+				continue
+			voices[language] = VoiceInfo(language, self._language_display_name(language), language)
 		return voices
+
+	def _language_display_name(self, language: str) -> str:
+		with suppress(Exception):
+			normalized = languageHandler.normalizeLanguage(language)
+			if normalized:
+				description = languageHandler.getLanguageDescription(normalized)
+				if description:
+					return f"{description} ({language})"
+		return language
 
 	def _initial_voice(self) -> str:
 		try:
@@ -360,10 +503,60 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				return configured
 		except Exception:
 			pass
-		for speaker in self.catalog.speakers:
-			if speaker.language == "en-US":
-				return speaker.id
+		if "en-US" in self.availableVoices:
+			return "en-US"
 		return next(iter(self.availableVoices))
+
+	def _build_available_variants(self, language: str) -> "OrderedDict[str, VoiceInfo]":
+		# "Variant" lists the specific speakers available within `language` --
+		# this is the actual voice identity passed to the TTS engine.
+		variants: OrderedDict[str, VoiceInfo] = OrderedDict()
+		for speaker in self.catalog.speakers:
+			if speaker.language != language:
+				continue
+			label = f"{speaker.name} ({speaker.gender})" if speaker.gender else speaker.name
+			variants[speaker.id] = VoiceInfo(speaker.id, label, speaker.language)
+		return variants
+
+	def _initial_variant(self, language: str) -> str:
+		try:
+			configured = config.conf["speech"][self.name]["variant"]
+			if configured in self.availableVariants:
+				return configured
+		except Exception:
+			pass
+		for speaker in self.catalog.speakers:
+			if speaker.language == language:
+				return speaker.id
+		# _initial_voice only ever returns a language that has at least one
+		# speaker, so availableVariants is never empty in practice.
+		return next(iter(self.availableVariants))
+
+	def _build_available_language_detections(self) -> "OrderedDict[str, VoiceInfo]":
+		# Translators: Option shown in the Language detection setting to
+		# disable automatic voice switching for mixed-language text.
+		offLabel = _("Off")
+		# Translators: Option shown in the Language detection setting that
+		# only switches voice for longer, high-confidence foreign-language
+		# segments (fewer, safer switches).
+		conservativeLabel = _("Conservative")
+		# Translators: Option shown in the Language detection setting that
+		# switches voice readily, even for short foreign-language phrases.
+		aggressiveLabel = _("Aggressive")
+		modes: "OrderedDict[str, VoiceInfo]" = OrderedDict()
+		modes[_LANGUAGE_DETECTION_OFF] = VoiceInfo(_LANGUAGE_DETECTION_OFF, offLabel)
+		modes[_LANGUAGE_DETECTION_CONSERVATIVE] = VoiceInfo(_LANGUAGE_DETECTION_CONSERVATIVE, conservativeLabel)
+		modes[_LANGUAGE_DETECTION_AGGRESSIVE] = VoiceInfo(_LANGUAGE_DETECTION_AGGRESSIVE, aggressiveLabel)
+		return modes
+
+	def _initial_language_detection(self) -> str:
+		try:
+			configured = config.conf["speech"][self.name]["languageDetection"]
+			if configured in self.availableLanguagedetections:
+				return configured
+		except Exception:
+			pass
+		return _LANGUAGE_DETECTION_OFF
 
 	def _iter_speech_chunks(
 		self,
@@ -371,7 +564,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		voice: str,
 		rate: int,
 		pitch: int,
+		inflection: int,
 		volume: int,
+		languageDetection: str,
 		cancelEvent: threading.Event,
 	) -> Iterator[tuple[str, Any]]:
 		textParts: list[str] = []
@@ -399,7 +594,12 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 						return
 					yield ("index", index)
 				return
-			options = self._speech_options(rate, pitch, volume, activeVoice)
+			# Automatic language detection only ever picks a voice for this one
+			# flushed segment; it never changes `activeVoice` itself, so an
+			# explicit LangChangeCommand from NVDA always keeps priority over
+			# the heuristic on the next segment.
+			segmentVoice = self._detect_language_voice(text, languageDetection, activeVoice)
+			options = self._speech_options(rate, pitch, inflection, volume, segmentVoice)
 			segments = list(self._iter_indexed_text_segments(text, indexes, firstTextSegment))
 			groupedSegments: list[tuple[str, list[_IndexMarker]]] = []
 
@@ -773,7 +973,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		voice: str,
 		rate: int,
 		pitch: int,
+		inflection: int,
 		volume: int,
+		languageDetection: str,
 		cancelEvent: threading.Event,
 	) -> None:
 		try:
@@ -784,7 +986,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				voice,
 				rate,
 				pitch,
+				inflection,
 				volume,
+				languageDetection,
 				cancelEvent,
 			):
 				if cancelEvent.is_set():
@@ -963,6 +1167,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			options.get("voiceId"),
 			options.get("rate"),
 			options.get("pitch"),
+			options.get("inflectionScale"),
 			options.get("volume"),
 			options.get("outputGain"),
 			options.get("artificialRate"),
@@ -1005,8 +1210,17 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			self._audioChunksSinceDeviceCheck = 0
 		self._player.feed(b"\x00\x00" * frameCount)
 
-	def _speech_options(self, rate: int, pitch: int, volume: int, voice: str | None = None) -> dict[str, Any]:
-		speaker = self.catalog.speaker_for_voice(voice or self.__voice)
+	def _speech_options(
+		self,
+		rate: int,
+		pitch: int,
+		inflection: int,
+		volume: int,
+		voice: str | None = None,
+	) -> dict[str, Any]:
+		# `voice` here means "speaker id" (i.e. variant); fall back to the
+		# currently selected variant, not the language-level `voice` setting.
+		speaker = self.catalog.speaker_for_voice(voice or self.__variant)
 		package = self.catalog.package_for_voice(speaker.id)
 		volumeLevel = max(0.0, min(1.0, volume / 100.0))
 		outputGain = max(0.0, min(_OUTPUT_GAIN_MAKEUP, volumeLevel * _OUTPUT_GAIN_MAKEUP))
@@ -1023,6 +1237,33 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			"rate": round(engineRate, 3),
 			"artificialRate": round(artificialRate, 3),
 			"pitch": self._pitch_to_chrome(pitch),
+			# TODO(inflection): This engine has no working "inflection" (pitch
+			# range/contour) parameter. Confirmed by inspecting the bundled
+			# WASM TTS Engine end-to-end:
+			#   1. bindings_main.js only exports GoogleTtsInit/InitBuffered/
+			#      FinalizeBuffered/GetTimepoints*/InstallVoice/ReadBuffered/
+			#      Shutdown -- no pitch-range/prosody function exists.
+			#   2. The synthesis request protobuf built in
+			#      offscreen_compiled.js only ever sets field 1 (rate) and
+			#      field 6 (pitch); fields 2/3/5 are never written anywhere
+			#      in the bundle, so their meaning (if any) is unknown --
+			#      guessing at them risks sending a malformed request that
+			#      could break synthesis entirely, so nobody should just
+			#      "try" a field number here.
+			#   3. This whole engine is Chrome/ChromeOS's built-in Google
+			#      text-to-speech extension (see the file header comment in
+			#      streaming_worklet_processor.js). Chrome's own public
+			#      chrome.tts / chrome.ttsEngine API only exposes rate,
+			#      pitch, and volume -- there has never been an
+			#      inflection/pitch-range option at any layer of this stack.
+			# `inflectionScale` (0.0-2.0, computed below) is still forwarded
+			# end-to-end through bridge.py and bridgeHarness.js purely to
+			# keep the plumbing consistent with eSpeak/IBM TTS's Inflection
+			# setting (a single value alongside rate/pitch/volume). It is a
+			# harmless no-op today. Fixing this for real would require the
+			# actual Google TTS WASM engine to add prosody/pitch-range
+			# support -- not something fixable from this add-on's code.
+			"inflectionScale": self._inflection_to_chrome(inflection),
 			"volume": round(volumeLevel, 4),
 			"outputGain": round(outputGain, 4),
 		}
@@ -1053,6 +1294,72 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def _normalize_language(self, lang: str | None) -> str:
 		return str(lang or "").replace("_", "-").lower()
 
+	def _detect_language_voice(self, text: str, mode: str, fallbackVoice: str) -> str:
+		"""Guess a better voice for `text` when automatic language detection
+		is enabled. Returns `fallbackVoice` unchanged when detection is off,
+		when no installed voice matches, or when the text is not confidently
+		in a different script/language than the current voice.
+		"""
+		if mode == _LANGUAGE_DETECTION_OFF:
+			return fallbackVoice
+		thresholds = _LANG_DETECT_THRESHOLDS.get(mode)
+		if thresholds is None:
+			return fallbackVoice
+		detectedLang = self._classify_text_language(text, thresholds)
+		if detectedLang is None:
+			return fallbackVoice
+		return self._voice_for_language(detectedLang, fallbackVoice)
+
+	def _classify_text_language(self, text: str, thresholds: dict[str, float]) -> str | None:
+		"""Classify `text` into a rough BCP-47-ish language tag, or return
+		None when no language is confidently dominant enough to justify
+		switching voices (per `thresholds`).
+
+		Works word-by-word rather than character-by-character so that plain
+		Latin words can be recognized as English via `_ENGLISH_COMMON_WORDS`
+		-- character-level Unicode script ranges alone cannot tell English
+		apart from Vietnamese written without diacritics.
+		"""
+		words = _WORD_RE.findall(text)
+		letterCounts = {"vi-VN": 0, "en-US": 0}
+		totalLetters = 0
+		for word in words:
+			totalLetters += len(word)
+			nonLatinScript = None
+			hasVietnameseChar = False
+			for character in word:
+				codePoint = ord(character)
+				if character.lower() in _VIETNAMESE_CHARS:
+					hasVietnameseChar = True
+					continue
+				for scriptName, rangeStart, rangeEnd in _SCRIPT_RANGES:
+					if rangeStart <= codePoint <= rangeEnd:
+						nonLatinScript = scriptName
+						break
+				if nonLatinScript:
+					break
+			if nonLatinScript:
+				language = _SCRIPT_TO_LANGUAGE.get(nonLatinScript)
+				if language:
+					letterCounts[language] = letterCounts.get(language, 0) + len(word)
+					continue
+			if hasVietnameseChar:
+				letterCounts["vi-VN"] += len(word)
+				continue
+			if word.lower() in _ENGLISH_COMMON_WORDS:
+				letterCounts["en-US"] += len(word)
+				continue
+			# Plain Latin word that isn't a recognized English function word:
+			# could be undiacritized Vietnamese, a proper noun, or anything
+			# else -- too ambiguous to attribute to a language.
+			continue
+		if totalLetters < thresholds["minChars"]:
+			return None
+		dominantLanguage, dominantCount = max(letterCounts.items(), key=lambda item: item[1])
+		if dominantCount == 0 or dominantCount / totalLetters < thresholds["minRatio"]:
+			return None
+		return dominantLanguage
+
 	def _rate_to_chrome(self, value: int) -> float:
 		percent = max(0, min(100, value)) / 100.0
 		rate = 0.35 + (2.0 - 0.35) * percent
@@ -1064,19 +1371,36 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		pitchSemitones = -12.0 + 24.0 * max(0, min(100, pitch)) / 100.0
 		return round(max(0.1, min(3.0, 1.0 + pitchSemitones / 20.0)), 3)
 
+	def _inflection_to_chrome(self, inflection: int) -> float:
+		# 0 -> 0.0 (flat/monotone), 50 -> 1.0 (engine default contour),
+		# 100 -> 2.0 (strongly exaggerated pitch swings).
+		return round(max(0.0, min(100, inflection)) / 50.0, 3)
+
 	def _get_voice(self) -> str:
 		return self.__voice
 
 	def _set_voice(self, value: str) -> None:
 		if value not in self.availableVoices:
 			value = next(iter(self.availableVoices))
-		self.__voice = value
+		if value != self.__voice:
+			self.__voice = value
+			self.availableVariants = self._build_available_variants(value)
+			self.__variant = self._initial_variant(value)
+		self._warm_current_voice_async()
+
+	def _get_variant(self) -> str:
+		return self.__variant
+
+	def _set_variant(self, value: str) -> None:
+		if value not in self.availableVariants:
+			value = next(iter(self.availableVariants))
+		self.__variant = value
 		self._warm_current_voice_async()
 
 	def _warm_current_voice_async(self) -> None:
 		if self._shutdownEvent.is_set():
 			return
-		options = self._speech_options(self._rate, self._pitch, 0)
+		options = self._speech_options(self._rate, self._pitch, self._inflection, 0)
 		with suppress(Exception):
 			self._warmupCancelEvent.set()
 		cancelEvent = threading.Event()
@@ -1104,7 +1428,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		thread.start()
 
 	def _get_language(self) -> str:
-		lang = self.catalog.language_for_voice(self.__voice)
+		lang = self.catalog.language_for_voice(self.__variant)
 		langMap = {
 			"cmn-CN": "zh_CN",
 			"yue-HK": "zh_HK",
@@ -1138,6 +1462,12 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def _set_pitch(self, value: int) -> None:
 		self._pitch = max(0, min(100, int(value)))
 
+	def _get_inflection(self) -> int:
+		return self._inflection
+
+	def _set_inflection(self, value: int) -> None:
+		self._inflection = max(0, min(100, int(value)))
+
 	def _get_volume(self) -> int:
 		return self._volume
 
@@ -1145,3 +1475,11 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._volume = max(0, min(100, int(value)))
 		with suppress(Exception):
 			self._player.setVolume(all=1.0)
+
+	def _get_languageDetection(self) -> str:
+		return self._languageDetection
+
+	def _set_languageDetection(self, value: str) -> None:
+		if value not in self.availableLanguagedetections:
+			value = _LANGUAGE_DETECTION_OFF
+		self._languageDetection = value

@@ -527,8 +527,6 @@ msgstr ""
 "Gỡ bỏ {count} gói?\n"
 "{packages}"
 
-msgid "Use Google's WASM text-to-speech voices locally through a supported browser runtime (Microsoft Edge or Google Chrome) as an NVDA synthesizer."
-msgstr "Sử dụng cục bộ các giọng chuyển văn bản thành giọng nói WASM của Google thông qua runtime trình duyệt được hỗ trợ (Microsoft Edge hoặc Google Chrome) làm bộ đọc cho NVDA."
 
 msgid "Download or remove Google TTS For NVDA voice packages"
 msgstr "Tải xuống hoặc gỡ bỏ các gói giọng Google TTS Cho NVDA"
@@ -674,7 +672,25 @@ msgstr "{message} Cũng đã tải xuống các gói bắt buộc: {packages}"
 msgid "{message} Skipped packages not supported by this engine: {packages}"
 msgstr "{message} Đã bỏ qua các gói không được công cụ này hỗ trợ: {packages}"
 
-#: manifest.ini:changelog
+
+msgid "Language detection"
+msgstr "Phát hiện ngôn ngữ"
+
+msgid "Off"
+msgstr "Tắt"
+
+msgid "Conservative"
+msgstr "Vừa phải"
+
+msgid "Aggressive"
+msgstr "Mạnh mẽ"
+
+msgid "Google TTS For NVDA"
+msgstr "Google TTS Cho NVDA"
+
+msgid "Use Google's WASM text-to-speech voices locally through a supported browser runtime (Microsoft Edge or Google Chrome) as an NVDA synthesizer."
+msgstr "Sử dụng cục bộ các giọng chuyển văn bản thành giọng nói WASM của Google thông qua runtime trình duyệt được hỗ trợ (Microsoft Edge hoặc Google Chrome) làm bộ đọc của NVDA."
+
 msgid ""
 "Version 0.3:\n"
 "- Added browser runtime selection (Microsoft Edge or Google Chrome) directly in NVDA settings.\n"
