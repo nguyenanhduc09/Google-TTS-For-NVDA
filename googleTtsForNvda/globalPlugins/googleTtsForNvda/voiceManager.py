@@ -116,7 +116,48 @@ LANGUAGE_NAMES: dict[str, str] = {
 }
 
 
+def get_nvda_locale_for_language(lang_code: str | None) -> str:
+	if not lang_code:
+		return ""
+	languageText = str(lang_code).strip()
+	languageMap = {
+		"cmn-CN": "zh_CN",
+		"cmn-TW": "zh_TW",
+		"yue-HK": "zh_HK",
+		"ar-XA": "ar",
+		"fil-PH": "tl",
+	}
+	if languageText in languageMap:
+		return languageMap[languageText]
+	lowerLanguage = languageText.lower()
+	if lowerLanguage.startswith("cmn"):
+		return "zh_CN"
+	if lowerLanguage.startswith("yue"):
+		return "zh_HK"
+	try:
+		normalized = languageHandler.normalizeLanguage(languageText)
+	except Exception:
+		normalized = languageText.replace("-", "_")
+	return str(normalized or "").strip()
+
+
+def _language_display_candidates(lang_code: str) -> list[str]:
+	nvdaLocale = get_nvda_locale_for_language(lang_code)
+	candidates: list[str] = []
+	for candidate in (nvdaLocale, nvdaLocale.split("_", 1)[0] if "_" in nvdaLocale else "", lang_code):
+		if candidate and candidate not in candidates:
+			candidates.append(candidate)
+	return candidates
+
+
 def get_language_display_name(lang_code: str) -> str:
+	for candidate in _language_display_candidates(lang_code):
+		try:
+			description = languageHandler.getLanguageDescription(candidate)
+		except Exception:
+			description = None
+		if description:
+			return description
 	for k, v in LANGUAGE_NAMES.items():
 		if k.lower() == lang_code.lower():
 			return v

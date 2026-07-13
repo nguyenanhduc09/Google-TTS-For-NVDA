@@ -19,12 +19,14 @@
 		<li><strong>Google TTS Voice Manager:</strong> Easily browse, download, or remove voice packages in batches through an accessible dialog.</li>
 		<li><strong>Quick Shortcut:</strong> Press <kbd>NVDA+Ctrl+Shift+G</kbd> anywhere to open Google TTS Voice Manager instantly.</li>
 		<li><strong>Browser Selection:</strong> Choose Microsoft Edge or Google Chrome as the background browser runtime directly in NVDA settings.</li>
+		<li><strong>Automatic language detection with CLD2:</strong> Switch between enabled language profiles sentence by sentence using bundled CLD2 language detection, with a preferred language used when text is unclear.</li>
 	</ul>
 
 	<h2>System Requirements</h2>
 	<ul>
-		<li><strong>NVDA:</strong> Version 2024.1 or newer.</li>
+		<li><strong>NVDA:</strong> Version 2024.1 or newer. The add-on supports NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) NVDA builds.</li>
 		<li><strong>Browser:</strong> Microsoft Edge or Google Chrome installed on your computer.</li>
+		<li><strong>Interactive Windows user session:</strong> Do not rely on this add-on where the browser runtime cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.</li>
 	</ul>
 
 	<h2>Quick Start Guide</h2>
@@ -32,7 +34,7 @@
 		<li>Open NVDA's <strong>Select Synthesizer</strong> dialog by pressing <kbd>NVDA+Ctrl+S</kbd> and choose <strong>Google TTS For NVDA</strong>.</li>
 		<li>If no voice packages are installed, NVDA will display a message indicating that no Google TTS For NVDA voices are installed. Press <strong>OK</strong> to open Google TTS Voice Manager and download a voice package. Press <strong>Cancel</strong> to keep using your current synthesizer for now.</li>
 		<li>In Google TTS Voice Manager, select the voice packages you want to use from the list and press <strong>Download checked voice packages</strong>.</li>
-		<li>Once downloaded, open <strong>Voice settings</strong> (<kbd>NVDA+Ctrl+V</kbd>) to select your preferred voice.</li>
+		<li>Once downloaded, open <strong>Speech settings</strong> (<kbd>NVDA+Ctrl+V</kbd>) to select your preferred voice.</li>
 	</ol>
 
 	<h2>Managing Voices</h2>
@@ -46,7 +48,7 @@
 
 	<h2>Configuration</h2>
 	<h3>Speech Settings</h3>
-	<p>In NVDA's Voice settings dialog (<kbd>NVDA+Ctrl+V</kbd>), you can adjust:</p>
+	<p>When automatic language detection is off, NVDA's Speech settings dialog (<kbd>NVDA+Ctrl+V</kbd>) provides:</p>
 	<ul>
 		<li><strong>Voice:</strong> Choose a voice from your installed voice packages.</li>
 		<li><strong>Rate:</strong> Adjust the reading speed.</li>
@@ -59,7 +61,30 @@
 	<p>Under <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>, you can configure:</p>
 	<ul>
 		<li><strong>Browser runtime:</strong> Choose Microsoft Edge or Google Chrome as the background browser runtime for the add-on. The settings panel displays the availability status of browsers on your system.</li>
+		<li><strong>Automatically detect language:</strong> Enable sentence-level language detection and open the profile controls described below.</li>
 	</ul>
+
+	<h3>Automatic Language Detection Profiles</h3>
+	<p>When <strong>Automatically detect language</strong> is enabled, detected sentences use the add-on's per-language profiles instead of the normal NVDA Speech settings. Your regular Speech Settings values remain available again when automatic language detection is turned off.</p>
+	<p>Automatic language detection uses bundled CLD2 detector libraries for both 32-bit (x86) and 64-bit (x64) NVDA builds. CLD2 results are accepted only when they are reliable enough for one of the enabled languages. If text is too short or unclear, the add-on uses conservative local language signals where available, then falls back to the preferred enabled language.</p>
+	<ol>
+		<li>Open <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>.</li>
+		<li>Enable <strong>Automatically detect language between installed voices</strong>.</li>
+		<li>Select an <strong>Auto-detect language profile</strong>.</li>
+		<li>Check <strong>Use this language in auto-detect</strong> for each language you want the add-on to detect. Language profiles are off until you check them.</li>
+		<li>For each enabled language, choose its voice and set rate, rate boost, pitch, and volume.</li>
+		<li>Choose the <strong>Preferred auto-detect language</strong>. Only enabled languages appear in this list, and the preferred language is used when a sentence is unclear.</li>
+	</ol>
+	<p>Rate, pitch, and volume use slider controls like NVDA's Speech Settings. The labels for voice, rate, rate boost, pitch, and volume use NVDA's own translated setting names.</p>
+	<p>Automatic language detection marks the language before NVDA processes text, so NVDA's symbol pronunciation and speech dictionary processing stay in the normal speech pipeline for the selected language context.</p>
+	<p>When automatic language detection is off, NVDA voice dictionaries work normally for the currently selected Google TTS voice. When automatic language detection is on, the add-on temporarily uses the voice dictionary for each enabled language profile's selected voice while NVDA processes that segment. NVDA's default and temporary dictionaries still follow NVDA's normal behavior.</p>
+	<p>While automatic language detection is enabled, NVDA's Speech settings dialog will not offer the normal voice, rate, rate boost, pitch, and volume controls for this synthesizer. It will show a focusable notice directing you to the Google TTS For NVDA settings category instead. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.</p>
+
+	<h2>Troubleshooting Edge Runtime Silence</h2>
+	<p>If you choose <strong>Microsoft Edge</strong> as the browser runtime and Google TTS For NVDA stays silent even though Microsoft Edge is installed, install or repair the Microsoft Edge WebView2 Runtime.</p>
+	<p>WebView2 is the Microsoft Edge runtime used by native Windows applications to host web content. It is related to Microsoft Edge, but having the normal Edge browser available does not always mean the WebView2 Runtime is installed and healthy for app scenarios. Microsoft recommends the Evergreen WebView2 Runtime for applications because it is shared, automatically updated, and the small Evergreen Bootstrapper downloads the matching runtime for the device architecture.</p>
+	<p>For an online computer, download the Microsoft Edge WebView2 Evergreen Bootstrapper here: <a href="https://go.microsoft.com/fwlink/p/?LinkId=2124703">Download Microsoft Edge WebView2 Runtime</a>.</p>
+	<p>Run the installer, restart NVDA, then select <strong>Google TTS For NVDA</strong> again. For offline installers or a fixed-version WebView2 Runtime package, open Microsoft's WebView2 page: <a href="https://developer.microsoft.com/microsoft-edge/webview2">Microsoft Edge WebView2</a>.</p>
 
 	<h2>Notes</h2>
 	<ul>

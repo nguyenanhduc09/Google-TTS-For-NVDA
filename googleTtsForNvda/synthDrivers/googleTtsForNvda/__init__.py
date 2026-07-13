@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from contextlib import suppress
+import os
+import json
 import re
 import threading
 import time
@@ -12,16 +14,31 @@ from typing import Any
 
 import addonHandler
 import config
+import globalVars
 import synthDriverHandler
 import wx
+from autoSettingsUtils.driverSetting import DriverSetting
 from logHandler import log
 from nvwave import WavePlayer
 from speech.commands import BreakCommand, IndexCommand, LangChangeCommand, PitchCommand, RateCommand, VolumeCommand
 from synthDriverHandler import VoiceInfo, synthDoneSpeaking, synthIndexReached
 
-from .bridge import CdpCancelled, ChromeTtsBridge, SAMPLE_RATE
+from .bridge import (
+	CdpCancelled,
+	ChromeTtsBridge,
+	CONFIG_AUTO_LANGUAGE_CANDIDATES,
+	CONFIG_AUTO_LANGUAGE_DETECTION,
+	CONFIG_AUTO_LANGUAGE_PREFERRED,
+	CONFIG_AUTO_LANGUAGE_PROFILES,
+	CONFIG_SECTION,
+	DEFAULT_AUTO_LANGUAGE_CANDIDATES,
+	DEFAULT_AUTO_LANGUAGE_DETECTION,
+	DEFAULT_AUTO_LANGUAGE_PREFERRED,
+	DEFAULT_AUTO_LANGUAGE_PROFILES,
+	SAMPLE_RATE,
+)
 from .catalog import EngineLibraryError, VoiceCatalog
-from . import voice_store
+from . import language_detector, voice_store
 
 
 addonHandler.initTranslation()
@@ -34,7 +51,7 @@ _OUTPUT_GAIN_MAKEUP = 2.0
 _PROTECTED_ENGINE_RATE = 1.0
 _MIN_ARTIFICIAL_RATE = 0.5
 _MAX_ARTIFICIAL_RATE = 2.2
-_SpeechRequest = tuple[list[Any], str, int, int, int, threading.Event]
+_SpeechRequest = tuple[list[Any], str, int, bool, int, int, threading.Event]
 _IndexMarker = tuple[Any, int]
 _FAST_FIRST_SEGMENT_MIN_CHARS = 30
 _REGULAR_SEGMENT_MIN_CHARS = 110
@@ -58,6 +75,15 @@ _FORCED_SEGMENT_MIN_CHARS = 32
 _FORCED_SEGMENT_FORWARD_LOOKAHEAD = 24
 _FORCED_SEGMENT_HARD_MAX_CHARS = 256
 _VOICE_WARMUP_TEXT = "a"
+_AUTO_LANGUAGE_NOTICE_ID = "notice"
+_AUTO_DETECT_MIN_SCORE = 2
+_AUTO_DETECT_MIN_MARGIN = 1
+
+
+class ReadOnlyTextDriverSetting(DriverSetting):
+	"""Marker setting rendered as a read-only edit field by the global plugin."""
+
+	readOnlyText = True
 
 _COMMON_ABBREVIATIONS = {
 	# English
@@ -83,17 +109,92 @@ _SENTENCE_TERMINATOR_RE = re.compile(
 	r"(['\"\)\]\}”’」』）》〉»\u2018-\u201F\u3009\u300B\u300D\u300F\u3011\uFF09\uFF3D\uFF5D]*)"
 	r"(\s*)"
 )
+_LANGUAGE_WORD_RE = re.compile(r"[^\W\d_]+(?:['’_-][^\W\d_]+)?", re.UNICODE)
+_VIETNAMESE_LETTERS = set(
+	"ăâđêôơư"
+	"áàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệ"
+	"íìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ"
+)
+_VIETNAMESE_WORDS = {
+	"anh", "ban", "bạn", "bao", "bi", "bị", "bo", "bỏ", "cai", "cái", "cac", "các", "can", "cần",
+	"cau", "câu", "cho", "co", "có", "con", "cua", "của", "cung", "cùng", "dang", "đang", "de", "để",
+	"den", "đến", "di", "đi", "do", "đó", "duoc", "được", "hay", "hon", "hơn", "khi", "khong",
+	"không", "la", "là", "lam", "làm", "len", "lên", "mot", "một", "nay", "này", "neu", "nếu",
+	"nguoi", "người", "nhung", "những", "o", "ở", "qua", "ra", "rang", "rằng", "roi", "rồi", "sau",
+	"se", "sẽ", "thi", "thì", "toi", "tôi", "trong", "tu", "từ", "va", "và", "vao", "vào", "ve",
+	"về", "vi", "vì", "voi", "với",
+}
+_ENGLISH_WORDS = {
+	"a", "about", "after", "all", "also", "an", "and", "any", "are", "as", "at", "be", "because",
+	"been", "before", "between", "browser", "but", "by", "can", "chrome", "click", "could", "did",
+	"do", "does", "download", "edge", "for", "from", "has", "have", "if", "in", "install", "is",
+	"it", "language", "more", "not", "of", "on", "open", "or", "package", "press", "runtime", "select",
+	"settings", "speech", "than", "that", "the", "then", "there", "this", "to", "use", "voice", "was",
+	"were", "when", "will", "with", "you", "your",
+}
+_LATIN_SCRIPT_RANGES = ((0x0041, 0x005A), (0x0061, 0x007A), (0x00C0, 0x024F), (0x1E00, 0x1EFF))
+_LATIN_SCRIPT_ROOTS = {
+	"bs", "ca", "cs", "cy", "da", "de", "en", "es", "et", "fi", "fil", "fr", "hr", "hu", "id",
+	"is", "it", "jv", "lt", "lv", "ms", "nb", "nl", "pl", "pt", "ro", "sk", "sl", "sq", "sr",
+	"su", "sv", "sw", "tr", "vi",
+}
+_LANGUAGE_SCRIPT_RANGES = {
+	"ar": ((0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)),
+	"as": ((0x0980, 0x09FF),),
+	"bn": ((0x0980, 0x09FF),),
+	"brx": ((0x0900, 0x097F),),
+	"bg": ((0x0400, 0x052F),),
+	"cmn": ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF)),
+	"doi": ((0x0900, 0x097F),),
+	"el": ((0x0370, 0x03FF),),
+	"gu": ((0x0A80, 0x0AFF),),
+	"he": ((0x0590, 0x05FF),),
+	"hi": ((0x0900, 0x097F),),
+	"ja": ((0x3040, 0x30FF), (0x31F0, 0x31FF), (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF)),
+	"km": ((0x1780, 0x17FF),),
+	"kn": ((0x0C80, 0x0CFF),),
+	"ko": ((0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)),
+	"kok": ((0x0900, 0x097F),),
+	"ks": ((0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0x0900, 0x097F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)),
+	"mai": ((0x0900, 0x097F),),
+	"ml": ((0x0D00, 0x0D7F),),
+	"mni": ((0x0980, 0x09FF), (0xABC0, 0xABFF)),
+	"mr": ((0x0900, 0x097F),),
+	"ne": ((0x0900, 0x097F),),
+	"or": ((0x0B00, 0x0B7F),),
+	"pa": ((0x0A00, 0x0A7F),),
+	"ru": ((0x0400, 0x052F),),
+	"sa": ((0x0900, 0x097F),),
+	"sat": ((0x1C50, 0x1C7F),),
+	"sd": ((0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0x0900, 0x097F), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)),
+	"si": ((0x0D80, 0x0DFF),),
+	"sr": ((0x0400, 0x052F),),
+	"ta": ((0x0B80, 0x0BFF),),
+	"te": ((0x0C00, 0x0C7F),),
+	"th": ((0x0E00, 0x0E7F),),
+	"uk": ((0x0400, 0x052F),),
+	"ur": ((0x0600, 0x06FF), (0x0750, 0x077F), (0x08A0, 0x08FF), (0xFB50, 0xFDFF), (0xFE70, 0xFEFF)),
+	"yue": ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF)),
+	"zh": ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF)),
+}
 
 
 class SynthDriver(synthDriverHandler.SynthDriver):
 	name = "googleTtsForNvda"
 	description = _("Google TTS For NVDA")
-	supportedSettings = (
+	_STANDARD_SUPPORTED_SETTINGS = (
 		synthDriverHandler.SynthDriver.VoiceSetting(),
 		synthDriverHandler.SynthDriver.RateSetting(),
 		synthDriverHandler.SynthDriver.RateBoostSetting(),
 		synthDriverHandler.SynthDriver.PitchSetting(),
 		synthDriverHandler.SynthDriver.VolumeSetting(),
+	)
+	_AUTO_LANGUAGE_NOTICE_SETTING = ReadOnlyTextDriverSetting(
+		_AUTO_LANGUAGE_NOTICE_ID,
+		_("Auto-detect status"),
+		availableInSettingsRing=False,
+		useConfig=False,
+		defaultVal=_AUTO_LANGUAGE_NOTICE_ID,
 	)
 	supportedCommands = {
 		BreakCommand,
@@ -105,6 +206,12 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 	cachePropertiesByDefault = False
+
+	@property
+	def supportedSettings(self) -> tuple[Any, ...]:
+		if self._auto_language_detection_enabled():
+			return (self._AUTO_LANGUAGE_NOTICE_SETTING,)
+		return self._STANDARD_SUPPORTED_SETTINGS
 
 	@classmethod
 	def check(cls) -> bool:
@@ -292,6 +399,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		cancelEvent = threading.Event()
 		voice = self.__voice
 		rate = self._rate
+		rateBoost = self._rateBoost
 		pitch = self._pitch
 		volume = self._volume
 		with suppress(Exception):
@@ -299,7 +407,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		with self._speechCondition:
 			if self._shutdownEvent.is_set():
 				return
-			self._speechQueue.append((sequence, voice, rate, pitch, volume, cancelEvent))
+			self._speechQueue.append((sequence, voice, rate, rateBoost, pitch, volume, cancelEvent))
 			self._speechCondition.notify()
 
 	def cancel(self) -> None:
@@ -370,6 +478,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		speechSequence: list[Any],
 		voice: str,
 		rate: int,
+		rateBoost: bool,
 		pitch: int,
 		volume: int,
 		cancelEvent: threading.Event,
@@ -379,6 +488,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		pendingIndexes: list[_IndexMarker] = []
 		firstTextSegment = True
 		activeVoice = voice
+		activeLanguage: str | None = None
 
 		def flush_text() -> Iterator[tuple[str, Any]]:
 			nonlocal firstTextSegment, textCharCount, pendingIndexes
@@ -399,7 +509,6 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 						return
 					yield ("index", index)
 				return
-			options = self._speech_options(rate, pitch, volume, activeVoice)
 			segments = list(self._iter_indexed_text_segments(text, indexes, firstTextSegment))
 			groupedSegments: list[tuple[str, list[_IndexMarker]]] = []
 
@@ -417,6 +526,23 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					for index, indexOffset in segmentIndexes:
 						groupIndexes.append((index, charOffset + indexOffset))
 					charOffset += len(spokenSegment)
+				groupProfile = self._auto_detect_profile_for_text(
+					textGroup,
+					activeVoice,
+					activeLanguage,
+					voice,
+					rate,
+					rateBoost,
+					pitch,
+					volume,
+				)
+				options = self._speech_options(
+					groupProfile["rate"],
+					groupProfile["pitch"],
+					groupProfile["volume"],
+					groupProfile["voice"],
+					groupProfile["rateBoost"],
+				)
 				groupedSegments.clear()
 				firstTextSegment = False
 				yield ("text", (textGroup, options, groupIndexes, hiddenSegments))
@@ -448,7 +574,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				yield from flush_text()
 				if cancelEvent.is_set():
 					return
-				activeVoice = self._voice_for_language(item.lang, voice)
+				activeLanguage = getattr(item, "lang", None)
+				activeVoice = self._voice_for_language(activeLanguage, voice)
 			elif itemType is RateCommand:
 				yield from flush_text()
 				if cancelEvent.is_set():
@@ -772,6 +899,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		speechSequence: list[Any],
 		voice: str,
 		rate: int,
+		rateBoost: bool,
 		pitch: int,
 		volume: int,
 		cancelEvent: threading.Event,
@@ -783,6 +911,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				speechSequence,
 				voice,
 				rate,
+				rateBoost,
 				pitch,
 				volume,
 				cancelEvent,
@@ -1005,12 +1134,302 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			self._audioChunksSinceDeviceCheck = 0
 		self._player.feed(b"\x00\x00" * frameCount)
 
-	def _speech_options(self, rate: int, pitch: int, volume: int, voice: str | None = None) -> dict[str, Any]:
+	def _auto_detect_profile_for_text(
+		self,
+		text: str,
+		activeVoice: str,
+		activeLanguage: str | None,
+		baseVoice: str,
+		rate: int,
+		rateBoost: bool,
+		pitch: int,
+		volume: int,
+	) -> dict[str, Any]:
+		# Explicit language changes from NVDA or the focused app should remain authoritative.
+		if not self._auto_language_detection_enabled():
+			return self._speech_profile(activeVoice, rate, rateBoost, pitch, volume)
+		candidateLanguages = self._auto_language_candidates()
+		if len(candidateLanguages) < 2:
+			return self._speech_profile(activeVoice, rate, rateBoost, pitch, volume)
+		if activeLanguage:
+			profileLanguage = self._auto_language_candidate_for_language(activeLanguage, candidateLanguages)
+			if profileLanguage:
+				return self._auto_language_profile(
+					profileLanguage,
+					activeVoice,
+					rate,
+					rateBoost,
+					pitch,
+					volume,
+				)
+			return self._speech_profile(activeVoice, rate, rateBoost, pitch, volume)
+		if activeVoice != baseVoice:
+			voiceLanguage = self.catalog.language_for_voice(activeVoice)
+			profileLanguage = self._auto_language_candidate_for_language(voiceLanguage, candidateLanguages)
+			if profileLanguage:
+				return self._auto_language_profile(
+					profileLanguage,
+					activeVoice,
+					rate,
+					rateBoost,
+					pitch,
+					volume,
+				)
+			return self._speech_profile(activeVoice, rate, rateBoost, pitch, volume)
+		detectedLanguage = self._detect_auto_language(text, candidateLanguages)
+		if detectedLanguage is None:
+			detectedLanguage = self._auto_language_preferred(candidateLanguages, activeVoice)
+		return self._auto_language_profile(
+			detectedLanguage,
+			activeVoice,
+			rate,
+			rateBoost,
+			pitch,
+			volume,
+		)
+
+	def _speech_profile(
+		self,
+		voice: str,
+		rate: int,
+		rateBoost: bool,
+		pitch: int,
+		volume: int,
+	) -> dict[str, Any]:
+		return {
+			"voice": voice,
+			"rate": max(0, min(100, int(rate))),
+			"rateBoost": bool(rateBoost),
+			"pitch": max(0, min(100, int(pitch))),
+			"volume": max(0, min(100, int(volume))),
+		}
+
+	def _auto_language_profile(
+		self,
+		language: str | None,
+		fallbackVoice: str,
+		fallbackRate: int,
+		fallbackRateBoost: bool,
+		fallbackPitch: int,
+		fallbackVolume: int,
+	) -> dict[str, Any]:
+		profile = self._auto_language_profile_for_language(language)
+		voice = str(profile.get("voice") or "")
+		if not self._voice_matches_language(voice, language):
+			voice = self._voice_for_language(language, fallbackVoice)
+		return self._speech_profile(
+			voice,
+			self._profile_int(profile.get("rate"), fallbackRate),
+			self._profile_bool(profile.get("rateBoost"), fallbackRateBoost),
+			self._profile_int(profile.get("pitch"), fallbackPitch),
+			self._profile_int(profile.get("volume"), fallbackVolume),
+		)
+
+	def _voice_matches_language(self, voice: str, language: str | None) -> bool:
+		if voice not in self.availableVoices:
+			return False
+		if not language:
+			return True
+		try:
+			voiceLanguage = self.catalog.language_for_voice(voice)
+		except Exception:
+			return False
+		return self._normalize_language(voiceLanguage) == self._normalize_language(language)
+
+	def _auto_language_notice_message(self) -> str:
+		return _(
+			"Voice settings are managed by Google TTS for NVDA. "
+			"Open the Google TTS for NVDA category in NVDA Settings to configure them."
+		)
+
+	def _get_notice(self) -> str:
+		return self._auto_language_notice_message()
+
+	def _set_notice(self, value: str) -> None:
+		return
+
+	def _auto_language_detection_enabled(self) -> bool:
+		try:
+			value = config.conf[CONFIG_SECTION][CONFIG_AUTO_LANGUAGE_DETECTION]
+		except Exception:
+			return DEFAULT_AUTO_LANGUAGE_DETECTION
+		if isinstance(value, str):
+			return value.strip().lower() in ("1", "true", "yes", "on")
+		return bool(value)
+
+	def _auto_language_profiles(self) -> dict[str, dict[str, Any]]:
+		try:
+			rawValue = config.conf[CONFIG_SECTION][CONFIG_AUTO_LANGUAGE_PROFILES]
+		except Exception:
+			rawValue = DEFAULT_AUTO_LANGUAGE_PROFILES
+		try:
+			parsed = json.loads(str(rawValue or "{}"))
+		except (TypeError, ValueError):
+			return {}
+		if not isinstance(parsed, dict):
+			return {}
+		profiles: dict[str, dict[str, Any]] = {}
+		for rawLanguage, rawProfile in parsed.items():
+			languageKey = self._normalize_language(str(rawLanguage))
+			if languageKey and isinstance(rawProfile, dict):
+				profiles[languageKey] = dict(rawProfile)
+		return profiles
+
+	def _auto_language_profile_for_language(self, language: str | None) -> dict[str, Any]:
+		languageKey = self._normalize_language(language)
+		if not languageKey:
+			return {}
+		return self._auto_language_profiles().get(languageKey, {})
+
+	def _profile_int(self, value: Any, default: int) -> int:
+		try:
+			return max(0, min(100, int(value)))
+		except (TypeError, ValueError):
+			return max(0, min(100, int(default)))
+
+	def _profile_bool(self, value: Any, default: bool = False) -> bool:
+		if isinstance(value, str):
+			return value.strip().lower() in ("1", "true", "yes", "on")
+		if value is None:
+			return default
+		return bool(value)
+
+	def _auto_language_candidates(self) -> list[str]:
+		profiles = self._auto_language_profiles()
+		try:
+			rawValue = str(config.conf[CONFIG_SECTION][CONFIG_AUTO_LANGUAGE_CANDIDATES])
+		except Exception:
+			rawValue = DEFAULT_AUTO_LANGUAGE_CANDIDATES
+		availableByKey = {
+			self._normalize_language(language): language
+			for language in self.availableLanguages
+		}
+		if profiles:
+			profileCandidates = [
+				availableByKey[languageKey]
+				for languageKey, profile in profiles.items()
+				if languageKey in availableByKey and self._profile_bool(profile.get("enabled"), False)
+			]
+			return profileCandidates
+		candidates: list[str] = []
+		seen: set[str] = set()
+		for rawLanguage in rawValue.split(","):
+			key = self._normalize_language(rawLanguage)
+			if not key or key in seen or key not in availableByKey:
+				continue
+			candidates.append(availableByKey[key])
+			seen.add(key)
+		return candidates
+
+	def _auto_language_preferred(self, candidateLanguages: list[str], fallbackVoice: str) -> str:
+		try:
+			configured = str(config.conf[CONFIG_SECTION][CONFIG_AUTO_LANGUAGE_PREFERRED])
+		except Exception:
+			configured = DEFAULT_AUTO_LANGUAGE_PREFERRED
+		configuredKey = self._normalize_language(configured)
+		for language in candidateLanguages:
+			if self._normalize_language(language) == configuredKey:
+				return language
+		fallbackLanguage = self.catalog.language_for_voice(fallbackVoice)
+		fallbackRoot = self._language_root(fallbackLanguage)
+		for language in candidateLanguages:
+			if self._language_root(language) == fallbackRoot:
+				return language
+		return candidateLanguages[0] if candidateLanguages else fallbackLanguage
+
+	def _auto_language_candidate_for_language(self, language: str | None, candidateLanguages: list[str]) -> str:
+		languageKey = self._normalize_language(language)
+		for candidate in candidateLanguages:
+			if self._normalize_language(candidate) == languageKey:
+				return candidate
+		languageRoot = self._language_root(language)
+		for candidate in candidateLanguages:
+			if self._language_root(candidate) == languageRoot:
+				return candidate
+		return ""
+
+	def _detect_auto_language(self, text: str, candidateLanguages: list[str]) -> str | None:
+		cldLanguage = language_detector.detect_language(text, candidateLanguages)
+		if cldLanguage is not None:
+			return cldLanguage
+		candidateByRoot: dict[str, str] = {}
+		for language in candidateLanguages:
+			candidateByRoot.setdefault(self._language_root(language), language)
+		scores = {root: 0 for root in candidateByRoot}
+		for token in _LANGUAGE_WORD_RE.findall(text):
+			root, score = self._language_token_signal(token, set(candidateByRoot))
+			if root is not None and root in scores:
+				scores[root] += score
+		if not scores:
+			return None
+		ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+		bestRoot, bestScore = ranked[0]
+		secondScore = ranked[1][1] if len(ranked) > 1 else 0
+		if bestScore < _AUTO_DETECT_MIN_SCORE or bestScore - secondScore < _AUTO_DETECT_MIN_MARGIN:
+			return None
+		return candidateByRoot[bestRoot]
+
+	def _has_letter_tokens(self, text: str) -> bool:
+		return any(bool(token.strip("'’_-")) for token in _LANGUAGE_WORD_RE.findall(text))
+
+	def _language_token_signal(self, token: str, candidateRoots: set[str]) -> tuple[str | None, int]:
+		normalized = token.strip("'’_-").casefold()
+		if not normalized or self._looks_like_url_token(normalized):
+			return None, 0
+		scriptRoot = self._language_script_signal(normalized, candidateRoots)
+		if scriptRoot is not None:
+			return scriptRoot, 2
+		if "vi" in candidateRoots and any(character in _VIETNAMESE_LETTERS for character in normalized):
+			return "vi", 2
+		viScore = 1 if "vi" in candidateRoots and normalized in _VIETNAMESE_WORDS else 0
+		enScore = 1 if "en" in candidateRoots and normalized in _ENGLISH_WORDS else 0
+		if viScore > enScore:
+			return "vi", viScore
+		if enScore > viScore:
+			return "en", enScore
+		return None, 0
+
+	def _language_root(self, language: str | None) -> str:
+		return self._normalize_language(language).split("-", 1)[0]
+
+	def _language_script_signal(self, token: str, candidateRoots: set[str]) -> str | None:
+		matchingRoots: set[str] = set()
+		for root in candidateRoots:
+			ranges = self._script_ranges_for_language_root(root)
+			if not ranges:
+				continue
+			if self._token_has_character_in_ranges(token, ranges):
+				matchingRoots.add(root)
+		if len(matchingRoots) == 1:
+			return next(iter(matchingRoots))
+		return None
+
+	def _script_ranges_for_language_root(self, root: str) -> tuple[tuple[int, int], ...]:
+		ranges = _LANGUAGE_SCRIPT_RANGES.get(root, ())
+		if root in _LATIN_SCRIPT_ROOTS:
+			ranges = ranges + _LATIN_SCRIPT_RANGES
+		return ranges
+
+	def _token_has_character_in_ranges(self, token: str, ranges: tuple[tuple[int, int], ...]) -> bool:
+		for character in token:
+			codepoint = ord(character)
+			if any(start <= codepoint <= end for start, end in ranges):
+				return True
+		return False
+
+	def _speech_options(
+		self,
+		rate: int,
+		pitch: int,
+		volume: int,
+		voice: str | None = None,
+		rateBoost: bool | None = None,
+	) -> dict[str, Any]:
 		speaker = self.catalog.speaker_for_voice(voice or self.__voice)
 		package = self.catalog.package_for_voice(speaker.id)
 		volumeLevel = max(0.0, min(1.0, volume / 100.0))
 		outputGain = max(0.0, min(_OUTPUT_GAIN_MAKEUP, volumeLevel * _OUTPUT_GAIN_MAKEUP))
-		desiredRate = self._rate_to_chrome(rate)
+		desiredRate = self._rate_to_chrome(rate, rateBoost)
 		engineRate = desiredRate
 		artificialRate = 1.0
 		if self._uses_protected_engine_rate(package.id) and desiredRate > _PROTECTED_ENGINE_RATE:
@@ -1053,10 +1472,11 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def _normalize_language(self, lang: str | None) -> str:
 		return str(lang or "").replace("_", "-").lower()
 
-	def _rate_to_chrome(self, value: int) -> float:
+	def _rate_to_chrome(self, value: int, rateBoost: bool | None = None) -> float:
 		percent = max(0, min(100, value)) / 100.0
 		rate = 0.35 + (2.0 - 0.35) * percent
-		if self._rateBoost:
+		boostEnabled = self._rateBoost if rateBoost is None else bool(rateBoost)
+		if boostEnabled:
 			rate *= 2
 		return round(max(0.1, min(10.0, rate)), 3)
 
@@ -1107,18 +1527,32 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		lang = self.catalog.language_for_voice(self.__voice)
 		langMap = {
 			"cmn-CN": "zh_CN",
+			"cmn-TW": "zh_TW",
 			"yue-HK": "zh_HK",
 			"ar-XA": "ar",
 			"fil-PH": "tl",
 		}
-		if lang in langMap:
-			return langMap[lang]
 		lowerLang = lang.lower()
-		if lowerLang.startswith("cmn"):
-			return "zh_CN"
-		if lowerLang.startswith("yue"):
-			return "zh_HK"
-		return lang
+		if lang in langMap:
+			nvdaLocale = langMap[lang]
+		elif lowerLang.startswith("cmn"):
+			nvdaLocale = "zh_CN"
+		elif lowerLang.startswith("yue"):
+			nvdaLocale = "zh_HK"
+		else:
+			nvdaLocale = lang.replace("-", "_")
+		if self._nvda_locale_exists(nvdaLocale):
+			return nvdaLocale
+		rootLocale = nvdaLocale.split("_", 1)[0]
+		if rootLocale != nvdaLocale and self._nvda_locale_exists(rootLocale):
+			return rootLocale
+		return "en"
+
+	def _nvda_locale_exists(self, locale: str) -> bool:
+		try:
+			return os.path.isdir(os.path.join(globalVars.appDir, "locale", locale))
+		except Exception:
+			return False
 
 	def _get_rate(self) -> int:
 		return self._rate

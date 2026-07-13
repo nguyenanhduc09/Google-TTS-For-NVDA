@@ -18,13 +18,15 @@
 		<li><strong>Phản hồi nhanh và độ trễ thấp:</strong> Tối ưu chia đoạn văn bản và bộ nhớ đệm thông minh, giúp NVDA phản hồi tức thì khi bạn nhập liệu và điều hướng.</li>
 		<li><strong>Trình Quản Lý Giọng Google TTS:</strong> Dễ dàng xem danh sách, tải xuống hoặc gỡ bỏ các gói giọng hàng loạt ngay trong hộp thoại dễ tiếp cận.</li>
 		<li><strong>Phím Tắt Nhanh:</strong> Nhấn <kbd>NVDA+Ctrl+Shift+G</kbd> ở bất kỳ đâu để mở Trình quản lý giọng Google TTS ngay lập tức.</li>
-		<li><strong>Lựa Chọn Trình Duyệt:</strong> Tùy chọn sử dụng Microsoft Edge hoặc Google Chrome làm runtime trình duyệt chạy nền ngay trong cài đặt NVDA.</li>
+		<li><strong>Lựa Chọn Trình Duyệt:</strong> Tùy chọn sử dụng Microsoft Edge hoặc Google Chrome làm runtime trình duyệt chạy nền ngay trong cấu hình NVDA.</li>
+		<li><strong>Tự động chuyển ngôn ngữ bằng CLD2:</strong> Tính năng tự động phát hiện ngôn ngữ dùng thư viện CLD2 để nhận diện văn bản và chuyển sang profile giọng đọc phù hợp khi có kết quả đáng tin cậy.</li>
 	</ul>
 
 	<h2>Yêu Cầu Hệ Thống</h2>
 	<ul>
-		<li><strong>NVDA:</strong> Phiên bản 2024.1 trở lên.</li>
+		<li><strong>NVDA:</strong> Phiên bản 2024.1 trở lên. Add-on hỗ trợ NVDA 2024 đến 2026 trên cả bản NVDA 32-bit (x86) và 64-bit (x64).</li>
 		<li><strong>Trình duyệt:</strong> Máy tính cần cài đặt Microsoft Edge hoặc Google Chrome.</li>
+		<li><strong>Phiên Windows người dùng đang đăng nhập:</strong> Không nên dựa vào add-on ở những môi trường mà runtime trình duyệt không thể khởi động, chẳng hạn màn hình đăng nhập Windows, secure desktop, Windows PE, môi trường khôi phục hoặc các phiên Windows tối giản khác.</li>
 	</ul>
 
 	<h2>Hướng Dẫn Bắt Đầu Nhanh</h2>
@@ -32,7 +34,7 @@
 		<li>Mở hộp thoại <strong>Chọn bộ đọc</strong> của NVDA bằng phím tắt <kbd>NVDA+Ctrl+S</kbd> và chọn <strong>Google TTS Cho NVDA</strong>.</li>
 		<li>Nếu chưa có gói giọng nào được cài đặt, NVDA sẽ hiển thị hộp thoại thông báo không có giọng Google TTS Cho NVDA nào được cài đặt. Nhấn <strong>Đồng ý</strong> để mở Trình quản lý giọng Google TTS và tải xuống một gói giọng. Nhấn <strong>Hủy bỏ</strong> để tạm thời tiếp tục dùng bộ đọc hiện tại.</li>
 		<li>Trong Trình quản lý giọng Google TTS, chọn các gói giọng từ danh sách bạn muốn sử dụng rồi nhấn <strong>Tải xuống các gói giọng đã chọn</strong>.</li>
-		<li>Sau khi tải xong, mở <strong>Cấu hình giọng đọc</strong> (<kbd>NVDA+Ctrl+V</kbd>) để chọn giọng yêu thích.</li>
+		<li>Sau khi tải xong, mở <strong>cấu hình giọng đọc</strong> (<kbd>NVDA+Ctrl+V</kbd>) để chọn giọng yêu thích.</li>
 	</ol>
 
 	<h2>Quản Lý Giọng Nói</h2>
@@ -46,7 +48,7 @@
 
 	<h2>Cấu Hình</h2>
 	<h3>Cấu Hình Giọng Đọc</h3>
-	<p>Trong hộp thoại Cấu hình giọng đọc của NVDA (<kbd>NVDA+Ctrl+V</kbd>), bạn có thể tùy chỉnh:</p>
+	<p>Khi tự động phát hiện ngôn ngữ đang tắt, hộp thoại cấu hình giọng đọc của NVDA (<kbd>NVDA+Ctrl+V</kbd>) cung cấp:</p>
 	<ul>
 		<li><strong>Giọng:</strong> Chọn giọng nói từ các gói giọng đã cài đặt.</li>
 		<li><strong>Tốc độ:</strong> Điều chỉnh tốc độ đọc.</li>
@@ -59,7 +61,30 @@
 	<p>Trong <strong>Trình đơn NVDA &rarr; Tùy chọn &rarr; Cấu hình &rarr; Google TTS Cho NVDA</strong>, bạn có thể thiết lập:</p>
 	<ul>
 		<li><strong>Runtime trình duyệt:</strong> Chọn Microsoft Edge hoặc Google Chrome làm runtime trình duyệt chạy nền cho add-on. Bảng cấu hình sẽ hiển thị trạng thái có sẵn của các trình duyệt trên hệ thống.</li>
+		<li><strong>Tự động phát hiện ngôn ngữ:</strong> Bật nhận diện ngôn ngữ theo từng câu và mở các điều khiển profile được mô tả bên dưới.</li>
 	</ul>
+
+	<h3>Profile Tự Động Phát Hiện Ngôn Ngữ</h3>
+	<p>Khi <strong>Tự động phát hiện ngôn ngữ</strong> được bật, các câu được phát hiện sẽ dùng profile riêng của add-on cho từng ngôn ngữ thay vì dùng trực tiếp cấu hình giọng đọc thông thường của NVDA. Các giá trị cấu hình giọng đọc bình thường vẫn được giữ lại và sẽ dùng lại khi bạn tắt tự động phát hiện ngôn ngữ.</p>
+	<p>Tự động phát hiện ngôn ngữ dùng các thư viện CLD2 đi kèm cho cả bản NVDA 32-bit (x86) và 64-bit (x64). Kết quả CLD2 chỉ được chấp nhận khi đủ tin cậy và khớp với một trong các ngôn ngữ đã bật. Nếu văn bản quá ngắn hoặc chưa rõ ràng, add-on dùng các dấu hiệu ngôn ngữ cục bộ thận trọng khi có thể, rồi quay về ngôn ngữ ưu tiên đã bật.</p>
+	<ol>
+		<li>Mở <strong>Trình đơn NVDA &rarr; Tùy chọn &rarr; Cấu hình &rarr; Google TTS Cho NVDA</strong>.</li>
+		<li>Bật <strong>Tự động phát hiện ngôn ngữ giữa các giọng đã cài đặt</strong>.</li>
+		<li>Chọn một <strong>Profile ngôn ngữ tự động phát hiện</strong>.</li>
+		<li>Đánh dấu <strong>Dùng ngôn ngữ này trong tự động phát hiện</strong> cho từng ngôn ngữ bạn muốn add-on nhận diện. Các profile ngôn ngữ sẽ tắt cho tới khi bạn đánh dấu.</li>
+		<li>Với mỗi ngôn ngữ đã bật, chọn giọng nói và chỉnh tốc độ, tăng tốc độ, cao độ và âm lượng.</li>
+		<li>Chọn <strong>Ngôn ngữ tự động phát hiện ưu tiên</strong>. Danh sách này chỉ hiển thị các ngôn ngữ đã bật, và ngôn ngữ ưu tiên sẽ được dùng khi câu không rõ ràng.</li>
+	</ol>
+	<p>Tốc độ, cao độ và âm lượng dùng thanh trượt giống cấu hình giọng đọc của NVDA. Nhãn của giọng nói, tốc độ, tăng tốc độ, cao độ và âm lượng dùng chính bản dịch setting của NVDA, không tạo thêm thuật ngữ riêng trong add-on.</p>
+	<p>Tự động phát hiện ngôn ngữ đánh dấu ngôn ngữ trước khi NVDA xử lý văn bản, vì vậy phát âm ký hiệu và xử lý từ điển phát âm của NVDA vẫn đi theo pipeline speech bình thường cho ngữ cảnh ngôn ngữ đã chọn.</p>
+	<p>Khi tắt tự động phát hiện ngôn ngữ, từ điển giọng đọc của NVDA hoạt động bình thường cho giọng Google TTS đang được chọn. Khi bật tự động phát hiện ngôn ngữ, add-on tạm thời dùng từ điển giọng đọc của giọng đã chọn trong từng profile ngôn ngữ đang bật trong lúc NVDA xử lý đoạn đó. Từ điển phát âm mặc định và từ điển phát âm tạm thời của NVDA vẫn theo hành vi bình thường của NVDA.</p>
+	<p>Khi tự động phát hiện ngôn ngữ đang bật, hộp thoại cấu hình giọng đọc của NVDA sẽ không hiển thị các điều khiển giọng nói, tốc độ, tăng tốc độ, cao độ và âm lượng thông thường cho bộ đọc này. Thay vào đó, nó hiển thị thông báo có thể nhận tiêu điểm bằng phím Tab, hướng dẫn bạn chuyển sang danh mục Google TTS Cho NVDA để thiết lập. Các dòng trạng thái trong danh mục Google TTS Cho NVDA cũng có thể Tab tới để trình đọc màn hình đọc được.</p>
+
+	<h2>Xử Lý Lỗi Im Lặng Với Runtime Edge</h2>
+	<p>Nếu bạn chọn <strong>Microsoft Edge</strong> làm runtime trình duyệt và Google TTS Cho NVDA bị im lặng dù Microsoft Edge vẫn có sẵn trên máy, hãy cài đặt hoặc sửa chữa Microsoft Edge WebView2 Runtime.</p>
+	<p>WebView2 là runtime Microsoft Edge dùng cho các ứng dụng Windows nhúng nội dung web. Nó có liên quan đến Microsoft Edge, nhưng việc máy có trình duyệt Edge bình thường không phải lúc nào cũng có nghĩa là WebView2 Runtime đã được cài đặt và hoạt động tốt cho tình huống ứng dụng. Microsoft khuyến nghị Evergreen WebView2 Runtime cho ứng dụng vì runtime này dùng chung, tự động cập nhật, và trình cài Evergreen Bootstrapper nhỏ sẽ tải runtime phù hợp với kiến trúc của thiết bị.</p>
+	<p>Với máy có Internet, nhấn vào đây để tải trình cài Microsoft Edge WebView2 Evergreen Bootstrapper: <a href="https://go.microsoft.com/fwlink/p/?LinkId=2124703">Tải Microsoft Edge WebView2 Runtime</a>.</p>
+	<p>Chạy trình cài, khởi động lại NVDA, rồi chọn lại <strong>Google TTS Cho NVDA</strong>. Để tải trình cài offline hoặc gói WebView2 Runtime có số phiên bản cố định, hãy mở trang WebView2 của Microsoft: <a href="https://developer.microsoft.com/microsoft-edge/webview2">Microsoft Edge WebView2</a>.</p>
 
 	<h2>Lưu Ý</h2>
 	<ul>
@@ -79,7 +104,7 @@
 	<h2>Nhật Ký Thay Đổi</h2>
 	<h3>Phiên bản 0.3 (12/07/2026)</h3>
 	<ul>
-		<li><strong>Lựa chọn trình duyệt chạy nền:</strong> Thêm tùy chọn chọn Microsoft Edge hoặc Google Chrome làm runtime trình duyệt nền ngay trong bảng Cấu hình NVDA (<kbd>Trình đơn NVDA &rarr; Tùy chọn &rarr; Cấu hình &rarr; Google TTS Cho NVDA</kbd>).</li>
+		<li><strong>Lựa chọn trình duyệt chạy nền:</strong> Thêm tùy chọn chọn Microsoft Edge hoặc Google Chrome làm runtime trình duyệt nền ngay trong bảng cấu hình NVDA (<kbd>Trình đơn NVDA &rarr; Tùy chọn &rarr; Cấu hình &rarr; Google TTS Cho NVDA</kbd>).</li>
 		<li><strong>Ổn định kết nối &amp; bộ nhớ đệm:</strong> Chuyển lưu trữ hồ sơ trình duyệt sang thư mục <code>AppData\Local</code> để bảo toàn bộ nhớ đệm WASM qua các lần khởi động lại NVDA và tự động ẩn hoàn toàn cửa sổ nền.</li>
 		<li><strong>Cải tiến Trình quản lý giọng Google TTS:</strong> Bổ sung tính năng <strong>Lọc theo ngôn ngữ</strong>, cải thiện điều hướng bàn phím và tiêu điểm cho trình đọc màn hình, đồng thời tự động phát hiện và dọn dẹp các gói giọng tồn đọng.</li>
 		<li><strong>Tối ưu phản hồi giọng đọc:</strong> Khắc phục lỗi mất tiếng ở câu đọc đầu tiên khi khởi động NVDA hoặc chuyển bộ đọc, giảm độ trễ phát âm và xử lý ngắt giọng mượt mà hơn.</li>

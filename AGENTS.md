@@ -83,6 +83,8 @@ NVDA process
 │  ├─ __init__.py        SynthDriver; NVDA integration and settings ring
 │  ├─ bridge.py          ChromeTtsBridge; HTTP server, browser lifecycle, CDP/WS
 │  ├─ catalog.py         VoiceCatalog, VoicePackage, Speaker models
+│  ├─ language_detector.py
+│  │                    CLD2-backed language detection with x86/x64 DLL selection
 │  ├─ voice_store.py     Download, copy, verify, remove voice packages
 │  ├─ web/
 │  │  ├─ index.html      Loaded in the headless browser runtime
@@ -145,6 +147,15 @@ If no voice packages are installed when the synth starts:
 - Cancel aborts synth loading by raising `RuntimeError`.
 - Do not fall back to remote downloads or hidden defaults.
 
+### Browser-runtime availability limits
+
+This add-on depends on a supported Microsoft Edge or Google Chrome runtime running in the current Windows user session.
+
+- Do not document or imply that Google TTS For NVDA is suitable for environments where the browser runtime is unavailable or cannot start.
+- User-facing documentation should warn that the add-on should not be relied on at the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.
+- User-facing documentation should include an Edge-runtime silence troubleshooting note: if Microsoft Edge is selected and speech stays silent even though Edge is installed, direct users to install or repair Microsoft Edge WebView2 Runtime using Microsoft's Evergreen Bootstrapper link (`https://go.microsoft.com/fwlink/p/?LinkId=2124703`), then restart NVDA. Also include Microsoft's WebView2 page (`https://developer.microsoft.com/microsoft-edge/webview2`) for offline installers and fixed-version runtime packages.
+- Keep fallback/error wording clear: if no supported browser runtime is available, the synth cannot provide speech through the Google WASM TTS engine.
+
 ### Supported settings ring parameters
 
 Current supported settings:
@@ -162,6 +173,33 @@ Do **not** re-add:
 
 These were removed and must stay removed unless the user explicitly requests a new design and compatibility fix.
 
+### Auto-detect language profiles
+
+Automatic language detection deliberately has its own profile system and must not write per-language values into NVDA's normal Speech Settings.
+
+- Config keys live under `CONFIG_SECTION = "googleTtsForNvda"`:
+  - `autoLanguageDetection` — master enable switch.
+  - `autoLanguagePreferred` — preferred language used when text is ambiguous.
+  - `autoLanguageCandidates` — comma-separated compatibility list of selected languages.
+  - `autoLanguageProfiles` — JSON object keyed by installed language code. Each profile stores `enabled`, `voice`, `rate`, `rateBoost`, `pitch`, and `volume`.
+- When auto-detect is **off**, the synth must use NVDA's normal Speech Settings values for voice, rate, rate boost, pitch, and volume.
+- When auto-detect is **on**, detected sentences must use the selected language profile values. Do not copy these profile values into `config.conf["speech"][synthName]`.
+- Auto-detect should use the bundled CLD2 detector (`synthDrivers/googleTtsForNvda/language_detector.py` and `synthDrivers/googleTtsForNvda/cld2/`) as the primary detector. `language_detector.py` must select `cld2_x86.dll` for 32-bit NVDA/Python and `cld2_x64.dll` for 64-bit NVDA/Python, with `cld2.dll` only as a compatibility fallback.
+- Do not use unreliable CLD2 results as authoritative for unclear text. If CLD2 is unavailable or uncertain, the synth may use conservative local language signals and then the enabled preferred language; it must not fall back to normal Speech Settings values while auto-detect is on.
+- Explicit `LangChangeCommand` values from NVDA or the focused app remain authoritative and should not be overridden by auto-detect.
+- Auto-detect should insert `LangChangeCommand` before NVDA text processing when possible, so symbol pronunciation and speech dictionary processing remain in NVDA's normal speech pipeline for the selected language context.
+- Auto-detect voice dictionary handling must follow the selected profile voice for each enabled language. Temporarily load the matching NVDA voice dictionary only while NVDA processes that segment, then restore the user's current voice dictionary. Default and temporary dictionaries must keep NVDA's normal behavior.
+- Keep Google voice catalog language codes separate from NVDA text-processing locales. Catalog/profile/Voice Manager selection should preserve Google language codes such as `vi-VN`, `en-GB`, or `cmn-TW` so the correct Google voice is chosen. Only convert to NVDA locale form when passing language context into NVDA speech processing, `LangChangeCommand`, symbol pronunciation, CLDR/emoji processing, voice dictionaries, or the synth `language` property.
+- NVDA locale conversion must follow the installed NVDA locale folders under `globalVars.appDir\locale`: first try the exact normalized locale such as `vi_VN`, then its root such as `vi`, then fall back to `en` if NVDA has no locale data for that language. Preserve special mappings where Google and NVDA use different identifiers, including `cmn-CN -> zh_CN`, `cmn-TW -> zh_TW`, `yue-HK -> zh_HK`, `ar-XA -> ar`, and `fil-PH -> tl` before applying the installed-locale fallback.
+- Profile voices must be installed and must match the selected profile language. If a saved profile references a missing or mismatched voice, fall back to an installed voice for that language.
+- The Google TTS settings panel must keep the language profile list accessible: use a normal language choice control, a clear checkbox for "Use this language in auto-detect", and ordinary labeled controls for profile values. Do not use a multi-column table for these profile controls.
+- Status/help lines in Speech Settings and the Google TTS settings category must be reachable by Tab and read by NVDA. Use focusable read-only controls for these status lines instead of plain `wx.StaticText`.
+- The preferred auto-detect language choice must only list languages whose profile is enabled.
+- Rate, pitch, and volume profile controls should use sliders, matching NVDA's Speech Settings interaction style.
+- Use NVDA's own translated setting names for voice/rate/rate boost/pitch/volume labels where possible instead of inventing add-on-specific translated terms.
+- When auto-detect is enabled, `SynthDriver.supportedSettings` should hide normal `VoiceSetting`, `RateSetting`, `RateBoostSetting`, `PitchSetting`, and `VolumeSetting`, and instead expose a read-only notice that directs the user to the Google TTS For NVDA settings category. Refresh the settings ring after saving the auto-detect setting.
+- Vietnamese UI/docs must translate "Google TTS for NVDA" as "Google TTS Cho NVDA" when it is user-facing text.
+
 ### Volatile RAM speech cache
 
 - Repeated short phrases are cached as PCM in the `SynthDriver` instance only.
@@ -176,6 +214,7 @@ These were removed and must stay removed unless the user explicitly requests a n
 - Use `synthDriverHandler.SynthDriver` patterns.
 - Use NVDA-style property methods: `_get_propertyName()` and `_set_propertyName()`.
 - Keep `cachePropertiesByDefault = False`.
+- Preserve compatibility with NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) builds. When hooking NVDA APIs whose signatures changed across these versions, use compatibility wrappers like the `setSynth` hook rather than assuming only one signature.
 - Support `synthIndexReached` and `synthDoneSpeaking` notifications.
 - Speech cancellation must be responsive and must not leave browser-runtime/CDP calls hanging.
 - Do not import NVDA-only modules unguarded in modules that may be imported by tests. Existing try/except patterns for `logHandler`, `addonHandler`, and `globalVars` are intentional.
@@ -411,7 +450,7 @@ $zip.Dispose()
 - Version is in `googleTtsForNvda/manifest.ini`, field `version`.
 - Current version: `0.3`.
 - Current authors: Nguyen Anh Duc, Dao Duc Trung and Pham Hung Vuong.
-- NVDA compatibility: `minimumNVDAVersion = 2024.1.0`, `lastTestedNVDAVersion = 2026.1.0`.
+- NVDA compatibility: `minimumNVDAVersion = 2024.1.0`, `lastTestedNVDAVersion = 2026.1.0`. Code and packaging should preserve support for NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) builds.
 - Increment `manifest.ini` before producing a release build.
 - Do not increment version for internal experiments unless the user asks for a build/release.
 

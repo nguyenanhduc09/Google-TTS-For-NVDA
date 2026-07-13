@@ -63,9 +63,17 @@ EDGE_PROFILE_DIR_NAME = "edgeProfiles"
 PERSISTENT_PROFILE_DIR_NAME = "persistentSession"
 CONFIG_SECTION = "googleTtsForNvda"
 CONFIG_BROWSER_RUNTIME = "browserRuntime"
+CONFIG_AUTO_LANGUAGE_DETECTION = "autoLanguageDetection"
+CONFIG_AUTO_LANGUAGE_PREFERRED = "autoLanguagePreferred"
+CONFIG_AUTO_LANGUAGE_CANDIDATES = "autoLanguageCandidates"
+CONFIG_AUTO_LANGUAGE_PROFILES = "autoLanguageProfiles"
 BROWSER_RUNTIME_EDGE = "edge"
 BROWSER_RUNTIME_CHROME = "chrome"
 DEFAULT_BROWSER_RUNTIME = BROWSER_RUNTIME_EDGE
+DEFAULT_AUTO_LANGUAGE_DETECTION = False
+DEFAULT_AUTO_LANGUAGE_PREFERRED = ""
+DEFAULT_AUTO_LANGUAGE_CANDIDATES = ""
+DEFAULT_AUTO_LANGUAGE_PROFILES = ""
 BROWSER_RUNTIME_LABELS = {
 	BROWSER_RUNTIME_EDGE: "Microsoft Edge",
 	BROWSER_RUNTIME_CHROME: "Google Chrome",
@@ -228,13 +236,29 @@ def _elevate_chrome_priority(processId: int) -> None:
 		return
 	try:
 		import ctypes
+		from ctypes import wintypes
 
 		ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
 		kernel32 = ctypes.windll.kernel32
-		handle = kernel32.OpenProcess(0x0200, False, processId)
+		openProcess = ctypes.WINFUNCTYPE(
+			wintypes.HANDLE,
+			wintypes.DWORD,
+			wintypes.BOOL,
+			wintypes.DWORD,
+		)(("OpenProcess", kernel32))
+		setPriorityClass = ctypes.WINFUNCTYPE(
+			wintypes.BOOL,
+			wintypes.HANDLE,
+			wintypes.DWORD,
+		)(("SetPriorityClass", kernel32))
+		closeHandle = ctypes.WINFUNCTYPE(
+			wintypes.BOOL,
+			wintypes.HANDLE,
+		)(("CloseHandle", kernel32))
+		handle = openProcess(0x0200, False, processId)
 		if handle:
-			kernel32.SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
-			kernel32.CloseHandle(handle)
+			setPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
+			closeHandle(handle)
 	except Exception:
 		log.debug("Could not elevate Google TTS browser process priority.", exc_info=True)
 
