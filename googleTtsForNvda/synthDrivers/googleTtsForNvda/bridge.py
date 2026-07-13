@@ -188,24 +188,37 @@ def _hide_chrome_windows(processId: int) -> None:
 
 		windowProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 		user32 = ctypes.windll.user32
-		user32.EnumWindows.argtypes = [windowProc, wintypes.LPARAM]
-		user32.EnumWindows.restype = wintypes.BOOL
-		user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-		user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-		user32.IsWindowVisible.argtypes = [wintypes.HWND]
-		user32.IsWindowVisible.restype = wintypes.BOOL
-		user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
-		user32.ShowWindow.restype = wintypes.BOOL
+		# Use local prototypes so this helper does not mutate ctypes function
+		# signatures shared with NVDA core in the same Python process.
+		enumWindows = ctypes.WINFUNCTYPE(
+			wintypes.BOOL,
+			windowProc,
+			wintypes.LPARAM,
+		)(("EnumWindows", user32))
+		getWindowThreadProcessId = ctypes.WINFUNCTYPE(
+			wintypes.DWORD,
+			wintypes.HWND,
+			ctypes.POINTER(wintypes.DWORD),
+		)(("GetWindowThreadProcessId", user32))
+		isWindowVisible = ctypes.WINFUNCTYPE(
+			wintypes.BOOL,
+			wintypes.HWND,
+		)(("IsWindowVisible", user32))
+		showWindow = ctypes.WINFUNCTYPE(
+			wintypes.BOOL,
+			wintypes.HWND,
+			ctypes.c_int,
+		)(("ShowWindow", user32))
 
 		@windowProc
 		def enum_window(hwnd: int, _param: int) -> bool:
 			ownerProcessId = wintypes.DWORD()
-			user32.GetWindowThreadProcessId(hwnd, ctypes.byref(ownerProcessId))
-			if ownerProcessId.value == processId and user32.IsWindowVisible(hwnd):
-				user32.ShowWindow(hwnd, 0)
+			getWindowThreadProcessId(hwnd, ctypes.byref(ownerProcessId))
+			if ownerProcessId.value == processId and isWindowVisible(hwnd):
+				showWindow(hwnd, 0)
 			return True
 
-		user32.EnumWindows(enum_window, 0)
+		enumWindows(enum_window, 0)
 	except Exception:
 		log.debug("Could not hide Google TTS browser helper window.", exc_info=True)
 
