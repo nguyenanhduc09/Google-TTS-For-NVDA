@@ -15,10 +15,6 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: globalPlugins/googleTtsForNvda/settings.py:214
-msgid "&Automatically detect language between installed voices"
-msgstr ""
-
 #: globalPlugins/googleTtsForNvda/voiceManager.py:422
 msgid "&Download checked voice packages"
 msgstr ""
@@ -38,6 +34,10 @@ msgstr ""
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:393
 msgid "&Remove checked voice packages"
+msgstr ""
+
+#: globalPlugins/googleTtsForNvda/settings.py:214
+msgid "&Use automatic language profiles"
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/settings.py:245
@@ -68,7 +68,7 @@ msgstr ""
 msgid "An unexpected error occurred while managing voice packages."
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:205
+#: globalPlugins/googleTtsForNvda/__init__.py:209
 #: synthDrivers/googleTtsForNvda/__init__.py:337
 msgid "another version"
 msgstr ""
@@ -94,7 +94,7 @@ msgid "Auto-detect language status"
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/settings.py:653
-msgid "Auto-detect language was disabled because fewer than two languages are selected."
+msgid "Auto-detect language was disabled because no languages are selected."
 msgstr ""
 
 #: synthDrivers/googleTtsForNvda/__init__.py:194
@@ -102,7 +102,7 @@ msgid "Auto-detect status"
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/settings.py:604
-msgid "Auto-detect switches by sentence using the selected installed languages. The preferred language is used when a sentence is unclear."
+msgid "Auto-detect uses the selected installed language profiles. If only one language is selected, that profile is used for every sentence."
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/settings.py:216
@@ -190,7 +190,7 @@ msgstr ""
 msgid "Download"
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:713
+#: globalPlugins/googleTtsForNvda/__init__.py:791
 msgid "Download or remove Google TTS For NVDA voice packages"
 msgstr ""
 
@@ -294,10 +294,10 @@ msgstr ""
 msgid "German"
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:231
-#: globalPlugins/googleTtsForNvda/__init__.py:251
-#: globalPlugins/googleTtsForNvda/__init__.py:416
-#: globalPlugins/googleTtsForNvda/__init__.py:697
+#: globalPlugins/googleTtsForNvda/__init__.py:235
+#: globalPlugins/googleTtsForNvda/__init__.py:255
+#: globalPlugins/googleTtsForNvda/__init__.py:432
+#: globalPlugins/googleTtsForNvda/__init__.py:775
 #: globalPlugins/googleTtsForNvda/settings.py:119
 #: globalPlugins/googleTtsForNvda/settings.py:171
 #: globalPlugins/googleTtsForNvda/settings.py:332
@@ -309,7 +309,7 @@ msgstr ""
 msgid "Google TTS For NVDA"
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:217
+#: globalPlugins/googleTtsForNvda/__init__.py:221
 #: synthDrivers/googleTtsForNvda/__init__.py:349
 msgid ""
 "Google TTS For NVDA could not be loaded because the WASM TTS Engine library is incomplete.\n"
@@ -317,7 +317,7 @@ msgid ""
 "Reinstall Google TTS For NVDA with the complete WASM TTS Engine library."
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:212
+#: globalPlugins/googleTtsForNvda/__init__.py:216
 #: synthDrivers/googleTtsForNvda/__init__.py:344
 msgid ""
 "Google TTS For NVDA could not be loaded because the WASM TTS Engine library is missing.\n"
@@ -325,7 +325,7 @@ msgid ""
 "Reinstall Google TTS For NVDA with the included WASM TTS Engine library."
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:206
+#: globalPlugins/googleTtsForNvda/__init__.py:210
 #: synthDrivers/googleTtsForNvda/__init__.py:338
 msgid ""
 "Google TTS For NVDA could not be loaded because the WASM TTS Engine version is not supported.\n"
@@ -335,7 +335,7 @@ msgid ""
 "Install a Google TTS For NVDA package that includes the supported WASM TTS Engine."
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:221
+#: globalPlugins/googleTtsForNvda/__init__.py:225
 #: synthDrivers/googleTtsForNvda/__init__.py:353
 msgid ""
 "Google TTS For NVDA could not be loaded because the WASM TTS Engine voice catalog could not be read.\n"
@@ -389,7 +389,7 @@ msgstr ""
 msgid "Google TTS Voice Manager"
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:712
+#: globalPlugins/googleTtsForNvda/__init__.py:790
 msgid "Google TTS Voice Manager..."
 msgstr ""
 
@@ -422,7 +422,7 @@ msgid "Indonesian"
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/settings.py:603
-msgid "Install at least two language voice packages to use auto-detect."
+msgid "Install at least one language voice package to use auto-detect."
 msgstr ""
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:339
@@ -533,7 +533,7 @@ msgstr ""
 msgid "No Google TTS For NVDA voice packages are installed. Open Google TTS Voice Manager to download a voice package."
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:244
+#: globalPlugins/googleTtsForNvda/__init__.py:248
 #: synthDrivers/googleTtsForNvda/__init__.py:315
 msgid ""
 "No Google TTS For NVDA voices are installed.\n"
@@ -544,7 +544,7 @@ msgid ""
 "You can also open Voice Manager later from NVDA Menu > Tools > Google TTS Voice Manager, or press NVDA+Ctrl+Shift+G."
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:280
+#: globalPlugins/googleTtsForNvda/__init__.py:284
 #: synthDrivers/googleTtsForNvda/__init__.py:243
 msgid ""
 "No installed Google TTS For NVDA voices can be used.\n"
@@ -578,7 +578,7 @@ msgstr ""
 msgid "Odia"
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:745
+#: globalPlugins/googleTtsForNvda/__init__.py:823
 msgid "Opens the Google TTS Voice Manager."
 msgstr ""
 
@@ -844,7 +844,7 @@ msgstr ""
 msgid "Vietnamese"
 msgstr ""
 
-#: globalPlugins/googleTtsForNvda/__init__.py:409
+#: globalPlugins/googleTtsForNvda/__init__.py:425
 msgid ""
 "Voice dictionary preferences are unavailable while automatic language detection is enabled.\n"
 "\n"
@@ -866,7 +866,7 @@ msgstr ""
 msgid "Voice package {package} did not pass verification after import."
 msgstr ""
 
-#: synthDrivers/googleTtsForNvda/__init__.py:1240
+#: synthDrivers/googleTtsForNvda/__init__.py:1249
 msgid "Voice settings are managed by Google TTS for NVDA. Open the Google TTS for NVDA category in NVDA Settings to configure them."
 msgstr ""
 

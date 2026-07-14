@@ -1149,7 +1149,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		if not self._auto_language_detection_enabled():
 			return self._speech_profile(activeVoice, rate, rateBoost, pitch, volume)
 		candidateLanguages = self._auto_language_candidates()
-		if len(candidateLanguages) < 2:
+		if not candidateLanguages:
 			return self._speech_profile(activeVoice, rate, rateBoost, pitch, volume)
 		if activeLanguage:
 			profileLanguage = self._auto_language_candidate_for_language(activeLanguage, candidateLanguages)
@@ -1176,6 +1176,15 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					volume,
 				)
 			return self._speech_profile(activeVoice, rate, rateBoost, pitch, volume)
+		if len(candidateLanguages) == 1:
+			return self._auto_language_profile(
+				candidateLanguages[0],
+				activeVoice,
+				rate,
+				rateBoost,
+				pitch,
+				volume,
+			)
 		detectedLanguage = self._detect_auto_language(text, candidateLanguages)
 		if detectedLanguage is None:
 			detectedLanguage = self._auto_language_preferred(candidateLanguages, activeVoice)

@@ -61,15 +61,15 @@
 	<p>Under <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>, you can configure:</p>
 	<ul>
 		<li><strong>Browser runtime:</strong> Choose Microsoft Edge or Google Chrome as the background browser runtime for the add-on. The settings panel displays the availability status of browsers on your system.</li>
-		<li><strong>Automatically detect language:</strong> Enable sentence-level language detection and open the profile controls described below.</li>
+		<li><strong>Use automatic language profiles:</strong> Enable automatic profile selection and open the profile controls described below.</li>
 	</ul>
 
 	<h3>Automatic Language Detection Profiles</h3>
-	<p>When <strong>Automatically detect language</strong> is enabled, detected sentences use the add-on's per-language profiles instead of the normal NVDA Speech settings. Your regular Speech Settings values remain available again when automatic language detection is turned off.</p>
+	<p>When <strong>Use automatic language profiles</strong> is enabled, detected sentences use the add-on's per-language profiles instead of the normal NVDA Speech settings. If only one language profile is enabled, that profile is used for every sentence. Your regular Speech Settings values remain available again when automatic language profiles are turned off.</p>
 	<p>Automatic language detection uses bundled CLD2 detector libraries for both 32-bit (x86) and 64-bit (x64) NVDA builds. CLD2 results are accepted only when they are reliable enough for one of the enabled languages. If text is too short or unclear, the add-on uses conservative local language signals where available, then falls back to the preferred enabled language.</p>
 	<ol>
 		<li>Open <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>.</li>
-		<li>Enable <strong>Automatically detect language between installed voices</strong>.</li>
+		<li>Enable <strong>Use automatic language profiles</strong>.</li>
 		<li>Select an <strong>Auto-detect language profile</strong>.</li>
 		<li>Check <strong>Use this language in auto-detect</strong> for each language you want the add-on to detect. Language profiles are off until you check them.</li>
 		<li>For each enabled language, choose its voice and set rate, rate boost, pitch, and volume.</li>

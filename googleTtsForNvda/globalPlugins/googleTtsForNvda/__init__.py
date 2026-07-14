@@ -500,7 +500,7 @@ def _same_language(left: str | None, right: str | None) -> bool:
 	return bool(leftKeys and rightKeys and leftKeys.intersection(rightKeys))
 
 
-def _google_lang_change_command(language: str) -> LangChangeCommand:
+def _google_lang_change_command(language: str | None) -> LangChangeCommand:
 	command = LangChangeCommand(_nvda_locale_for_language(language))
 	try:
 		setattr(command, "googleTtsForNvdaLanguage", language)
@@ -577,8 +577,10 @@ def _auto_language_candidate_for_locale(synth: Any, locale: str | None, candidat
 
 def _auto_detect_language_for_speech_filter(synth: Any, text: str) -> str | None:
 	candidates = synth._auto_language_candidates()
-	if len(candidates) < 2:
+	if not candidates:
 		return None
+	if len(candidates) == 1:
+		return candidates[0]
 	detected = synth._detect_auto_language(text, candidates)
 	if detected is not None:
 		return detected
@@ -664,8 +666,8 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any]) -> list[Any
 	explicitLanguageActive = False
 	for item in speechSequence:
 		if isinstance(item, LangChangeCommand):
-			currentAutoLanguage = getattr(item, "lang", None)
-			filtered.append(LangChangeCommand(_nvda_locale_for_language(currentAutoLanguage)))
+			currentAutoLanguage = getattr(item, "googleTtsForNvdaLanguage", None) or getattr(item, "lang", None)
+			filtered.append(_google_lang_change_command(currentAutoLanguage))
 			explicitLanguageActive = bool(currentAutoLanguage)
 			continue
 		if isinstance(item, str) and item and not explicitLanguageActive:

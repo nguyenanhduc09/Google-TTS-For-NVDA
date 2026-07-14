@@ -183,7 +183,7 @@ Automatic language detection deliberately has its own profile system and must no
   - `autoLanguageCandidates` — comma-separated compatibility list of selected languages.
   - `autoLanguageProfiles` — JSON object keyed by installed language code. Each profile stores `enabled`, `voice`, `rate`, `rateBoost`, `pitch`, and `volume`.
 - When auto-detect is **off**, the synth must use NVDA's normal Speech Settings values for voice, rate, rate boost, pitch, and volume.
-- When auto-detect is **on**, detected sentences must use the selected language profile values. Do not copy these profile values into `config.conf["speech"][synthName]`.
+- When auto-detect is **on**, detected sentences must use the selected language profile values. If only one language profile is enabled, use that profile for every sentence; do not fall back to normal Speech Settings values merely because there is only one candidate. Do not copy these profile values into `config.conf["speech"][synthName]`.
 - Auto-detect should use the bundled CLD2 detector (`synthDrivers/googleTtsForNvda/language_detector.py` and `synthDrivers/googleTtsForNvda/cld2/`) as the primary detector. `language_detector.py` must select `cld2_x86.dll` for 32-bit NVDA/Python and `cld2_x64.dll` for 64-bit NVDA/Python, with `cld2.dll` only as a compatibility fallback.
 - Do not use unreliable CLD2 results as authoritative for unclear text. If CLD2 is unavailable or uncertain, the synth may use conservative local language signals and then the enabled preferred language; it must not fall back to normal Speech Settings values while auto-detect is on.
 - Explicit `LangChangeCommand` values from NVDA or the focused app remain authoritative and should not be overridden by auto-detect.
@@ -197,6 +197,7 @@ Automatic language detection deliberately has its own profile system and must no
 - The preferred auto-detect language choice must only list languages whose profile is enabled.
 - Rate, pitch, and volume profile controls should use sliders, matching NVDA's Speech Settings interaction style.
 - Use NVDA's own translated setting names for voice/rate/rate boost/pitch/volume labels where possible instead of inventing add-on-specific translated terms.
+- The main checkbox label should describe the broader behavior as automatic language profiles, not only switching between voices, because one enabled profile is valid and applies to every sentence.
 - When auto-detect is enabled, `SynthDriver.supportedSettings` should hide normal `VoiceSetting`, `RateSetting`, `RateBoostSetting`, `PitchSetting`, and `VolumeSetting`, and instead expose a read-only notice that directs the user to the Google TTS For NVDA settings category. Refresh the settings ring after saving the auto-detect setting.
 - Vietnamese UI/docs must translate "Google TTS for NVDA" as "Google TTS Cho NVDA" when it is user-facing text.
 

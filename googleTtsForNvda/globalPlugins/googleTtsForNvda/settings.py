@@ -211,10 +211,10 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		)
 
 		self.autoLanguageCheck = helper.addItem(
-			wx.CheckBox(self, label=_("&Automatically detect language between installed voices")),
+			wx.CheckBox(self, label=_("&Use automatic language profiles")),
 		)
 		self.autoLanguageCheck.SetName(_("Automatically detect language"))
-		self.autoLanguageCheck.SetValue(self._savedAutoLanguageDetection and len(self._languageValues) >= 2)
+		self.autoLanguageCheck.SetValue(self._savedAutoLanguageDetection and bool(self._languageValues))
 		self.autoLanguageCheck.Bind(wx.EVT_CHECKBOX, self.on_auto_language_detection_changed)
 		languageChoices = [
 			_format_language_choice(language, self._languageCounts[language])
@@ -599,15 +599,15 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		]
 
 	def _auto_language_status_message(self) -> str:
-		if len(self._languageValues) < 2:
-			return _("Install at least two language voice packages to use auto-detect.")
+		if not self._languageValues:
+			return _("Install at least one language voice package to use auto-detect.")
 		return _(
-			"Auto-detect switches by sentence using the selected installed languages. "
-			"The preferred language is used when a sentence is unclear."
+			"Auto-detect uses the selected installed language profiles. "
+			"If only one language is selected, that profile is used for every sentence."
 		)
 
 	def _refresh_auto_language_controls(self) -> None:
-		available = len(self._languageValues) >= 2
+		available = bool(self._languageValues)
 		enabled = available and self.autoLanguageCheck.GetValue()
 		profileEnabled = enabled and self.autoProfileEnabledCheck.GetValue()
 		self.autoLanguageCheck.Enable(available)
@@ -628,7 +628,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		if not hasattr(self, "_autoProfileValueControls"):
 			return
 		show = (
-			len(self._languageValues) >= 2
+			bool(self._languageValues)
 			and self.autoLanguageCheck.GetValue()
 			and self.autoProfileEnabledCheck.GetValue()
 		)
@@ -642,15 +642,15 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._settingsSizer.Layout()
 
 	def _save_auto_language_settings(self) -> None:
-		enabled = self.autoLanguageCheck.GetValue() and len(self._languageValues) >= 2
+		enabled = self.autoLanguageCheck.GetValue() and bool(self._languageValues)
 		candidates = self._checked_auto_language_candidates()
 		preferredIndex = self.preferredLanguageChoice.GetSelection()
 		preferred = self._preferredLanguageValues[preferredIndex] if 0 <= preferredIndex < len(self._preferredLanguageValues) else ""
 		if preferred not in candidates:
 			preferred = candidates[0] if candidates else ""
-		if enabled and len(candidates) < 2:
+		if enabled and not candidates:
 			enabled = False
-			ui.message(_("Auto-detect language was disabled because fewer than two languages are selected."))
+			ui.message(_("Auto-detect language was disabled because no languages are selected."))
 		profiles = {
 			language: {
 				"enabled": bool(profile.get("enabled", False)),

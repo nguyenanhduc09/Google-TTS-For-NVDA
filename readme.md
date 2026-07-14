@@ -26,7 +26,7 @@ We highly welcome and appreciate any feedback from the community to help us impr
 * **100% Offline Speech**: Speech is rendered locally via a supported headless browser runtime (Microsoft Edge or Google Chrome).
 * **Low Latency**: Uses current-package warm-up and advanced background text segmentation to improve speech responsiveness.
 * **Volatile Audio Cache**: In-memory cache for short phrases (under 5000 characters) to optimize repeated announcements safely.
-* **Sentence-Level Language Auto Detect**: Optionally switch voices sentence by sentence between selected installed languages. The add-on uses bundled CLD2 language detection, then applies its enabled language profiles and preferred language when text is unclear.
+* **Automatic Language Profiles**: Optionally use per-language voice profiles. With multiple enabled languages, the add-on can switch voices sentence by sentence using bundled CLD2 language detection; with one enabled language, that profile is used for every sentence.
 * **Voice Manager**: Easily browse, filter by language, download, or remove voice packages in batches using a multi-select checkbox interface. Also includes an **Open voice packages folder** button to inspect storage locations.
 * **Background Operations**: Non-blocking downloads and removals on background threads.
 * **Accessible Shortcut**: Press **`NVDA+Ctrl+Shift+G`** to open the Voice Manager instantly.
@@ -75,17 +75,17 @@ When automatic language detection is off, the synthesizer supports the standard 
 
 The add-on includes a custom settings panel under **NVDA Settings (NVDA Menu -> Preferences -> Settings) -> Google TTS For NVDA**:
 * **Browser runtime**: Select which browser runtime to use (Microsoft Edge or Google Chrome). The panel shows the availability status of each browser on your system.
-* **Automatically detect language**: Enable sentence-level language detection and open the profile controls described below.
+* **Use automatic language profiles**: Enable automatic profile selection and open the profile controls described below.
 
 ### Automatic Language Detection Profiles
 
-When you enable **Automatically detect language**, the add-on uses its own per-language profiles instead of the normal NVDA Speech settings for detected sentences. This keeps your regular Google TTS voice settings unchanged for times when automatic language detection is off.
+When you enable **Use automatic language profiles**, the add-on uses its own per-language profiles instead of the normal NVDA Speech settings for detected sentences. If only one language profile is enabled, that profile is used for every sentence. This keeps your regular Google TTS voice settings unchanged for times when automatic language profiles are off.
 
 Automatic language detection uses bundled CLD2 detector libraries for both 32-bit (x86) and 64-bit (x64) NVDA builds. CLD2 results are accepted only when they are reliable enough for one of the enabled languages. If text is too short or unclear, the add-on uses conservative local language signals where available, then falls back to the preferred enabled language.
 
 In the Google TTS For NVDA settings category:
 
-1. Turn on **Automatically detect language between installed voices**.
+1. Turn on **Use automatic language profiles**.
 2. Choose an **Auto-detect language profile**.
 3. Check **Use this language in auto-detect** for each language you want the detector to consider. Language profiles are off until you check them.
 4. For each enabled language, choose its voice and adjust rate, rate boost, pitch, and volume.
