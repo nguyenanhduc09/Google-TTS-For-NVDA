@@ -240,8 +240,8 @@
 		let output = "";
 		const parts = [];
 
-		for (let i = 0, len2 = len - extraBytes; i < len2; i += 3) {
-			const triplet = (uint8Array[i] << 16) + (uint8Array[i + 1] << 8) + uint8Array[i + 2];
+		for (let index = 0, len2 = len - extraBytes; index < len2; index += 3) {
+			const triplet = (uint8Array[index] << 16) + (uint8Array[index + 1] << 8) + uint8Array[index + 2];
 			parts.push(
 				base64Chars.charAt((triplet >> 18) & 0x3f) +
 					base64Chars.charAt((triplet >> 12) & 0x3f) +

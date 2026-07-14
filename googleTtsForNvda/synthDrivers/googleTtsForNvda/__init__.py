@@ -74,26 +74,32 @@ _URL_TOKEN_SEGMENT_MAX_CHARS = 220
 _FORCED_SEGMENT_MIN_CHARS = 32
 _FORCED_SEGMENT_FORWARD_LOOKAHEAD = 24
 _FORCED_SEGMENT_HARD_MAX_CHARS = 256
+_NO_SPACE_SCRIPT_SIGNAL_MIN_CHARS = 12
+_NO_SPACE_SCRIPT_SIGNAL_MIN_RATIO = 0.55
+_NO_SPACE_SCRIPT_COMBINING_LOOKAHEAD = 8
 # Phrase-level punctuation used by scripts that do not rely on ASCII comma/semicolon.
 _SOFT_BREAK_CHARS = (
 	",;:\uFF0C\u3001\uFF1B\uFF1A\u2014\u2013"
 	"\u0387"
 	"\u060C\u061B"
 	"\u055D"
+	"\u0F0B\u0F0C"
 	"\u1363\u1364\u1365\u1366"
 	"\u17D6"
+	"\u104A"
 	"\uA9C8"
 )
 _ASCII_SENTENCE_TERMINATORS = ".!?"
 _SENTENCE_TRAILING_CLOSERS = "'\")]}”’」』）》〉»\u2018-\u201F\u3009\u300B\u300D\u300F\u3011\uFF09\uFF3D\uFF5D"
 _EXPLICIT_SENTENCE_TERMINATORS = set(
-	"。！？；｡।॥\u061F\u06D4\u055C\u055E\u0589\u0DF4\u0E5A\u0E5B\u1362\u1367\u1368\u17D4\u17D5\u1C7E\u1C7F\uA9C9"
+	"。！？；｡…⋯।॥\u061F\u06D4\u055C\u055E\u0589\u0DF4\u0E5A\u0E5B\u104B\u1362\u1367\u1368\u17D4\u17D5\u1C7E\u1C7F\uA9C9"
 )
 _UNICODE_SENTENCE_TERMINATOR_NAME_PARTS = (
 	"FULL STOP",
 	"QUESTION MARK",
 	"EXCLAMATION MARK",
 	"SEMICOLON",
+	"ELLIPSIS",
 	"SHAD",
 	"DANDA",
 	"DOUBLE DANDA",
@@ -143,6 +149,57 @@ _NON_BREAKING_SOFT_PUNCTUATION_NAME_PARTS = (
 	"SOLIDUS",
 	"SLASH",
 	"MIDDLE DOT",
+)
+_NO_SPACE_SCRIPT_PROFILES = (
+	(
+		(
+			(0x3100, 0x312F),
+			(0x31A0, 0x31BF),
+			(0x3400, 0x4DBF),
+			(0x4E00, 0x9FFF),
+			(0xF900, 0xFAFF),
+			(0x20000, 0x2A6DF),
+			(0x2A700, 0x2B73F),
+			(0x2B740, 0x2B81F),
+			(0x2B820, 0x2CEAF),
+			(0x2CEB0, 0x2EBEF),
+			(0x30000, 0x3134F),
+		),
+		80,
+	),
+	(
+		(
+			(0x3040, 0x30FF),
+			(0x31F0, 0x31FF),
+			(0x1AFF0, 0x1AFFF),
+			(0x1B000, 0x1B16F),
+			(0xFF66, 0xFF9F),
+		),
+		80,
+	),
+	(((0x0E00, 0x0E7F),), 70),
+	(((0x0E80, 0x0EFF),), 70),
+	(((0x1900, 0x194F),), 70),
+	(((0x1950, 0x197F),), 70),
+	(((0x1980, 0x19DF),), 70),
+	(((0x1A00, 0x1A1F),), 70),
+	(((0x1A20, 0x1AAF),), 70),
+	(((0x1780, 0x17FF),), 70),
+	(((0x1000, 0x109F), (0xA9E0, 0xA9FF), (0xAA60, 0xAA7F)), 70),
+	(((0x0F00, 0x0FFF),), 70),
+	(((0x1700, 0x171F),), 70),
+	(((0x1720, 0x173F),), 70),
+	(((0x1740, 0x175F),), 70),
+	(((0x1760, 0x177F),), 70),
+	(((0x1B00, 0x1B7F),), 70),
+	(((0x1B80, 0x1BBF),), 70),
+	(((0x1BC0, 0x1BFF),), 70),
+	(((0x1C00, 0x1C4F),), 70),
+	(((0xA000, 0xA48F),), 70),
+	(((0xA930, 0xA95F),), 70),
+	(((0xA980, 0xA9DF),), 70),
+	(((0xAA00, 0xAA5F),), 70),
+	(((0xAA80, 0xAADF),), 70),
 )
 _VOICE_WARMUP_TEXT = "a"
 _AUTO_LANGUAGE_NOTICE_ID = "notice"
@@ -1013,6 +1070,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		for index in range(max_len, lookahead_end):
 			if text[index].isspace():
 				return index
+		noSpaceCut = self._find_no_space_script_cut(text, max_len)
+		if noSpaceCut is not None:
+			return noSpaceCut
 		url_break_chars = "/\\?&=#%._-~:"
 		for index in range(max_len, min_len - 1, -1):
 			if text[index - 1] in url_break_chars:
@@ -1026,6 +1086,54 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				if not text[index].isalnum():
 					return index
 		return max_len
+
+	def _find_no_space_script_cut(self, text: str, max_len: int) -> int | None:
+		segmentLimit = self._no_space_script_segment_limit(text, max_len)
+		if segmentLimit is None:
+			return None
+		target = min(len(text), max_len, max(_FORCED_SEGMENT_MIN_CHARS, segmentLimit))
+		for index in range(target, _FORCED_SEGMENT_MIN_CHARS - 1, -1):
+			if _is_soft_break_character(text[index - 1]) and self._is_forced_soft_break(text, index):
+				return index
+		return self._extend_cut_over_combining_marks(
+			text,
+			target,
+			min(len(text), max_len + _NO_SPACE_SCRIPT_COMBINING_LOOKAHEAD),
+		)
+
+	def _no_space_script_segment_limit(self, text: str, max_len: int) -> int | None:
+		sample = text[: min(len(text), max_len)]
+		if not sample:
+			return None
+		signalChars = 0
+		bestCount = 0
+		bestLimit: int | None = None
+		for ranges, limit in _NO_SPACE_SCRIPT_PROFILES:
+			count = 0
+			for character in sample:
+				category = unicodedata.category(character)
+				if category.startswith("L") or category.startswith("M"):
+					if any(start <= ord(character) <= end for start, end in ranges):
+						count += 1
+			if count > bestCount:
+				bestCount = count
+				bestLimit = limit
+		for character in sample:
+			category = unicodedata.category(character)
+			if category.startswith("L") or category.startswith("M"):
+				signalChars += 1
+		if not signalChars:
+			return None
+		if bestCount < _NO_SPACE_SCRIPT_SIGNAL_MIN_CHARS:
+			return None
+		if bestCount / signalChars < _NO_SPACE_SCRIPT_SIGNAL_MIN_RATIO:
+			return None
+		return bestLimit
+
+	def _extend_cut_over_combining_marks(self, text: str, cut: int, max_cut: int) -> int:
+		while cut < max_cut and unicodedata.category(text[cut]).startswith("M"):
+			cut += 1
+		return cut
 
 	def _looks_like_url_token(self, text: str) -> bool:
 		if any(character.isspace() for character in text):
@@ -1045,7 +1153,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		stripped = segment.rstrip()
 		while stripped and stripped[-1] in "'\")]}”’」』）》〉»":
 			stripped = stripped[:-1].rstrip()
-		return bool(stripped) and stripped[-1] in ".!?。！？｡।॥؟։።፧፨"
+		return bool(stripped) and _is_sentence_terminator_character(stripped[-1])
 
 	def _speech_loop(self) -> None:
 		while not self._shutdownEvent.is_set():

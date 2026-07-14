@@ -173,6 +173,14 @@ Do **not** re-add:
 
 These were removed and must stay removed unless the user explicitly requests a new design and compatibility fix.
 
+### Long-text segmentation
+
+- Long-text latency segmentation should prefer natural sentence and phrase punctuation before falling back to forced length cuts.
+- For scripts that often do not separate words with spaces, the synth driver may use conservative fixed-size script-window cuts after punctuation and whitespace checks have failed. This is a latency fallback, not language detection and not word segmentation.
+- Keep this fallback independent from automatic language profiles, NVDA Speech Settings, speech dictionaries, and voice dictionary handling.
+- Current no-space/low-space script coverage includes CJK/Han and CJK extensions, Bopomofo, Japanese Kana, Thai, Lao, Limbu, Tai Le, New Tai Lue, Buginese, Tai Tham, Khmer, Myanmar, Tibetan, Philippine Brahmic scripts, Balinese, Sundanese, Batak, Javanese, Lepcha, Yi, Rejang, Cham, Tai Viet, and similar scripts where long text commonly cannot rely on spaces as word boundaries.
+- Do not add Latin, Cyrillic, Arabic, Hebrew, Ethiopic, Cherokee, Canadian Aboriginal syllabics, or other normally space-separated scripts to the no-space fallback without a specific bug report or clear evidence. For those scripts, punctuation and whitespace-based segmentation should remain the default.
+
 ### Auto-detect language profiles
 
 Automatic language detection deliberately has its own profile system and must not write per-language values into NVDA's normal Speech Settings.
