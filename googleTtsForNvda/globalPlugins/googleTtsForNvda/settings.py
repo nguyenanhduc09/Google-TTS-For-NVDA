@@ -88,7 +88,7 @@ def bind_read_only_text_focus_announcement(control: wx.TextCtrl) -> None:
 
 	def on_focus(evt: wx.FocusEvent) -> None:
 		evt.Skip()
-		wx.CallAfter(announce_value)
+		wx.CallLater(300, announce_value)
 
 	control.Bind(wx.EVT_SET_FOCUS, on_focus)
 

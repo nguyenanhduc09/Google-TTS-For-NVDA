@@ -46,6 +46,7 @@
 	let trimLeadingBoundarySilence = false;
 	let leadingBoundaryTrimBudget = 0;
 	let sawSynthesisEnd = false;
+	let synthesisEndAt = 0;
 	let synthesisGenerating = false;
 	let currentAudioPort = null;
 	let currentEndResolver = null;
@@ -476,6 +477,7 @@
 		}
 		if (event.type === "end") {
 			sawSynthesisEnd = true;
+			synthesisEndAt = performance.now();
 			if (currentEndResolver) {
 				currentEndResolver();
 			}
@@ -611,7 +613,13 @@
 	async function waitForSynthesisComplete(timeoutMs) {
 		const startedAt = performance.now();
 		while (performance.now() - startedAt < timeoutMs) {
-			if (stopped || sawSynthesisEnd) {
+			if (stopped) {
+				return;
+			}
+			const now = performance.now();
+			const audioHasDrained = lastChunkAt > 0 && now - lastChunkAt >= synthesisFinishedIdleMs;
+			const endHasSettled = sawSynthesisEnd && synthesisEndAt > 0 && now - synthesisEndAt >= synthesisFinishedIdleMs;
+			if (audioHasDrained || (endHasSettled && lastChunkAt <= 0)) {
 				return;
 			}
 			await new Promise((resolve) => {
@@ -619,9 +627,6 @@
 				setTimeout(resolve, synthesisIdlePollMs);
 			});
 			currentEndResolver = null;
-			if (lastChunkAt > 0 && performance.now() - lastChunkAt >= synthesisFinishedIdleMs) {
-				return;
-			}
 		}
 		throw new Error("Timed out waiting for browser speech audio.");
 	}
@@ -710,6 +715,7 @@
 			lastChunkAt = 0;
 			stopped = false;
 			sawSynthesisEnd = false;
+			synthesisEndAt = 0;
 			synthesisGenerating = false;
 			resetAudioQueue();
 			currentTempoRate = 1;
@@ -791,6 +797,7 @@
 				const textSegment = textSegments[segmentIndex];
 				lastChunkAt = 0;
 				sawSynthesisEnd = false;
+				synthesisEndAt = 0;
 				synthesisGenerating = true;
 				try {
 					await engine.onSpeak(textSegment, {

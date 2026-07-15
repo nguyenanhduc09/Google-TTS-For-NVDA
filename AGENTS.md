@@ -182,6 +182,12 @@ These were removed and must stay removed unless the user explicitly requests a n
 - Current no-space/low-space script coverage includes CJK/Han and CJK extensions, Bopomofo, Japanese Kana, Thai, Lao, Limbu, Tai Le, New Tai Lue, Buginese, Tai Tham, Khmer, Myanmar, Tibetan, Philippine Brahmic scripts, Balinese, Sundanese, Batak, Javanese, Lepcha, Yi, Rejang, Cham, Tai Viet, and similar scripts where long text commonly cannot rely on spaces as word boundaries.
 - Do not add Latin, Cyrillic, Arabic, Hebrew, Ethiopic, Cherokee, Canadian Aboriginal syllabics, or other normally space-separated scripts to the no-space fallback without a specific bug report or clear evidence. For those scripts, punctuation and whitespace-based segmentation should remain the default.
 
+### Status/help control accessibility
+
+- Status/help lines in Speech Settings, the Google TTS settings category, and similar NVDA dialogs must be reachable by Tab and read by NVDA. Use focusable read-only controls for these status lines instead of plain `wx.StaticText`.
+- Focusable status/help controls must have a real label association, not only `SetName()`, so NVDA announces the status/help name before the read-only edit role. If the status/help text can wrap or span multiple lines, make focus announce the complete current message while still allowing arrow-key review inside the read-only edit.
+- Apply this rule to browser runtime status, automatic language profile status, Speech Settings notices, current-browser notices, and future status/help fields with similar behavior.
+
 ### Automatic language profiles
 
 Automatic language profiles deliberately have their own profile system and must not write per-language values into NVDA's normal Speech Settings.
@@ -203,8 +209,6 @@ Automatic language profiles deliberately have their own profile system and must 
 - NVDA locale conversion must follow the installed NVDA locale folders under `globalVars.appDir\locale`: first try the exact normalized locale such as `vi_VN`, then its root such as `vi`, then fall back to `en` if NVDA has no locale data for that language. Preserve special mappings where Google and NVDA use different identifiers, including `cmn-CN -> zh_CN`, `cmn-TW -> zh_TW`, `yue-HK -> zh_HK`, `ar-XA -> ar`, and `fil-PH -> tl` before applying the installed-locale fallback.
 - Profile voices must be installed and must match the selected profile language. If a saved profile references a missing or mismatched voice, fall back to an installed voice for that language.
 - The Google TTS settings panel must keep the language profile list accessible: use a normal language choice control, a clear checkbox for "Use this language profile", and ordinary labeled controls for profile values. Do not use a multi-column table for these profile controls.
-- Status/help lines in Speech Settings and the Google TTS settings category must be reachable by Tab and read by NVDA. Use focusable read-only controls for these status lines instead of plain `wx.StaticText`.
-- Focusable status/help controls must have a real label association, not only `SetName()`, so NVDA announces the status name before the read-only edit role. If the status/help text can wrap or span multiple lines, make focus announce the complete current message while still allowing arrow-key review inside the read-only edit.
 - The Google TTS settings category status line for automatic language profiles must describe the current state, not only the enabled behavior:
   - no installed language voice packages: prompt the user to install at least one language voice package;
   - automatic language profiles off: explain that Google TTS is using NVDA's normal Speech Settings values;
