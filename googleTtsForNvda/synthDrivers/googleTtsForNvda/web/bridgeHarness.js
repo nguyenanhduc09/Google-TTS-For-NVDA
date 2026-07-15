@@ -2,6 +2,7 @@
 	"use strict";
 
 	let currentSessionId = null;
+	let currentSessionToken = 0;
 	let currentMarkOffset = 0;
 	let currentOutputGain = 1;
 	let currentTempoRate = 1;
@@ -52,8 +53,19 @@
 	let currentEndResolver = null;
 	const messageListeners = [];
 
-	function emit(message) {
-		if (!message || !currentSessionId || suppressBridgeAudio) {
+	function beginSession(sessionId, suppressAudio) {
+		currentSessionToken++;
+		currentSessionId = sessionId;
+		suppressBridgeAudio = suppressAudio;
+		return currentSessionToken;
+	}
+
+	function isCurrentSession(sessionToken) {
+		return sessionToken === currentSessionToken;
+	}
+
+	function emit(message, sessionToken = currentSessionToken) {
+		if (!message || !currentSessionId || suppressBridgeAudio || !isCurrentSession(sessionToken)) {
 			return;
 		}
 		message.sessionId = currentSessionId;
@@ -406,14 +418,14 @@
 		return combineSampleParts(outputParts);
 	}
 
-	function flushTempoProcessor() {
+	function flushTempoProcessor(sessionToken = currentSessionToken) {
 		if (Math.abs(currentTempoRate - 1) < 0.001) {
 			resetTempoProcessor();
 			return;
 		}
 		const output = processTempoSamples(new Float32Array(0), true);
 		if (output.length) {
-			queueProcessedAudio(output);
+			queueProcessedAudio(output, sessionToken);
 		}
 	}
 
@@ -455,7 +467,10 @@
 		return index < 0 ? new Float32Array(0) : samples.subarray(0, index + 1);
 	}
 
-	function queueAudioPacket(samples) {
+	function queueAudioPacket(samples, sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			return;
+		}
 		if (!samples.length) {
 			return;
 		}
@@ -463,7 +478,7 @@
 		pendingAudioSampleCount += samples.length;
 		const packetSamples = emittedAudioPackets === 0 ? firstAudioPacketSamples : steadyAudioPacketSamples;
 		if (pendingAudioSampleCount >= packetSamples) {
-			flushAudioQueue();
+			flushAudioQueue(sessionToken);
 		}
 	}
 
@@ -488,7 +503,7 @@
 		}
 	}
 
-	function scheduleWorkletEmpty(port) {
+	function scheduleWorkletEmpty(port, sessionToken = currentSessionToken) {
 		if (!port) {
 			return;
 		}
@@ -497,13 +512,17 @@
 		}
 		port._emptyTimer = setTimeout(() => {
 			port._emptyTimer = null;
-			if (!stopped && typeof port.onmessage === "function") {
+			if (!stopped && isCurrentSession(sessionToken) && typeof port.onmessage === "function") {
 				port.onmessage({ data: { type: "empty" } });
 			}
 		}, synthesisGenerating ? synthesisGeneratingEmptyDelayMs : synthesisFinishedIdleMs);
 	}
 
-	function flushAudioQueue() {
+	function flushAudioQueue(sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			resetAudioQueue();
+			return;
+		}
 		if (stopped) {
 			resetAudioQueue();
 			return;
@@ -515,15 +534,18 @@
 			type: "audio",
 			sampleRate: 24000,
 			data: buffersToPcmBase64(pendingAudioBuffers, pendingAudioSampleCount),
-		});
+		}, sessionToken);
 		pendingAudioBuffers = [];
 		pendingAudioSampleCount = 0;
 		emittedAudioPackets++;
 	}
 
-	function queueProcessedAudio(samples) {
+	function queueProcessedAudio(samples, sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			return;
+		}
 		if (!smoothSegmentBoundaries) {
-			queueAudioPacket(samples);
+			queueAudioPacket(samples, sessionToken);
 			return;
 		}
 		const trimmedSamples = trimLeadingSilence(samples);
@@ -536,32 +558,39 @@
 			return;
 		}
 		const emitCount = joinedSamples.length - boundaryHoldSamples;
-		queueAudioPacket(joinedSamples.subarray(0, emitCount));
+		queueAudioPacket(joinedSamples.subarray(0, emitCount), sessionToken);
 		heldBoundarySamples = joinedSamples.slice(emitCount);
 	}
 
-	function queueAudio(samples) {
+	function queueAudio(samples, sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			return;
+		}
 		const tempoSamples = processTempoSamples(samples);
 		if (tempoSamples.length) {
-			queueProcessedAudio(tempoSamples);
+			queueProcessedAudio(tempoSamples, sessionToken);
 		}
 	}
 
-	function finishSegmentAudio(hasNextSegment) {
+	function finishSegmentAudio(hasNextSegment, sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			resetAudioQueue();
+			return;
+		}
 		if (!smoothSegmentBoundaries) {
 			return;
 		}
 		if (!hasNextSegment) {
-			flushTempoProcessor();
+			flushTempoProcessor(sessionToken);
 		}
 		let samples = heldBoundarySamples;
 		heldBoundarySamples = new Float32Array(0);
 		if (hasNextSegment) {
 			samples = trimTrailingSilence(samples);
 		}
-		queueAudioPacket(samples);
+		queueAudioPacket(samples, sessionToken);
 		if (hasNextSegment) {
-			flushAudioQueue();
+			flushAudioQueue(sessionToken);
 		}
 		if (hasNextSegment) {
 			trimLeadingBoundarySilence = true;
@@ -571,10 +600,18 @@
 
 	class FakeAudioWorkletNode {
 		constructor() {
+			const sessionToken = currentSessionToken;
 			this.port = {
+				_sessionToken: sessionToken,
 				onmessage: null,
 				postMessage(message) {
 					if (!message || stopped) {
+						return;
+					}
+					if (synthesisGenerating) {
+						this._sessionToken = currentSessionToken;
+					}
+					if (!isCurrentSession(this._sessionToken)) {
 						return;
 					}
 					if (message.command === "clearBuffers") {
@@ -596,8 +633,8 @@
 						: new Float32Array(message.buffer);
 					lastChunkAt = performance.now();
 					currentAudioPort = this;
-					queueAudio(samples);
-					scheduleWorkletEmpty(this);
+					queueAudio(samples, this._sessionToken);
+					scheduleWorkletEmpty(this, this._sessionToken);
 				},
 			};
 		}
@@ -681,6 +718,7 @@
 	}
 
 	async function stopActiveSynthesis() {
+		currentSessionToken++;
 		stopped = true;
 		synthesisGenerating = false;
 		smoothSegmentBoundaries = false;
@@ -708,9 +746,8 @@
 	};
 
 	window.googleTtsForNvdaPreload = async function googleTtsForNvdaPreload(payload) {
-		currentSessionId = payload.sessionId;
+		const sessionToken = beginSession(payload.sessionId, true);
 		currentOutputGain = 0;
-		suppressBridgeAudio = true;
 		try {
 			lastChunkAt = 0;
 			stopped = false;
@@ -733,7 +770,7 @@
 			}
 			synthesisGenerating = true;
 			try {
-				await engine.onSpeak(payload.text || "a", {
+				await engine.onSpeak(payload.text || " ", {
 					voiceName: payload.voiceName,
 					lang: payload.lang,
 					rate: 1,
@@ -743,16 +780,20 @@
 			} finally {
 				synthesisGenerating = false;
 			}
+			if (!isCurrentSession(sessionToken)) {
+				return { success: false, preloaded: false, cancelled: true };
+			}
 			if (lastChunkAt > 0) {
-				scheduleWorkletEmpty(currentAudioPort);
+				scheduleWorkletEmpty(currentAudioPort, sessionToken);
 			}
 			readyVoices.add(payload.voiceName);
 			return { success: true, preloaded: true };
 		} finally {
-			if (currentSessionId === payload.sessionId) {
+			if (currentSessionId === payload.sessionId && isCurrentSession(sessionToken)) {
 				currentSessionId = null;
+				currentSessionToken++;
+				suppressBridgeAudio = false;
 			}
-			suppressBridgeAudio = false;
 		}
 	};
 
@@ -778,10 +819,9 @@
 				? payload.segments.filter((segment) => typeof segment === "string" && segment.length)
 				: [payload.text];
 			const hasHiddenSegments = textSegments.length > 1;
-			currentSessionId = sessionId;
+			const sessionToken = beginSession(sessionId, false);
 			currentMarkOffset = 0;
 			currentOutputGain = outputGainFromPayload(payload);
-			suppressBridgeAudio = false;
 			lastChunkAt = 0;
 			stopped = false;
 			sawSynthesisEnd = false;
@@ -789,9 +829,9 @@
 			resetAudioQueue();
 			currentTempoRate = tempoRateFromPayload(payload);
 			smoothSegmentBoundaries = hasHiddenSegments;
-			emit({ type: "started" });
+			emit({ type: "started" }, sessionToken);
 			for (let segmentIndex = 0; segmentIndex < textSegments.length; segmentIndex++) {
-				if (stopped) {
+				if (stopped || !isCurrentSession(sessionToken)) {
 					break;
 				}
 				const textSegment = textSegments[segmentIndex];
@@ -810,18 +850,24 @@
 				} finally {
 					synthesisGenerating = false;
 				}
+				if (!isCurrentSession(sessionToken)) {
+					break;
+				}
 				if (lastChunkAt > 0) {
-					scheduleWorkletEmpty(currentAudioPort);
+					scheduleWorkletEmpty(currentAudioPort, sessionToken);
 				}
 				await waitForSynthesisComplete(120000);
-				finishSegmentAudio(segmentIndex < textSegments.length - 1);
+				if (!isCurrentSession(sessionToken)) {
+					break;
+				}
+				finishSegmentAudio(segmentIndex < textSegments.length - 1, sessionToken);
 				currentMarkOffset += textSegment.length;
 			}
 			currentMarkOffset = 0;
 			readyVoices.add(payload.voiceName);
-			flushTempoProcessor();
-			flushAudioQueue();
-			emit({ type: "done" });
+			flushTempoProcessor(sessionToken);
+			flushAudioQueue(sessionToken);
+			emit({ type: "done" }, sessionToken);
 			await stopActiveSynthesis();
 			smoothSegmentBoundaries = false;
 			if (currentSessionId === sessionId) {

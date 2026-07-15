@@ -216,6 +216,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._ensure_auto_language_profiles()
 		self._loadingAutoLanguageProfile = False
 		self._voiceSettingName = _nvda_synth_setting_name(synthDriverHandler.SynthDriver.VoiceSetting, "Voice")
+		self._variantSettingName = _nvda_synth_setting_name(synthDriverHandler.SynthDriver.VariantSetting, "Variant")
 		self._rateSettingName = _nvda_synth_setting_name(synthDriverHandler.SynthDriver.RateSetting, "Rate")
 		self._rateBoostSettingName = _nvda_synth_setting_name(synthDriverHandler.SynthDriver.RateBoostSetting, "Rate boost")
 		self._pitchSettingName = _nvda_synth_setting_name(synthDriverHandler.SynthDriver.PitchSetting, "Pitch")
@@ -281,11 +282,11 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self.autoProfileEnabledCheck.SetName(_("Use this language profile"))
 		self.autoProfileEnabledCheck.Bind(wx.EVT_CHECKBOX, self.on_auto_language_profile_enabled_changed)
 		self.autoProfileVoiceChoice = helper.addLabeledControl(
-			f"{self._voiceSettingName}:",
+			f"{self._variantSettingName}:",
 			wx.Choice,
 			choices=[],
 		)
-		self.autoProfileVoiceChoice.SetName(self._voiceSettingName)
+		self.autoProfileVoiceChoice.SetName(self._variantSettingName)
 		self.autoProfileRateSlider = helper.addLabeledControl(
 			f"{self._rateSettingName}:",
 			wx.Slider,
@@ -517,7 +518,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			currentSynth = synthDriverHandler.getSynth()
 			if getattr(currentSynth, "name", "") != SYNTH_NAME:
 				return defaults
-			defaults["voice"] = str(getattr(currentSynth, "voice", "") or "")
+			defaults["voice"] = str(getattr(currentSynth, "variant", "") or getattr(currentSynth, "voice", "") or "")
 			defaults["rate"] = max(0, min(100, int(getattr(currentSynth, "rate", 50))))
 			defaults["rateBoost"] = bool(getattr(currentSynth, "rateBoost", False))
 			defaults["pitch"] = max(0, min(100, int(getattr(currentSynth, "pitch", 50))))
@@ -588,10 +589,13 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			preferred = self._savedAutoLanguagePreferred
 		if preferred not in self._preferredLanguageValues:
 			try:
-				currentVoice = synthDriverHandler.getSynth().voice
 				currentSynth = synthDriverHandler.getSynth()
 				if getattr(currentSynth, "name", "") == SYNTH_NAME and hasattr(currentSynth, "catalog"):
-					preferred = currentSynth.catalog.language_for_voice(currentVoice)
+					currentVoice = str(getattr(currentSynth, "voice", "") or "")
+					if currentVoice in getattr(currentSynth, "availableVoices", {}):
+						preferred = currentVoice
+					else:
+						preferred = currentSynth.catalog.language_for_voice(currentVoice)
 			except Exception:
 				preferred = ""
 		if preferred not in self._preferredLanguageValues:
@@ -617,7 +621,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 						profile = dict(configuredProfile)
 						break
 			profile.setdefault("enabled", language.lower() in candidates)
-			profile["voice"] = self._valid_profile_voice(language, profile.get("voice"))
+			profile["voice"] = self._valid_profile_variant(language, profile.get("voice"))
 			profile["rate"] = self._profile_int(profile.get("rate"), int(self._speechDefaults["rate"]))
 			profile["rateBoost"] = self._profile_bool(profile.get("rateBoost"), bool(self._speechDefaults["rateBoost"]))
 			profile["pitch"] = self._profile_int(profile.get("pitch"), int(self._speechDefaults["pitch"]))
@@ -651,7 +655,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		speakers = self._speakersByLanguage.get(language, [])
 		return speakers[0].id if speakers else ""
 
-	def _valid_profile_voice(self, language: str, voice: object) -> str:
+	def _valid_profile_variant(self, language: str, voice: object) -> str:
 		voiceId = str(voice or "")
 		for speaker in self._speakersByLanguage.get(language, []):
 			if speaker.id == voiceId:
@@ -695,7 +699,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			self.autoProfileVoiceChoice.Clear()
 			for speaker in speakers:
 				self.autoProfileVoiceChoice.Append(self._format_voice_choice(speaker))
-			voice = self._valid_profile_voice(language, profile.get("voice"))
+			voice = self._valid_profile_variant(language, profile.get("voice"))
 			voiceIndex = next((index for index, speaker in enumerate(speakers) if speaker.id == voice), wx.NOT_FOUND)
 			self.autoProfileEnabledCheck.SetValue(bool(profile.get("enabled", False)))
 			self.autoProfileVoiceChoice.SetSelection(voiceIndex)
@@ -747,7 +751,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		if not self.autoLanguageCheck.GetValue():
 			return _(
 				"Automatic language profiles are off. "
-				"Google TTS uses NVDA's normal Speech Settings for voice, rate, pitch, volume, capitals, and spelling."
+				"Google TTS uses NVDA's normal Speech Settings for voice, variant, rate, pitch, volume, capitals, and spelling."
 			)
 		if not self._enabled_auto_language_candidates():
 			return _("Select at least one language profile to use automatic language profiles.")
@@ -835,7 +839,12 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		try:
 			currentSynth = synthDriverHandler.getSynth()
 			settingsRing = getattr(globalVars, "settingsRing", None)
-			if getattr(currentSynth, "name", "") == SYNTH_NAME and settingsRing is not None:
+			if getattr(currentSynth, "name", "") != SYNTH_NAME:
+				return
+			if settingsRing is not None:
 				settingsRing.updateSupportedSettings(currentSynth)
+			warmCurrentVoice = getattr(currentSynth, "_warm_current_voice_async", None)
+			if callable(warmCurrentVoice):
+				warmCurrentVoice()
 		except Exception:
 			log.debug("Could not refresh Google TTS supported speech settings.", exc_info=True)

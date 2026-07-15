@@ -16,10 +16,10 @@
 		<li><strong>Fully offline operation:</strong> All speech generation is processed locally on your computer. Once your desired voice packages are downloaded, no internet connection is required.</li>
 		<li><strong>Diverse languages and voices:</strong> Provides multiple voice packages across various languages, including Chrome OS voice packages (low latency, ideal for fast navigation) and Google Natural voice packages (natural intonation, ideal for reading long documents).</li>
 		<li><strong>Fast response and low latency:</strong> Optimized text segmentation and smart audio buffering so NVDA responds instantly when typing and navigating.</li>
-		<li><strong>Google TTS Voice Manager:</strong> Easily browse, download, or remove voice packages in batches through an accessible dialog.</li>
+		<li><strong>Google TTS Voice Manager:</strong> Easily browse, download, or remove voice packages in batches through an accessible dialog that shows whether installed packages are usable and which packages depend on each other.</li>
 		<li><strong>Quick Shortcut:</strong> Press <kbd>NVDA+Ctrl+Shift+G</kbd> anywhere to open Google TTS Voice Manager instantly.</li>
 		<li><strong>Chromium Browser Runtime Selection:</strong> Choose Google Chrome, Microsoft Edge, or Brave as the background Chromium browser runtime directly in NVDA settings. Google Chrome is the default choice; Microsoft Edge and Brave are available as fallbacks when they can run.</li>
-		<li><strong>Automatic language profiles:</strong> Use per-language voice profiles. With multiple enabled languages, the add-on can switch profiles sentence by sentence using bundled CLD2 language detection, with a preferred language used when text is unclear.</li>
+		<li><strong>Automatic language profiles:</strong> Use per-language profiles, each with its own variant and speech values. With multiple enabled languages, the add-on can switch profile variants sentence by sentence using bundled CLD2 language detection, with a preferred language used when text is unclear.</li>
 	</ul>
 
 	<h2>System Requirements</h2>
@@ -33,8 +33,8 @@
 	<ol>
 		<li>Open NVDA's <strong>Select Synthesizer</strong> dialog by pressing <kbd>NVDA+Ctrl+S</kbd> and choose <strong>Google TTS For NVDA</strong>.</li>
 		<li>If no voice packages are installed, NVDA will display a message indicating that no Google TTS For NVDA voices are installed. Press <strong>OK</strong> to open Google TTS Voice Manager and download a voice package. Press <strong>Cancel</strong> to keep using your current synthesizer for now.</li>
-		<li>In Google TTS Voice Manager, select the voice packages you want to use from the list and press <strong>Download checked voice packages</strong>.</li>
-		<li>Once downloaded, open <strong>Speech settings</strong> (<kbd>NVDA+Ctrl+V</kbd>) to select your preferred voice.</li>
+		<li>In Google TTS Voice Manager, open the <strong>Download</strong> tab, check the voice packages you want to use, and press <strong>Download checked voice packages</strong>.</li>
+		<li>Once downloaded, open <strong>Speech settings</strong> (<kbd>NVDA+Ctrl+V</kbd>) to select your preferred language and variant.</li>
 	</ol>
 
 	<h2>Managing Voices</h2>
@@ -43,14 +43,23 @@
 		<li>Press the shortcut <kbd>NVDA+Ctrl+Shift+G</kbd>, or</li>
 		<li>Go to <strong>NVDA Menu &rarr; Tools &rarr; Google TTS Voice Manager...</strong></li>
 	</ul>
-	<p>In Google TTS Voice Manager, you can use the <strong>Filter by language</strong> dropdown box to display only the voice packages for your desired language (e.g., English or Vietnamese) to find voices more quickly. Additionally, you can click <strong>Open voice packages folder</strong> if you wish to check where voice packages are stored on your computer.</p>
-	<p>Voice downloads and removals are handled in the background so you can continue using NVDA without interruption.</p>
+	<p>Google TTS Voice Manager has two tabs:</p>
+	<ul>
+		<li><strong>Installed:</strong> Shows voice packages that are already stored on your computer. The <strong>Status</strong> column tells you whether each package is <strong>Usable</strong>, not supported by the bundled engine, missing a required package, required by another installed package, or dependent on another package.</li>
+		<li><strong>Download:</strong> Shows packages that can be downloaded. The <strong>Status</strong> column explains whether a package is available to download, requires another package, already has its required package installed, or is required by other downloadable packages.</li>
+	</ul>
+	<p>To add voices, use the <strong>Download</strong> tab, check the packages you want, and press <strong>Download checked voice packages</strong>. To remove voices, use the <strong>Installed</strong> tab, check the packages you no longer want, and press <strong>Remove checked voice packages</strong>.</p>
+	<p>Some voice packages depend on another package. When you download a dependent package, Voice Manager can also download the required package. When you remove a package that other installed packages depend on, Voice Manager includes those dependent packages so you do not leave unusable voices behind.</p>
+	<p>Voice Manager protects you from accidentally removing the last usable voice package. If Google TTS For NVDA is not the current synthesizer, the warning defaults to <strong>No</strong>. If Google TTS For NVDA is the current synthesizer, Voice Manager asks you to switch to another synthesizer first and keeps the last usable package installed if you do not switch away.</p>
+	<p>You can use the <strong>Filter by language</strong> dropdown box on either tab to display only the voice packages for your desired language (e.g., English or Vietnamese) to find voices more quickly. Additionally, you can click <strong>Open voice packages folder</strong> if you wish to check where voice packages are stored on your computer.</p>
+	<p>Voice downloads and removals are handled in the background so you can continue using NVDA without interruption. Progress announcements are kept to broad milestones and final results so they do not repeat every small percentage change.</p>
 
 	<h2>Configuration</h2>
 	<h3>Speech Settings</h3>
 	<p>When automatic language profiles are off, NVDA's Speech settings dialog (<kbd>NVDA+Ctrl+V</kbd>) provides:</p>
 	<ul>
-		<li><strong>Voice:</strong> Choose a voice from your installed voice packages.</li>
+		<li><strong>Voice:</strong> Choose the installed Google TTS language.</li>
+		<li><strong>Variant:</strong> Choose the voice name within that language, including Chrome OS and Google Natural voices when installed.</li>
 		<li><strong>Rate:</strong> Adjust the reading speed.</li>
 		<li><strong>Rate Boost:</strong> Enable to double the speech rate for high-speed reading.</li>
 		<li><strong>Pitch:</strong> Adjust the pitch of the voice.</li>
@@ -66,21 +75,21 @@
 	<p>The Google TTS For NVDA settings category can also be opened with a custom input gesture. It has no shortcut assigned by default; assign one from <strong>NVDA Menu &rarr; Preferences &rarr; Input Gestures</strong> under the <strong>Google TTS For NVDA</strong> category.</p>
 
 	<h3>Automatic Language Profiles</h3>
-	<p>When <strong>Use automatic language profiles</strong> is enabled, detected sentences use the add-on's per-language profiles instead of the normal NVDA Speech settings. If only one language profile is enabled, that profile is used for every sentence. Your regular Speech Settings values remain available again when automatic language profiles are turned off.</p>
+	<p>When <strong>Use automatic language profiles</strong> is enabled, detected sentences use the add-on's per-language profiles instead of the normal NVDA Speech settings. If only one language profile is enabled, that profile is used for every sentence. Your regular Google TTS language and variant settings remain available again when automatic language profiles are turned off.</p>
 	<p>Automatic language profiles use bundled CLD2 detector libraries for both 32-bit (x86) and 64-bit (x64) NVDA builds. CLD2 results are accepted only when they are reliable enough for one of the enabled languages. If text is too short or unclear, the add-on uses conservative local language signals where available, then falls back to the preferred enabled language.</p>
 	<ol>
 		<li>Open <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>.</li>
 		<li>Enable <strong>Use automatic language profiles</strong>.</li>
 		<li>Select an <strong>Automatic language profile</strong>.</li>
 		<li>Check <strong>Use this language profile</strong> for each language you want automatic language profiles to use. Language profiles are off until you check them.</li>
-		<li>For each enabled language, choose its voice and set rate, rate boost, pitch, volume, capital-letter pitch, cap announcement, capital beep, and spelling behavior.</li>
+		<li>For each enabled language, choose its variant and set rate, rate boost, pitch, volume, capital-letter pitch, cap announcement, capital beep, and spelling behavior.</li>
 		<li>Choose the <strong>Preferred profile language</strong>. Only enabled languages appear in this list, and the preferred language is used when a sentence is unclear.</li>
 	</ol>
-	<p>Rate, pitch, and volume use slider controls like NVDA's Speech Settings. Capital-letter pitch uses the same numeric edit/spin control as NVDA's Speech Settings. The labels for voice, rate, rate boost, pitch, volume, and capital/spelling options use NVDA's own translated setting names where possible.</p>
+	<p>Rate, pitch, and volume use slider controls like NVDA's Speech Settings. Capital-letter pitch uses the same numeric edit/spin control as NVDA's Speech Settings. The labels for variant, rate, rate boost, pitch, volume, and capital/spelling options use NVDA's own translated setting names where possible.</p>
 	<p>Speech settings that are global to NVDA, such as punctuation and symbol level, automatic dialect switching, language change reporting, trusted voice language, Unicode normalization, Unicode Consortium data (including emoji), extra symbol dictionaries, delayed character descriptions, and cycle speech mode choices remain in NVDA's Speech Settings.</p>
 	<p>Automatic language profiles mark the language before NVDA processes text, so NVDA's symbol pronunciation and speech dictionary processing stay in the normal speech pipeline for the selected language context.</p>
-	<p>When automatic language profiles are off, NVDA voice dictionaries work normally for the currently selected Google TTS voice. When automatic language profiles are on, the add-on temporarily uses the voice dictionary for each enabled language profile's selected voice while NVDA processes that segment. NVDA's default and temporary dictionaries still follow NVDA's normal behavior.</p>
-	<p>While automatic language profiles are enabled, NVDA's Speech settings dialog will not offer the normal voice, rate, rate boost, pitch, and volume controls for this synthesizer. It will show a focusable notice directing you to the Google TTS For NVDA settings category instead. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech Settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.</p>
+	<p>When automatic language profiles are off, NVDA voice dictionaries work normally for the currently selected Google TTS variant. When automatic language profiles are on, the add-on temporarily uses the voice dictionary for each enabled language profile's selected variant while NVDA processes that segment. NVDA's default and temporary dictionaries still follow NVDA's normal behavior.</p>
+	<p>While automatic language profiles are enabled, NVDA's Speech settings dialog will not offer the normal voice, variant, rate, rate boost, pitch, and volume controls for this synthesizer. It will show a focusable notice directing you to the Google TTS For NVDA settings category instead. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech Settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.</p>
 
 	<h2>Troubleshooting Edge Runtime Silence</h2>
 	<p>If you choose <strong>Microsoft Edge</strong> as the Chromium browser runtime, Google TTS For NVDA also checks whether Microsoft Edge WebView2 Runtime is available. Edge may be installed while WebView2 is missing or damaged, and in that case the add-on cannot use Edge for speech. Google Chrome and Brave do not depend on WebView2.</p>
@@ -110,7 +119,7 @@
 	<ul>
 		<li><strong>Chromium Browser Runtime Selection:</strong> Added an option to choose a supported Chromium browser runtime directly in NVDA settings (<kbd>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</kbd>), including Google Chrome and Microsoft Edge.</li>
 		<li><strong>Connection &amp; Cache Stability:</strong> Moved browser profile storage to <code>AppData\Local</code> to preserve compiled WASM cache across NVDA restarts and automatically hide background browser helper windows.</li>
-		<li><strong>Google TTS Voice Manager Enhancements:</strong> Added a <strong>Filter by language</strong> dropdown, improved keyboard navigation and focus management for screen readers, and added automatic detection and cleanup of orphaned voice packages.</li>
+		<li><strong>Google TTS Voice Manager Enhancements:</strong> Added a <strong>Filter by language</strong> dropdown, package usability and dependency status, safer removal of packages that would leave no usable voices, quieter progress announcements, improved keyboard navigation and focus management for screen readers, and automatic detection and cleanup of orphaned voice packages.</li>
 		<li><strong>Speech Responsiveness &amp; Reliability:</strong> Fixed cut-off speech on the first utterance after NVDA startup or synthesizer switching, reduced speech synthesis latency, and improved speech interruption handling.</li>
 		<li><strong>Expanded Voice Catalog:</strong> Integrated 180 Google TTS voice packages and normalized language codes (160 packages are fully downloadable and usable immediately, while 20 packages are currently not yet compatible with the WASM engine).</li>
 		<li><strong>Localization &amp; Vietnamese Translation:</strong> Implemented a full localization system and added complete Vietnamese translations for the user interface and documentation.</li>

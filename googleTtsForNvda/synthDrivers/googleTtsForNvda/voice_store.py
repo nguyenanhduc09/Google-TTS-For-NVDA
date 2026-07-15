@@ -186,12 +186,25 @@ def physically_installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
 
 
 def usable_installed_packages(packages: list[VoicePackage]) -> list[VoicePackage]:
-	installedIds = {package.id for package in packages}
+	usableIds = {
+		package.id
+		for package in packages
+		if is_package_supported_by_engine(package)
+	}
+	while True:
+		nextUsableIds = {
+			package.id
+			for package in packages
+			if package.id in usableIds
+			and (not package.dependentVoiceId or package.dependentVoiceId in usableIds)
+		}
+		if nextUsableIds == usableIds:
+			break
+		usableIds = nextUsableIds
 	return [
 		package
 		for package in packages
-		if is_package_supported_by_engine(package)
-		and (not package.dependentVoiceId or package.dependentVoiceId in installedIds)
+		if package.id in usableIds
 	]
 
 

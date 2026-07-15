@@ -66,6 +66,7 @@ _originalVoiceSettingsMakeSettings: Any | None = None
 _originalSpeechProcessText: Any | None = None
 _originalSpeechGetSpellingSpeech: Any | None = None
 _originalShortcutKeysShouldUseSpellingFunctionality: Any | None = None
+_originalSpeechDictLoadVoiceDict: Any | None = None
 _originalPopupSettingsDialog: Any | None = None
 _patchedAutoSettingsGetSettingMaker: Any | None = None
 _patchedAutoSettingsUpdateValueForControl: Any | None = None
@@ -74,6 +75,7 @@ _patchedVoiceSettingsMakeSettings: Any | None = None
 _patchedSpeechProcessText: Any | None = None
 _patchedSpeechGetSpellingSpeech: Any | None = None
 _patchedShortcutKeysShouldUseSpellingFunctionality: Any | None = None
+_patchedSpeechDictLoadVoiceDict: Any | None = None
 _patchedPopupSettingsDialog: Any | None = None
 _autoLanguageSpeechFilterRegistered = False
 _missingVoicesPromptActive = False
@@ -573,6 +575,19 @@ def _patch_read_only_text_setting() -> None:
 			except Exception:
 				log.debug("Could not update Google TTS read-only speech setting.", exc_info=True)
 			return
+		if getattr(settingsStorage, "name", "") == SYNTH_NAME and getattr(setting, "id", "") == "variant":
+			try:
+				options = list(getattr(settingsStorage, "availableVariants").values())
+				control = getattr(self, "variantList", None)
+				if control is not None:
+					currentOptions = getattr(self, "_variants", [])
+					if [option.id for option in currentOptions] != [option.id for option in options]:
+						setattr(self, "_variants", options)
+						control.Clear()
+						for option in options:
+							control.Append(option.displayName)
+			except Exception:
+				log.debug("Could not refresh Google TTS variant choices.", exc_info=True)
 		return originalUpdateValueForControl(self, setting, settingsStorage)
 
 	def _on_discard(self: Any) -> None:
@@ -659,8 +674,8 @@ def _show_voice_dictionary_auto_language_message() -> None:
 	gui.messageBox(
 		_(
 			"Voice dictionary preferences are unavailable while automatic language profiles are enabled.\n\n"
-			"Google TTS For NVDA may switch between several profile voices while speaking, so NVDA cannot "
-			"know which single voice dictionary to edit.\n\n"
+			"Google TTS For NVDA may switch between several profile variants while speaking, so NVDA cannot "
+			"know which single variant voice dictionary to edit.\n\n"
 			"Open the Google TTS For NVDA category in NVDA Settings and turn off automatic language profiles, "
 			"then open Voice dictionary again."
 		),
@@ -837,7 +852,7 @@ def _auto_language_for_process_text(synth: Any, locale: str, text: str) -> str |
 	return candidateForLocale or candidates[0]
 
 
-def _auto_profile_voice_for_language(synth: Any, language: str | None) -> str | None:
+def _auto_profile_variant_for_language(synth: Any, language: str | None) -> str | None:
 	candidates = synth._auto_language_candidates()
 	if not language or not candidates:
 		return None
@@ -941,17 +956,18 @@ def _single_auto_profile_character_settings() -> dict[str, Any] | None:
 
 
 class _VoiceDictionarySynthProxy:
-	"""Expose another voice to NVDA's voice dictionary loader without changing the live synth."""
+	"""Expose a speaker variant to NVDA's voice dictionary loader without changing the live synth."""
 
 	def __init__(self, synth: Any, voice: str) -> None:
 		self._synth = synth
 		self.name = getattr(synth, "name", "")
-		self.availableVoices = getattr(synth, "availableVoices", {})
+		speakerVoiceInfos = getattr(synth, "_speaker_voice_infos", None)
+		self.availableVoices = speakerVoiceInfos() if callable(speakerVoiceInfos) else getattr(synth, "availableVoices", {})
 		self.voice = voice
 
 	def isSupported(self, setting: str) -> bool:
 		if setting == "voice":
-			return self.voice in self.availableVoices and self._synth.isSupported(setting)
+			return self.voice in self.availableVoices
 		return self._synth.isSupported(setting)
 
 	def __getattr__(self, name: str) -> Any:
@@ -959,11 +975,48 @@ class _VoiceDictionarySynthProxy:
 
 
 def _load_voice_dictionary_for_voice(synth: Any, voice: str) -> bool:
-	availableVoices = getattr(synth, "availableVoices", {})
+	speakerVoiceInfos = getattr(synth, "_speaker_voice_infos", None)
+	availableVoices = speakerVoiceInfos() if callable(speakerVoiceInfos) else getattr(synth, "availableVoices", {})
 	if not voice or voice not in availableVoices:
 		return False
-	speechDictHandler.loadVoiceDict(_VoiceDictionarySynthProxy(synth, voice))
+	loadVoiceDict = _originalSpeechDictLoadVoiceDict or speechDictHandler.loadVoiceDict
+	loadVoiceDict(_VoiceDictionarySynthProxy(synth, voice))
 	return True
+
+
+def _current_google_tts_speaker_id(synth: Any) -> str:
+	return str(getattr(synth, "variant", "") or getattr(synth, "voice", "") or "")
+
+
+def _patch_google_tts_voice_dictionary_loading() -> None:
+	global _originalSpeechDictLoadVoiceDict, _patchedSpeechDictLoadVoiceDict
+	if _originalSpeechDictLoadVoiceDict is not None:
+		return
+	_originalSpeechDictLoadVoiceDict = speechDictHandler.loadVoiceDict
+	originalLoadVoiceDict = _originalSpeechDictLoadVoiceDict
+
+	def load_voice_dictionary_for_google_tts_variant(synth: Any) -> None:
+		try:
+			if getattr(synth, "name", "") == SYNTH_NAME:
+				voice = _current_google_tts_speaker_id(synth)
+				if voice and _load_voice_dictionary_for_voice(synth, voice):
+					return
+		except Exception:
+			log.debug("Could not load Google TTS voice dictionary for the selected variant.", exc_info=True)
+		originalLoadVoiceDict(synth)
+
+	_patchedSpeechDictLoadVoiceDict = load_voice_dictionary_for_google_tts_variant
+	speechDictHandler.loadVoiceDict = load_voice_dictionary_for_google_tts_variant
+
+
+def _unpatch_google_tts_voice_dictionary_loading() -> None:
+	global _originalSpeechDictLoadVoiceDict, _patchedSpeechDictLoadVoiceDict
+	if _originalSpeechDictLoadVoiceDict is None:
+		return
+	if getattr(speechDictHandler, "loadVoiceDict", None) is _patchedSpeechDictLoadVoiceDict:
+		speechDictHandler.loadVoiceDict = _originalSpeechDictLoadVoiceDict
+	_originalSpeechDictLoadVoiceDict = None
+	_patchedSpeechDictLoadVoiceDict = None
 
 
 def _filter_auto_language_speech_sequence(speechSequence: list[Any]) -> list[Any]:
@@ -971,7 +1024,9 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any]) -> list[Any
 		synth = synthDriverHandler.getSynth()
 		if getattr(synth, "name", "") != SYNTH_NAME or not synth._auto_language_detection_enabled():
 			return speechSequence
-		baseLanguage = synth.catalog.language_for_voice(synth.voice)
+		baseLanguage = synth.voice
+		if baseLanguage not in getattr(synth, "availableVoices", {}):
+			baseLanguage = synth.catalog.language_for_voice(synth.voice)
 	except Exception:
 		return speechSequence
 	filtered: list[Any] = []
@@ -1056,16 +1111,17 @@ def _patch_auto_language_voice_dictionary() -> None:
 				return call_original_with_locale()
 			targetLanguage = _auto_language_for_process_text(synth, locale, text)
 			effectiveLocale = _nvda_locale_for_language(targetLanguage) or _nvda_locale_for_language(locale) or locale
-			targetVoice = _auto_profile_voice_for_language(synth, targetLanguage or effectiveLocale)
+			targetVariant = _auto_profile_variant_for_language(synth, targetLanguage or effectiveLocale)
+			currentVariant = _current_google_tts_speaker_id(synth)
 			restoreVoiceDict = False
 			try:
-				if targetVoice and targetVoice != getattr(synth, "voice", ""):
-					restoreVoiceDict = _load_voice_dictionary_for_voice(synth, targetVoice)
+				if targetVariant and targetVariant != currentVariant:
+					restoreVoiceDict = _load_voice_dictionary_for_voice(synth, targetVariant)
 				return call_original_with_locale(effectiveLocale)
 			finally:
 				if restoreVoiceDict:
 					try:
-						speechDictHandler.loadVoiceDict(synth)
+						_load_voice_dictionary_for_voice(synth, currentVariant)
 					except Exception:
 						log.debug("Could not restore Google TTS voice dictionary.", exc_info=True)
 		except Exception:
@@ -1175,6 +1231,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			_patch_synth_selection()
 			_patch_read_only_text_setting()
 			_patch_voice_dictionary_dialog()
+			_patch_google_tts_voice_dictionary_loading()
 			_patch_auto_language_voice_dictionary()
 			_register_auto_language_speech_filter()
 			if GoogleTtsSettingsPanel not in gui.settingsDialogs.NVDASettingsDialog.categoryClasses:
@@ -1204,6 +1261,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		_unpatch_synth_selection()
 		_unpatch_read_only_text_setting()
 		_unpatch_voice_dictionary_dialog()
+		_unpatch_google_tts_voice_dictionary_loading()
 		_unregister_auto_language_speech_filter()
 		_unpatch_auto_language_voice_dictionary()
 		super().terminate()

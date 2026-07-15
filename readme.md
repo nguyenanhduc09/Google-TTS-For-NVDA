@@ -26,8 +26,8 @@ We highly welcome and appreciate any feedback from the community to help us impr
 * **100% Offline Speech**: Speech is rendered locally via a supported headless Chromium browser runtime, such as Google Chrome, Microsoft Edge, or Brave.
 * **Low Latency**: Uses current-package warm-up and advanced background text segmentation to improve speech responsiveness.
 * **Volatile Audio Cache**: In-memory cache for short phrases (under 5000 characters) to optimize repeated announcements safely.
-* **Automatic Language Profiles**: Optionally use per-language voice profiles. With multiple enabled languages, the add-on can switch voices sentence by sentence using bundled CLD2 language detection; with one enabled language, that profile is used for every sentence.
-* **Voice Manager**: Easily browse, filter by language, download, or remove voice packages in batches using a multi-select checkbox interface. Also includes an **Open voice packages folder** button to inspect storage locations.
+* **Automatic Language Profiles**: Optionally use per-language profiles, each with its own variant and speech values. With multiple enabled languages, the add-on can switch profile variants sentence by sentence using bundled CLD2 language detection; with one enabled language, that profile is used for every sentence.
+* **Voice Manager**: Easily browse, filter by language, download, or remove voice packages in batches using a multi-select checkbox interface. It shows whether installed packages are usable, explains package dependencies, protects against removing the last usable voice package by mistake, and includes an **Open voice packages folder** button to inspect storage locations.
 * **Background Operations**: Non-blocking downloads and removals on background threads.
 * **Accessible Shortcut**: Press **`NVDA+Ctrl+Shift+G`** to open the Voice Manager instantly.
 * **Chromium Browser Runtime Selection**: Choose Google Chrome, Microsoft Edge, or Brave as the underlying engine directly from the NVDA settings panel. Google Chrome is the default runtime, with Microsoft Edge and Brave available as fallbacks when they can run.
@@ -55,7 +55,24 @@ After installation:
 1. Open NVDA's **Select Synthesizer** dialog with **`NVDA+Ctrl+S`** and choose **Google TTS For NVDA**.
 2. Upon first selecting **Google TTS For NVDA** as your synthesizer, if no voice packages are installed, NVDA will prompt you indicating that no Google TTS For NVDA voices are installed. Press **OK** to open Google TTS Voice Manager and download a voice package, or press **Cancel** to keep using your current synthesizer.
 3. Alternatively, you can also press **`NVDA+Ctrl+Shift+G`** or go to **NVDA Menu -> Tools -> Google TTS Voice Manager...** at any time to manage your voice packages.
-4. In Google TTS Voice Manager, you can use the **Filter by language** dropdown to quickly find voices for your language, check the boxes next to the voice packages you want, and click **Download checked voice packages**.
+4. In Google TTS Voice Manager, open the **Download** tab, use **Filter by language** to quickly find voices for your language, check the boxes next to the voice packages you want, and click **Download checked voice packages**.
+
+---
+
+## Managing Voice Packages
+
+Google TTS Voice Manager has two tabs:
+
+* **Installed**: Shows voice packages already stored on your computer. The **Status** column tells you whether each package is usable, unsupported by the bundled engine, missing a required package, required by another installed package, or dependent on another package.
+* **Download**: Shows packages available to download. The **Status** column explains whether a package is available, requires another package, already has its required package installed, or is required by other downloadable packages.
+
+To add voices, use the **Download** tab, check the packages you want, and click **Download checked voice packages**. To remove voices, use the **Installed** tab, check the packages you no longer want, and click **Remove checked voice packages**.
+
+Some voice packages depend on another package. When you download a dependent package, Voice Manager can also download the required package. When you remove a package that other installed packages depend on, Voice Manager includes those dependent packages so you do not leave unusable voices behind.
+
+Voice Manager protects you from accidentally removing the last usable voice package. If Google TTS For NVDA is not the current synthesizer, the warning defaults to **No**. If Google TTS For NVDA is the current synthesizer, Voice Manager asks you to switch to another synthesizer first and keeps the last usable package installed if you do not switch away.
+
+Downloads and removals run in the background. Progress announcements are kept to broad milestones and final results so they do not repeat every small percentage change.
 
 ---
 
@@ -65,7 +82,8 @@ After installation:
 
 When automatic language profiles are off, the synthesizer supports the standard NVDA Speech settings ring:
 
-* **Voice**: Choose from your installed speaker/language voice packages.
+* **Voice**: Choose the installed Google TTS language.
+* **Variant**: Choose the voice name within that language, including Chrome OS and Google Natural voices when installed.
 * **Rate**: Speech rate. Non-SeaNet packages use the Chromium browser runtime rate path; SeaNet packages may use post-synthesis artificial rate processing at higher speeds.
 * **Rate Boost**: Enable to double the computed speech rate for fast reading. High-speed SeaNet speech may use more CPU because the add-on processes generated audio after synthesis.
 * **Pitch**: Speech pitch adjustment.
@@ -79,7 +97,7 @@ The add-on includes a custom settings panel under **NVDA Settings (NVDA Menu -> 
 
 ### Automatic Language Profiles
 
-When you enable **Use automatic language profiles**, the add-on uses its own per-language profiles instead of the normal NVDA Speech settings for detected sentences. If only one language profile is enabled, that profile is used for every sentence. This keeps your regular Google TTS voice settings unchanged for times when automatic language profiles are off.
+When you enable **Use automatic language profiles**, the add-on uses its own per-language profiles instead of the normal NVDA Speech settings for detected sentences. If only one language profile is enabled, that profile is used for every sentence. This keeps your regular Google TTS language and variant settings unchanged for times when automatic language profiles are off.
 
 Automatic language profiles use bundled CLD2 detector libraries for both 32-bit (x86) and 64-bit (x64) NVDA builds. CLD2 results are accepted only when they are reliable enough for one of the enabled languages. If text is too short or unclear, the add-on uses conservative local language signals where available, then falls back to the preferred enabled language.
 
@@ -88,15 +106,15 @@ In the Google TTS For NVDA settings category:
 1. Turn on **Use automatic language profiles**.
 2. Choose an **Automatic language profile**.
 3. Check **Use this language profile** for each language you want automatic language profiles to use. Language profiles are off until you check them.
-4. For each enabled language, choose its voice and adjust rate, rate boost, pitch, volume, capital-letter pitch, cap announcement, capital beep, and spelling behavior.
+4. For each enabled language, choose its variant and adjust rate, rate boost, pitch, volume, capital-letter pitch, cap announcement, capital beep, and spelling behavior.
 5. Choose the **Preferred profile language** from the enabled languages. This language is used when a sentence is unclear or does not contain enough language clues.
 
-Only enabled languages appear in the preferred language list. Rate, pitch, and volume use sliders like NVDA's Speech settings. Capital-letter pitch uses the same numeric edit/spin control as NVDA's Speech Settings. The labels for voice, rate, rate boost, pitch, volume, and capital/spelling options follow NVDA's own translated setting names where possible.
+Only enabled languages appear in the preferred language list. Rate, pitch, and volume use sliders like NVDA's Speech settings. Capital-letter pitch uses the same numeric edit/spin control as NVDA's Speech Settings. The labels for variant, rate, rate boost, pitch, volume, and capital/spelling options follow NVDA's own translated setting names where possible.
 
 The Google TTS settings category includes a focusable status line for automatic language profiles. It changes with the current state:
 
 * If no language voice package is installed, it asks you to install at least one language voice package.
-* If automatic language profiles are off, it explains that Google TTS is using NVDA's normal Speech Settings values for voice, rate, pitch, volume, capitals, and spelling.
+* If automatic language profiles are off, it explains that Google TTS is using NVDA's normal Speech Settings values for voice, variant, rate, pitch, volume, capitals, and spelling.
 * If automatic language profiles are on but no language profile is selected, it asks you to select at least one language profile.
 * If one or more profiles are selected, it explains that the selected installed language profiles are used; with one selected profile, that profile is used for every sentence.
 
@@ -104,9 +122,9 @@ Speech settings that are global to NVDA, such as punctuation and symbol level, a
 
 Automatic language profiles mark the language before NVDA processes text, so NVDA's symbol pronunciation and speech dictionary processing stay in the normal speech pipeline for the selected language context.
 
-When automatic language profiles are off, NVDA voice dictionaries work normally for the currently selected Google TTS voice. When automatic language profiles are on, the add-on temporarily uses the voice dictionary for each enabled language profile's selected voice while NVDA processes that segment. NVDA's default and temporary dictionaries still follow NVDA's normal behavior.
+When automatic language profiles are off, NVDA voice dictionaries work normally for the currently selected Google TTS variant. When automatic language profiles are on, the add-on temporarily uses the voice dictionary for each enabled language profile's selected variant while NVDA processes that segment. NVDA's default and temporary dictionaries still follow NVDA's normal behavior.
 
-While automatic language profiles are enabled, NVDA's Speech settings will not offer the normal voice, rate, rate boost, pitch, and volume controls for this synthesizer. Instead, it shows a focusable notice telling you to configure these values from **NVDA Settings -> Google TTS For NVDA**. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.
+While automatic language profiles are enabled, NVDA's Speech settings will not offer the normal voice, variant, rate, rate boost, pitch, and volume controls for this synthesizer. Instead, it shows a focusable notice telling you to configure these values from **NVDA Settings -> Google TTS For NVDA**. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.
 
 ---
 

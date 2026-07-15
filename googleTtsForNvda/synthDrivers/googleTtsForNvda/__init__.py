@@ -15,6 +15,7 @@ from typing import Any
 import addonHandler
 import config
 import globalVars
+import languageHandler
 import synthDriverHandler
 import wx
 from autoSettingsUtils.driverSetting import DriverSetting
@@ -75,6 +76,7 @@ _URL_TOKEN_SEGMENT_MAX_CHARS = 220
 _FORCED_SEGMENT_MIN_CHARS = 32
 _FORCED_SEGMENT_FORWARD_LOOKAHEAD = 24
 _FORCED_SEGMENT_HARD_MAX_CHARS = 256
+_PRELOAD_RESUME_DELAY_SECONDS = 0.45
 _NO_SPACE_SCRIPT_SIGNAL_MIN_CHARS = 12
 _NO_SPACE_SCRIPT_SIGNAL_MIN_RATIO = 0.55
 _NO_SPACE_SCRIPT_COMBINING_LOOKAHEAD = 8
@@ -202,7 +204,7 @@ _NO_SPACE_SCRIPT_PROFILES = (
 	(((0xAA00, 0xAA5F),), 70),
 	(((0xAA80, 0xAADF),), 70),
 )
-_VOICE_WARMUP_TEXT = "a"
+_VOICE_WARMUP_TEXT = " "
 _AUTO_LANGUAGE_NOTICE_ID = "notice"
 _AUTO_DETECT_MIN_SCORE = 2
 _AUTO_DETECT_MIN_MARGIN = 1
@@ -361,6 +363,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	description = _("Google TTS For NVDA")
 	_STANDARD_SUPPORTED_SETTINGS = (
 		synthDriverHandler.SynthDriver.VoiceSetting(),
+		synthDriverHandler.SynthDriver.VariantSetting(),
 		synthDriverHandler.SynthDriver.RateSetting(),
 		synthDriverHandler.SynthDriver.RateBoostSetting(),
 		synthDriverHandler.SynthDriver.PitchSetting(),
@@ -445,8 +448,12 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					"Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
 				)
 			)
+		self._speakersByLanguage = self.catalog.voices_by_language()
+		self._speakersByPackage = self._build_speakers_by_package()
+		self._speakerVoiceInfos = self._build_speaker_voice_infos()
+		self._variantsByLanguage: dict[str, OrderedDict[str, VoiceInfo]] = {}
 		self.availableVoices = self._build_available_voices()
-		self.availableLanguages = {speaker.language for speaker in self.catalog.speakers}
+		self.availableLanguages = set(self._speakersByLanguage)
 		self._bridge = ChromeTtsBridge(self.catalog)
 		self._playerOutputDevice = self._current_output_device()
 		self._player = self._create_wave_player(self._playerOutputDevice)
@@ -465,6 +472,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		)
 		self._worker.start()
 		self.__voice = self._initial_voice()
+		self.__variant = self._initial_variant(self.__voice)
+		self._availableVariants = self._build_available_variants(self.__voice)
 		self._rate = 50
 		self._rateBoost = False
 		self._pitch = 50
@@ -606,7 +615,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	def speak(self, speechSequence: list[Any]) -> None:
 		sequence = list(speechSequence)
 		cancelEvent = threading.Event()
-		voice = self.__voice
+		voice = self._current_speaker_id()
 		rate = self._rate
 		rateBoost = self._rateBoost
 		pitch = self._pitch
@@ -665,10 +674,61 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 	def _build_available_voices(self) -> "OrderedDict[str, VoiceInfo]":
 		voices: OrderedDict[str, VoiceInfo] = OrderedDict()
+		for language in self._speakersByLanguage:
+			voices[language] = VoiceInfo(language, self._language_display_name(language), language)
+		return voices
+
+	def _language_display_name(self, language: str) -> str:
+		try:
+			description = languageHandler.getLanguageDescription(language.replace("-", "_"))
+			if description:
+				return description
+		except Exception:
+			log.debug("Could not resolve Google TTS language display name.", exc_info=True)
+		return language
+
+	def _build_speakers_by_package(self) -> dict[str, list[Any]]:
+		speakersByPackage: dict[str, list[Any]] = {}
+		for speaker in self.catalog.speakers:
+			speakersByPackage.setdefault(speaker.packageId, []).append(speaker)
+		return speakersByPackage
+
+	def _build_speaker_voice_infos(self) -> "OrderedDict[str, VoiceInfo]":
+		voices: OrderedDict[str, VoiceInfo] = OrderedDict()
 		for speaker in self.catalog.speakers:
 			label = f"{speaker.name} ({speaker.language})"
 			voices[speaker.id] = VoiceInfo(speaker.id, label, speaker.language)
 		return voices
+
+	def _speaker_voice_infos(self) -> "OrderedDict[str, VoiceInfo]":
+		return OrderedDict(self._speakerVoiceInfos)
+
+	def _speakers_for_language(self, language: str | None) -> list[Any]:
+		if not language:
+			return []
+		speakers = self._speakersByLanguage.get(language)
+		if speakers is not None:
+			return list(speakers)
+		matches: list[Any] = []
+		for speakerLanguage, languageSpeakers in self._speakersByLanguage.items():
+			if self._language_matches(speakerLanguage, language):
+				matches.extend(languageSpeakers)
+		return matches
+
+	def _build_available_variants(self, language: str | None = None) -> "OrderedDict[str, VoiceInfo]":
+		targetLanguage = language or getattr(self, "_SynthDriver__voice", "")
+		cachedVariants = self._variantsByLanguage.get(targetLanguage)
+		if cachedVariants is not None:
+			return OrderedDict(cachedVariants)
+		variants: OrderedDict[str, VoiceInfo] = OrderedDict()
+		for speaker in self._speakers_for_language(targetLanguage):
+			variants[speaker.id] = VoiceInfo(speaker.id, speaker.name, speaker.language)
+		if not variants:
+			for speaker in self.catalog.speakers:
+				variants[speaker.id] = VoiceInfo(speaker.id, speaker.name, speaker.language)
+				break
+		self._variantsByLanguage[targetLanguage] = variants
+		return OrderedDict(variants)
 
 	def _get_availableNotices(self) -> "OrderedDict[str, VoiceInfo]":
 		message = self._auto_language_notice_message()
@@ -681,10 +741,62 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				return configured
 		except Exception:
 			pass
-		for speaker in self.catalog.speakers:
-			if speaker.language == "en-US":
-				return speaker.id
+		if "en-US" in self.availableVoices:
+			return "en-US"
 		return next(iter(self.availableVoices))
+
+	def _initial_variant(self, language: str) -> str:
+		variants = self._build_available_variants(language)
+		try:
+			configuredVariant = config.conf["speech"][self.name]["variant"]
+			if configuredVariant in variants:
+				return configuredVariant
+		except Exception:
+			pass
+		return next(iter(variants))
+
+	def _ensure_variant_config_compat(self) -> None:
+		try:
+			synthConfig = config.conf["speech"][self.name]
+		except Exception:
+			return
+		try:
+			configuredVoice = str(synthConfig.get("voice") or "")
+		except Exception:
+			configuredVoice = ""
+		try:
+			configuredVariant = str(synthConfig["variant"] or "")
+		except Exception:
+			configuredVariant = ""
+
+		if configuredVoice in self.availableVoices:
+			language = configuredVoice
+			variants = self._build_available_variants(language)
+			if configuredVariant in variants:
+				return
+			try:
+				synthConfig["variant"] = next(iter(variants))
+			except Exception:
+				log.debug("Could not initialize Google TTS variant setting.", exc_info=True)
+			return
+
+		try:
+			language = self.catalog.language_for_voice(configuredVoice)
+		except Exception:
+			language = self.__voice
+			configuredVoice = ""
+		variants = self._build_available_variants(language)
+		replacementVariant = configuredVoice if configuredVoice in variants else next(iter(variants), "")
+		try:
+			synthConfig["voice"] = language
+			if replacementVariant:
+				synthConfig["variant"] = replacementVariant
+		except Exception:
+			log.debug("Could not migrate Google TTS voice/variant settings.", exc_info=True)
+
+	def loadSettings(self, onlyChanged: bool = False) -> None:
+		self._ensure_variant_config_compat()
+		super().loadSettings(onlyChanged)
 
 	def _iter_speech_chunks(
 		self,
@@ -1566,8 +1678,6 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		)
 
 	def _voice_matches_language(self, voice: str, language: str | None) -> bool:
-		if voice not in self.availableVoices:
-			return False
 		if not language:
 			return True
 		try:
@@ -1678,7 +1788,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		for language in candidateLanguages:
 			if self._normalize_language(language) == configuredKey:
 				return language
-		fallbackLanguage = self.catalog.language_for_voice(fallbackVoice)
+		try:
+			fallbackLanguage = self.catalog.language_for_voice(fallbackVoice)
+		except Exception:
+			fallbackLanguage = fallbackVoice
 		fallbackRoot = self._language_root(fallbackLanguage)
 		for language in candidateLanguages:
 			if self._language_root(language) == fallbackRoot:
@@ -1773,7 +1886,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		voice: str | None = None,
 		rateBoost: bool | None = None,
 	) -> dict[str, Any]:
-		speaker = self.catalog.speaker_for_voice(voice or self.__voice)
+		speaker = self.catalog.speaker_for_voice(voice or self._current_speaker_id())
 		package = self.catalog.package_for_voice(speaker.id)
 		volumeLevel = max(0.0, min(1.0, volume / 100.0))
 		outputGain = max(0.0, min(_OUTPUT_GAIN_MAKEUP, volumeLevel * _OUTPUT_GAIN_MAKEUP))
@@ -1799,23 +1912,33 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 	def _voice_for_language(self, lang: str | None, fallbackVoice: str) -> str:
 		if not lang:
-			return fallbackVoice
+			return self._speaker_for_voice_or_language(fallbackVoice)
 		normalizedLang = self._normalize_language(lang)
 		if not normalizedLang:
-			return fallbackVoice
+			return self._speaker_for_voice_or_language(fallbackVoice)
+		fallbackVoice = self._speaker_for_voice_or_language(fallbackVoice)
 		fallbackSpeaker = self.catalog.speaker_for_voice(fallbackVoice)
 		if self._language_matches(fallbackSpeaker.language, normalizedLang):
 			return fallbackVoice
-		for speaker in self.catalog.speakers:
-			if self._language_matches(speaker.language, normalizedLang):
-				return speaker.id
+		for speaker in self._speakers_for_language(normalizedLang):
+			return speaker.id
 		rootLang = normalizedLang.split("-", 1)[0]
 		if self._normalize_language(fallbackSpeaker.language).split("-", 1)[0] == rootLang:
 			return fallbackVoice
-		for speaker in self.catalog.speakers:
-			if self._normalize_language(speaker.language).split("-", 1)[0] == rootLang:
-				return speaker.id
+		for language, speakers in self._speakersByLanguage.items():
+			if self._normalize_language(language).split("-", 1)[0] == rootLang:
+				return speakers[0].id
 		return fallbackVoice
+
+	def _speaker_for_voice_or_language(self, value: str | None) -> str:
+		if value:
+			try:
+				return self.catalog.speaker_for_voice(value).id
+			except Exception:
+				pass
+			for speaker in self._speakers_for_language(value):
+				return speaker.id
+		return self._current_speaker_id()
 
 	def _normalize_language(self, lang: str | None) -> str:
 		return str(lang or "").replace("_", "-").lower()
@@ -1867,18 +1990,146 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		if value not in self.availableVoices:
 			value = next(iter(self.availableVoices))
 		self.__voice = value
-		self._warm_current_voice_async()
+		self._availableVariants = self._build_available_variants(value)
+		if getattr(self, "_SynthDriver__variant", "") not in self._availableVariants:
+			self.__variant = next(iter(self._availableVariants))
+		self._warm_current_voice_async(delay=_PRELOAD_RESUME_DELAY_SECONDS)
 
-	def _warm_current_voice_async(self) -> None:
+	def _get_variant(self) -> str:
+		return self._current_speaker_id()
+
+	def _set_variant(self, value: str) -> None:
+		variants = self._getAvailableVariants()
+		if value in variants:
+			self.__variant = value
+		else:
+			self.__variant = next(iter(variants))
+		self._warm_current_voice_async(delay=_PRELOAD_RESUME_DELAY_SECONDS)
+
+	def _getAvailableVariants(self) -> "OrderedDict[str, VoiceInfo]":
+		return self._build_available_variants(self.__voice)
+
+	def _current_speaker_id(self) -> str:
+		variants = self._build_available_variants(self.__voice)
+		if getattr(self, "_SynthDriver__variant", "") in variants:
+			return self.__variant
+		self._availableVariants = variants
+		self.__variant = next(iter(variants))
+		return self.__variant
+
+	def _warmup_voice_ids(self) -> list[str]:
+		currentVoice = self._current_speaker_id()
+		if not self._auto_language_detection_enabled():
+			return self._warmup_voice_ids_for_voice(currentVoice)
+		candidateLanguages = self._auto_language_candidates_in_warmup_order(currentVoice)
+		if not candidateLanguages:
+			return self._warmup_voice_ids_for_voice(currentVoice)
+
+		voiceIds: list[str] = []
+		seenPackages: set[str] = set()
+		for language in candidateLanguages:
+			profile = self._auto_language_profile(
+				language,
+				currentVoice,
+				self._rate,
+				self._rateBoost,
+				self._pitch,
+				self._volume,
+			)
+			voiceId = str(profile.get("voice") or "")
+			if not voiceId:
+				continue
+			for warmupVoiceId in self._warmup_voice_ids_for_voice(voiceId):
+				try:
+					packageId = self.catalog.package_for_voice(warmupVoiceId).id
+				except Exception:
+					log.debug("Could not resolve Google TTS preload package for %s.", warmupVoiceId, exc_info=True)
+					continue
+				if packageId in seenPackages:
+					continue
+				seenPackages.add(packageId)
+				voiceIds.append(warmupVoiceId)
+		return voiceIds or [currentVoice]
+
+	def _auto_language_candidates_in_warmup_order(self, currentVoice: str) -> list[str]:
+		candidateLanguages = self._auto_language_candidates()
+		if len(candidateLanguages) <= 1:
+			return candidateLanguages
+		orderedLanguages = list(candidateLanguages)
+		preferredLanguage = self._auto_language_preferred(orderedLanguages, currentVoice)
+		if preferredLanguage in orderedLanguages:
+			orderedLanguages.remove(preferredLanguage)
+			orderedLanguages.insert(0, preferredLanguage)
+		return orderedLanguages
+
+	def _warmup_voice_ids_for_voice(self, voiceId: str, seenPackages: set[str] | None = None) -> list[str]:
+		if seenPackages is None:
+			seenPackages = set()
+		try:
+			speaker = self.catalog.speaker_for_voice(voiceId)
+			package = self.catalog.package_for_voice(voiceId)
+		except Exception:
+			log.debug("Could not resolve Google TTS preload voice %s.", voiceId, exc_info=True)
+			return []
+		if package.id in seenPackages:
+			return []
+		seenPackages.add(package.id)
+		voiceIds: list[str] = []
+		if package.dependentVoiceId:
+			dependencyVoiceId = self._voice_id_for_package(package.dependentVoiceId, speaker.speaker)
+			if dependencyVoiceId:
+				voiceIds.extend(self._warmup_voice_ids_for_voice(dependencyVoiceId, seenPackages))
+		if voiceId not in voiceIds:
+			voiceIds.append(voiceId)
+		return voiceIds
+
+	def _voice_id_for_package(self, packageId: str, preferredSpeaker: str | None = None) -> str:
+		speakers = self._speakersByPackage.get(packageId, [])
+		fallbackVoiceId = speakers[0].id if speakers else ""
+		for speaker in speakers:
+			if preferredSpeaker and speaker.speaker == preferredSpeaker:
+				return speaker.id
+		return fallbackVoiceId
+
+	def _warmup_options_for_voice_ids(self, voiceIds: list[str]) -> list[dict[str, Any]]:
+		optionsList: list[dict[str, Any]] = []
+		for voiceId in voiceIds:
+			try:
+				optionsList.append(self._speech_options(self._rate, self._pitch, 0, voiceId, self._rateBoost))
+			except Exception:
+				log.debug("Could not prepare Google TTS preload options for %s.", voiceId, exc_info=True)
+		return optionsList
+
+	def _warm_current_voice_async(self, delay: float = 0.0) -> None:
 		if self._shutdownEvent.is_set():
 			return
-		options = self._speech_options(self._rate, self._pitch, 0)
+		priorityVoiceIds = self._warmup_voice_ids()
+		priorityOptionsList = self._warmup_options_for_voice_ids(priorityVoiceIds)
+		if not priorityOptionsList:
+			return
 		with suppress(Exception):
 			self._warmupCancelEvent.set()
 		cancelEvent = threading.Event()
 		self._warmupCancelEvent = cancelEvent
 
+		def preload_options(optionsList: list[dict[str, Any]]) -> bool:
+			for options in optionsList:
+				if cancelEvent.is_set() or self._shutdownEvent.is_set():
+					return False
+				try:
+					warmupOptions = dict(options)
+					warmupOptions["warmupText"] = _VOICE_WARMUP_TEXT
+					self._bridge.preload_voice(warmupOptions, cancelEvent)
+				except CdpCancelled:
+					log.debug("Google TTS voice preload cancelled.")
+					return False
+				except Exception:
+					log.debug("Google TTS voice preload failed.", exc_info=True)
+			return True
+
 		def warm() -> None:
+			if delay > 0 and cancelEvent.wait(delay):
+				return
 			try:
 				self._bridge.ensure_connection()
 			except Exception:
@@ -1886,21 +2137,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				return
 			if cancelEvent.is_set() or self._shutdownEvent.is_set():
 				return
-			try:
-				warmupOptions = dict(options)
-				warmupOptions["warmupText"] = _VOICE_WARMUP_TEXT
-				self._bridge.preload_voice(warmupOptions, cancelEvent)
-			except CdpCancelled:
-				log.debug("Google TTS voice preload cancelled.")
-			except Exception:
-				log.debug("Google TTS voice preload failed.", exc_info=True)
+			preload_options(priorityOptionsList)
 
 		thread = threading.Thread(name="googleTtsForNvda.preload", target=warm, daemon=True)
 		self._warmupThread = thread
 		thread.start()
 
 	def _get_language(self) -> str:
-		lang = self.catalog.language_for_voice(self.__voice)
+		lang = self.__voice
 		langMap = {
 			"cmn-CN": "zh_CN",
 			"cmn-TW": "zh_TW",

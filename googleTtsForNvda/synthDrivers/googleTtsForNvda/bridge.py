@@ -96,6 +96,10 @@ class CdpError(Exception):
 		self.technicalDetail = technicalDetail
 
 
+class _BrowserProfileInUseError(CdpError):
+	pass
+
+
 class CdpCancelled(Exception):
 	pass
 
@@ -177,6 +181,16 @@ def _friendly_cdp_error(message: str, technicalDetail: str | None = None) -> Cdp
 	if technicalDetail:
 		log.debug("Google TTS Chromium browser runtime detail: %s", technicalDetail)
 	return CdpError(message, technicalDetail)
+
+
+def _browser_profile_in_use_error() -> _BrowserProfileInUseError:
+	message = _(
+		"The browser profile used by Google TTS For NVDA is already in use. "
+		"Restart NVDA, or close any leftover supported Chromium browser helper processes."
+	)
+	technicalDetail = "Chromium browser runtime exited with profile-in-use code 21."
+	log.debug("Google TTS Chromium browser runtime detail: %s", technicalDetail)
+	return _BrowserProfileInUseError(message, technicalDetail)
 
 
 def _hidden_chrome_startup_kwargs() -> dict[str, Any]:
@@ -471,6 +485,17 @@ def browser_availability() -> dict[str, bool]:
 	return {runtime: browser_runtime_available(runtime) for runtime in BROWSER_RUNTIMES}
 
 
+def _find_browser_choice(runtime: str | None = None) -> tuple[str, str] | None:
+	for candidateRuntime in _runtime_fallback_order(runtime or configured_browser_runtime()):
+		path = browser_path_for_runtime(candidateRuntime)
+		if not path:
+			continue
+		if candidateRuntime == BROWSER_RUNTIME_EDGE and not edge_webview2_available():
+			continue
+		return candidateRuntime, path
+	return None
+
+
 def browser_runtime_snapshot(runtime: str | None = None) -> dict[str, Any]:
 	selectedRuntime = _normalize_browser_runtime(runtime or configured_browser_runtime())
 	paths = {candidateRuntime: browser_path_for_runtime(candidateRuntime) for candidateRuntime in BROWSER_RUNTIMES}
@@ -485,11 +510,13 @@ def browser_runtime_snapshot(runtime: str | None = None) -> dict[str, Any]:
 		for candidateRuntime, path in paths.items()
 	}
 	effectivePath = None
+	effectiveRuntime = None
 	for candidateRuntime in _runtime_fallback_order(selectedRuntime):
 		if not availability.get(candidateRuntime, False):
 			continue
 		effectivePath = paths.get(candidateRuntime)
 		if effectivePath:
+			effectiveRuntime = candidateRuntime
 			break
 	return {
 		"selectedRuntime": selectedRuntime,
@@ -498,7 +525,7 @@ def browser_runtime_snapshot(runtime: str | None = None) -> dict[str, Any]:
 		"edgeWebView2Available": edgeWebView2Available,
 		"availability": availability,
 		"effectivePath": effectivePath,
-		"effectiveRuntime": browser_runtime_for_path(effectivePath) if effectivePath else None,
+		"effectiveRuntime": effectiveRuntime,
 	}
 
 
@@ -512,28 +539,29 @@ def browser_runtime_for_path(browserPath: str) -> str:
 
 
 def effective_browser_runtime(runtime: str | None = None) -> str | None:
-	path = find_browser(runtime)
-	if path is None:
+	choice = _find_browser_choice(runtime)
+	if choice is None:
 		return None
-	return browser_runtime_for_path(path)
+	return choice[0]
 
 
 def find_browser(runtime: str | None = None) -> str | None:
-	for candidateRuntime in _runtime_fallback_order(runtime or configured_browser_runtime()):
-		if not browser_runtime_available(candidateRuntime):
-			continue
-		path = browser_path_for_runtime(candidateRuntime)
-		if path:
-			return path
-	return None
+	choice = _find_browser_choice(runtime)
+	if choice is None:
+		return None
+	return choice[1]
 
 
 def edge_webview2_blocks_effective_runtime(runtime: str | None = None) -> bool:
 	selectedRuntime = _normalize_browser_runtime(runtime or configured_browser_runtime())
-	return (
-		selectedRuntime == BROWSER_RUNTIME_EDGE
+	if edge_webview2_available():
+		return False
+	if _find_browser_choice(selectedRuntime) is not None:
+		return False
+	return any(
+		candidateRuntime == BROWSER_RUNTIME_EDGE
 		and browser_executable_available(BROWSER_RUNTIME_EDGE)
-		and not edge_webview2_available()
+		for candidateRuntime in _runtime_fallback_order(selectedRuntime)
 	)
 
 
@@ -641,6 +669,8 @@ class BrowserProcessManager:
 		self._chromeProcess: subprocess.Popen[bytes] | None = None
 		self._debugPort: int | None = None
 		self._profileDir: Path | None = None
+		self._profileRuntime: str | None = None
+		self._profileIsPersistent = False
 		self._lock = threading.RLock()
 
 	@classmethod
@@ -693,9 +723,14 @@ class BrowserProcessManager:
 					self._chromeProcess.kill()
 				self._chromeProcess = None
 				self._debugPort = None
+				self._release_chrome_profile()
+			elif self._chromeProcess is not None:
+				self._chromeProcess = None
+				self._debugPort = None
+				self._release_chrome_profile()
 			_raise_if_cancelled(cancelEvent)
-			chromePath = self.find_chrome()
-			if not chromePath:
+			browserChoice = _find_browser_choice()
+			if browserChoice is None:
 				if edge_webview2_blocks_effective_runtime():
 					raise _friendly_cdp_error(
 						_(
@@ -708,61 +743,74 @@ class BrowserProcessManager:
 					_("No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."),
 					"No supported Chromium browser runtime executable was found.",
 				)
-			profileDir = self._get_chrome_profile_dir(chromePath)
-			devToolsFile = profileDir / "DevToolsActivePort"
-			try:
-				devToolsFile.unlink()
-			except FileNotFoundError:
-				pass
-			pageUrl = self._page_url()
-			args = [
-				chromePath,
-				"--headless=new",
-				"--remote-debugging-port=0",
-				"--remote-allow-origins=*",
-				f"--user-data-dir={profileDir}",
-				"--no-first-run",
-				"--no-default-browser-check",
-				"--disable-background-networking",
-				"--disable-breakpad",
-				"--disable-crash-reporter",
-				"--disable-gpu",
-				"--noerrdialogs",
-				"--autoplay-policy=no-user-gesture-required",
-				"--window-position=-32000,-32000",
-				"--window-size=1,1",
-				"--disable-background-timer-throttling",
-				"--disable-backgrounding-occluded-windows",
-				"--disable-renderer-backgrounding",
-				"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
-				"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
-				"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
-				"--enable-wasm-simd",
-				pageUrl,
-			]
-			self._chromeProcess = subprocess.Popen(
-				args,
-				stdout=subprocess.DEVNULL,
-				stderr=subprocess.DEVNULL,
-				**_hidden_chrome_startup_kwargs(),
-			)
-			_hide_chrome_windows(self._chromeProcess.pid)
-			_elevate_chrome_priority(self._chromeProcess.pid)
-			try:
-				self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
+			browserRuntime, browserPath = browserChoice
+			for usePersistentProfile in (True, False):
+				profileDir = self._get_browser_profile_dir(browserRuntime, usePersistentProfile)
+				devToolsFile = profileDir / "DevToolsActivePort"
+				try:
+					devToolsFile.unlink()
+				except FileNotFoundError:
+					pass
+				pageUrl = self._page_url()
+				args = [
+					browserPath,
+					"--headless=new",
+					"--remote-debugging-port=0",
+					"--remote-allow-origins=*",
+					f"--user-data-dir={profileDir}",
+					"--no-first-run",
+					"--no-default-browser-check",
+					"--disable-background-networking",
+					"--disable-breakpad",
+					"--disable-crash-reporter",
+					"--disable-gpu",
+					"--noerrdialogs",
+					"--autoplay-policy=no-user-gesture-required",
+					"--window-position=-32000,-32000",
+					"--window-size=1,1",
+					"--disable-background-timer-throttling",
+					"--disable-backgrounding-occluded-windows",
+					"--disable-renderer-backgrounding",
+					"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
+					"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
+					"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
+					"--enable-wasm-simd",
+					pageUrl,
+				]
+				self._chromeProcess = subprocess.Popen(
+					args,
+					stdout=subprocess.DEVNULL,
+					stderr=subprocess.DEVNULL,
+					**_hidden_chrome_startup_kwargs(),
+				)
 				_hide_chrome_windows(self._chromeProcess.pid)
-			except Exception:
-				with suppress(Exception):
-					self._chromeProcess.terminate()
-					self._chromeProcess.wait(timeout=2)
-				with suppress(Exception):
-					self._chromeProcess.kill()
-				self._chromeProcess = None
-				self._debugPort = None
-				self._remove_chrome_profile()
-				raise
-			assert self._serverPort is not None and self._debugPort is not None
-			return self._serverPort, self._debugPort
+				_elevate_chrome_priority(self._chromeProcess.pid)
+				try:
+					self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
+					_hide_chrome_windows(self._chromeProcess.pid)
+				except _BrowserProfileInUseError:
+					self._debugPort = None
+					if usePersistentProfile:
+						log.debug(
+							"Google TTS persistent browser profile is in use; retrying with a temporary profile."
+						)
+						self._release_chrome_profile()
+						continue
+					self._remove_chrome_profile()
+					raise
+				except Exception:
+					with suppress(Exception):
+						self._chromeProcess.terminate()
+						self._chromeProcess.wait(timeout=2)
+					with suppress(Exception):
+						self._chromeProcess.kill()
+					self._chromeProcess = None
+					self._debugPort = None
+					self._remove_chrome_profile()
+					raise
+				assert self._serverPort is not None and self._debugPort is not None
+				return self._serverPort, self._debugPort
+			raise _browser_profile_in_use_error()
 
 	def get_page_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
 		with self._lock:
@@ -822,14 +870,20 @@ class BrowserProcessManager:
 			self._serverPort = None
 			self._release_chrome_profile()
 
-	def _get_chrome_profile_dir(self, browserPath: str) -> Path:
+	def _get_browser_profile_dir(self, runtime: str, usePersistentProfile: bool = True) -> Path:
+		runtime = _normalize_browser_runtime(runtime)
 		if self._profileDir is not None:
-			self._profileDir.mkdir(parents=True, exist_ok=True)
-			return self._profileDir
-		root = self._browser_profile_root(browserPath)
+			if self._profileRuntime == runtime:
+				self._profileDir.mkdir(parents=True, exist_ok=True)
+				return self._profileDir
+			self._release_chrome_profile()
+		root = self._browser_profile_root(runtime)
 		root.mkdir(parents=True, exist_ok=True)
-		self._cleanup_old_chrome_profiles(root)
-		profileDir = root / PERSISTENT_PROFILE_DIR_NAME
+		self._cleanup_old_browser_profiles(root, runtime)
+		if usePersistentProfile:
+			profileDir = root / PERSISTENT_PROFILE_DIR_NAME
+		else:
+			profileDir = root / f"session-{os.getpid()}-{time.monotonic_ns()}"
 		reused = profileDir.exists()
 		profileDir.mkdir(parents=True, exist_ok=True)
 		for lockName in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
@@ -838,26 +892,28 @@ class BrowserProcessManager:
 		with suppress(OSError):
 			(profileDir / "DevToolsActivePort").unlink()
 		self._profileDir = profileDir
+		self._profileRuntime = runtime
+		self._profileIsPersistent = usePersistentProfile
 		log.debug(
-			"Google TTS browser profile directory: %s (reused=%s)",
-			profileDir, reused,
+			"Google TTS %s browser profile directory: %s (reused=%s, persistent=%s)",
+			runtime, profileDir, reused, usePersistentProfile,
 		)
 		return self._profileDir
 
-	def _browser_profile_root(self, browserPath: str) -> Path:
+	def _browser_profile_root(self, runtime: str) -> Path:
 		base = os.environ.get("LOCALAPPDATA")
 		root = Path(base) if base else Path(tempfile.gettempdir())
-		return root / LOCAL_CACHE_DIR_NAME / self._browser_profile_dir_name(browserPath)
+		return root / LOCAL_CACHE_DIR_NAME / self._browser_profile_dir_name(runtime)
 
-	def _browser_profile_dir_name(self, browserPath: str) -> str:
-		exeName = Path(browserPath).name.lower()
-		if exeName in ("msedge.exe", "msedge"):
+	def _browser_profile_dir_name(self, runtime: str) -> str:
+		runtime = _normalize_browser_runtime(runtime)
+		if runtime == BROWSER_RUNTIME_EDGE:
 			return EDGE_PROFILE_DIR_NAME
-		if exeName in ("brave.exe", "brave"):
+		if runtime == BROWSER_RUNTIME_BRAVE:
 			return BRAVE_PROFILE_DIR_NAME
 		return CHROME_PROFILE_DIR_NAME
 
-	def _cleanup_old_chrome_profiles(self, root: Path) -> None:
+	def _cleanup_old_browser_profiles(self, root: Path, runtime: str) -> None:
 		cutoff = time.time() - 2 * 24 * 60 * 60
 		for child in root.iterdir():
 			if not child.is_dir() or not child.name.startswith("session-"):
@@ -881,8 +937,8 @@ class BrowserProcessManager:
 						break
 				if totalSize > PERSISTENT_PROFILE_MAX_BYTES:
 					log.debug(
-						"Persistent browser profile exceeds 500 MB (%d bytes), resetting.",
-						totalSize,
+						"Persistent %s browser profile exceeds 500 MB (%d bytes), resetting.",
+						runtime, totalSize,
 					)
 					shutil.rmtree(persistent, ignore_errors=True)
 			except OSError:
@@ -891,13 +947,20 @@ class BrowserProcessManager:
 	def _release_chrome_profile(self) -> None:
 		"""Release the profile directory reference without deleting it.
 
-		Preserves the persistent profile (including Chrome's compiled WASM
-		code cache) so the next startup can skip WASM recompilation.  Only
+		Preserves the persistent profile (including the browser's compiled
+		WASM code cache) so the next startup can skip WASM recompilation.  Only
 		transient files (lock files, DevToolsActivePort) are cleaned up.
 		"""
 		profileDir = self._profileDir
+		profileIsPersistent = self._profileIsPersistent
 		self._profileDir = None
+		self._profileRuntime = None
+		self._profileIsPersistent = False
 		if profileDir is None:
+			return
+		if not profileIsPersistent:
+			with suppress(OSError):
+				shutil.rmtree(profileDir, ignore_errors=True)
 			return
 		for name in ("SingletonLock", "SingletonCookie", "SingletonSocket",
 					 "lockfile", "DevToolsActivePort"):
@@ -905,15 +968,17 @@ class BrowserProcessManager:
 				(profileDir / name).unlink()
 
 	def _remove_chrome_profile(self) -> None:
-		"""Fully delete the profile directory (used on Chrome startup failure)."""
+		"""Fully delete the profile directory (used on browser startup failure)."""
 		profileDir = self._profileDir
 		self._profileDir = None
+		self._profileRuntime = None
+		self._profileIsPersistent = False
 		if profileDir is None:
 			return
 		try:
 			shutil.rmtree(profileDir, ignore_errors=True)
 		except OSError:
-			log.debug("Could not remove Google TTS Chrome session profile.", exc_info=True)
+			log.debug("Could not remove Google TTS browser session profile.", exc_info=True)
 
 	def _read_devtools_port(self, devToolsFile: Path, cancelEvent: threading.Event | None = None) -> int:
 		for attempt in range(400):
@@ -924,13 +989,7 @@ class BrowserProcessManager:
 				exitCode = self._chromeProcess.returncode
 				self._chromeProcess = None
 				if exitCode == 21:
-					raise _friendly_cdp_error(
-						_(
-							"The browser profile used by Google TTS For NVDA is already in use. "
-							"Restart NVDA, or close any leftover supported Chromium browser helper processes."
-						),
-						"Chromium browser runtime exited with profile-in-use code 21.",
-					)
+					raise _browser_profile_in_use_error()
 				raise _friendly_cdp_error(
 					_("The Chromium browser runtime closed before Google TTS For NVDA was ready."),
 					f"Chromium browser runtime exited before DevTools became available: {exitCode}",
@@ -1134,7 +1193,7 @@ class WasmTtsEngineBridge:
 			"sessionId": f"preload-{time.monotonic_ns()}",
 			"voiceName": options["voiceName"],
 			"lang": options["lang"],
-			"text": str(options.get("warmupText") or "a"),
+			"text": str(options.get("warmupText") or " "),
 		}
 		response = self._cdp.request(
 			"Runtime.evaluate",
@@ -1215,11 +1274,11 @@ class WasmTtsEngineBridge:
 				)
 			elif eventType == "audio":
 				if cancelEvent is not None and cancelEvent.is_set():
-					raise CdpCancelled()
+					return
 				audio = base64.b64decode(str(event.get("data") or ""))
 				if audio:
 					if cancelEvent is not None and cancelEvent.is_set():
-						raise CdpCancelled()
+						return
 					if firstAudioAt is None:
 						firstAudioAt = time.perf_counter()
 						log.debug(
