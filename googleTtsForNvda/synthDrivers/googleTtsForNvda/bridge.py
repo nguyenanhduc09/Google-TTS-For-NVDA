@@ -69,7 +69,7 @@ CONFIG_AUTO_LANGUAGE_CANDIDATES = "autoLanguageCandidates"
 CONFIG_AUTO_LANGUAGE_PROFILES = "autoLanguageProfiles"
 BROWSER_RUNTIME_EDGE = "edge"
 BROWSER_RUNTIME_CHROME = "chrome"
-DEFAULT_BROWSER_RUNTIME = BROWSER_RUNTIME_EDGE
+DEFAULT_BROWSER_RUNTIME = BROWSER_RUNTIME_CHROME
 DEFAULT_AUTO_LANGUAGE_DETECTION = False
 DEFAULT_AUTO_LANGUAGE_PREFERRED = ""
 DEFAULT_AUTO_LANGUAGE_CANDIDATES = ""
@@ -78,7 +78,7 @@ BROWSER_RUNTIME_LABELS = {
 	BROWSER_RUNTIME_EDGE: "Microsoft Edge",
 	BROWSER_RUNTIME_CHROME: "Google Chrome",
 }
-BROWSER_RUNTIMES = (BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_CHROME)
+BROWSER_RUNTIMES = (BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE)
 
 if str(WEBSOCKET_CLIENT_DIR) not in sys.path:
 	sys.path.insert(1, str(WEBSOCKET_CLIENT_DIR))
@@ -303,6 +303,88 @@ def _runtime_fallback_order(runtime: str | None = None) -> tuple[str, str]:
 	return preferred, fallback
 
 
+def _edge_webview2_candidates() -> list[str]:
+	executableName = "msedgewebview2.exe"
+	envFolder = os.environ.get("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", "")
+	envCandidates: list[str] = []
+	if envFolder:
+		envPath = Path(envFolder)
+		envCandidates.extend(
+			[
+				str(envPath / executableName),
+				*[
+					str(candidate)
+					for candidate in envPath.glob(f"*/{executableName}")
+				],
+			]
+		)
+	commonRoots = [
+		Path(root) / "Microsoft" / "EdgeWebView" / "Application"
+		for root in (
+			os.environ.get("PROGRAMFILES", ""),
+			os.environ.get("PROGRAMFILES(X86)", ""),
+			os.environ.get("LOCALAPPDATA", ""),
+		)
+		if root
+	]
+	commonCandidates = [
+		str(root / executableName)
+		for root in commonRoots
+	]
+	versionedCandidates: list[str] = []
+	for root in commonRoots:
+		try:
+			versionedCandidates.extend(str(candidate) for candidate in root.glob(f"*/{executableName}"))
+		except OSError:
+			pass
+	return [*envCandidates, *commonCandidates, *versionedCandidates]
+
+
+def _registry_has_edge_webview2_runtime() -> bool:
+	if winreg is None:
+		return False
+	registryRoots = [
+		(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients"),
+		(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"),
+		(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\EdgeUpdate\Clients"),
+		(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+		(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+		(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+	]
+	for hive, subKey in registryRoots:
+		try:
+			with winreg.OpenKey(hive, subKey) as rootKey:
+				index = 0
+				while True:
+					try:
+						childName = winreg.EnumKey(rootKey, index)
+					except OSError:
+						break
+					index += 1
+					try:
+						with winreg.OpenKey(rootKey, childName) as childKey:
+							values = []
+							for valueName in ("name", "DisplayName"):
+								try:
+									value, _ = winreg.QueryValueEx(childKey, valueName)
+									values.append(str(value))
+								except OSError:
+									pass
+							name = " ".join(values).lower()
+							if "webview2" not in name and "edge webview" not in name:
+								continue
+							try:
+								version, _ = winreg.QueryValueEx(childKey, "pv")
+							except OSError:
+								version = ""
+							return str(version or "installed").strip() not in ("", "0.0.0.0")
+					except OSError:
+						pass
+		except OSError:
+			pass
+	return False
+
+
 def _registry_app_paths(executableName: str) -> list[str]:
 	if winreg is None:
 		return []
@@ -353,8 +435,23 @@ def browser_path_for_runtime(runtime: str) -> str | None:
 	return None
 
 
-def browser_runtime_available(runtime: str) -> bool:
+def browser_executable_available(runtime: str) -> bool:
 	return browser_path_for_runtime(runtime) is not None
+
+
+def edge_webview2_available() -> bool:
+	for candidate in _edge_webview2_candidates():
+		if candidate and Path(candidate).is_file():
+			return True
+	return _registry_has_edge_webview2_runtime()
+
+
+def browser_runtime_available(runtime: str) -> bool:
+	if not browser_executable_available(runtime):
+		return False
+	if _normalize_browser_runtime(runtime) == BROWSER_RUNTIME_EDGE:
+		return edge_webview2_available()
+	return True
 
 
 def browser_availability() -> dict[str, bool]:
@@ -377,10 +474,21 @@ def effective_browser_runtime(runtime: str | None = None) -> str | None:
 
 def find_browser(runtime: str | None = None) -> str | None:
 	for candidateRuntime in _runtime_fallback_order(runtime or configured_browser_runtime()):
+		if not browser_runtime_available(candidateRuntime):
+			continue
 		path = browser_path_for_runtime(candidateRuntime)
 		if path:
 			return path
 	return None
+
+
+def edge_webview2_blocks_effective_runtime(runtime: str | None = None) -> bool:
+	for candidateRuntime in _runtime_fallback_order(runtime or configured_browser_runtime()):
+		path = browser_path_for_runtime(candidateRuntime)
+		if not path:
+			continue
+		return _normalize_browser_runtime(candidateRuntime) == BROWSER_RUNTIME_EDGE and not edge_webview2_available()
+	return False
 
 
 class CdpDispatcher:
@@ -538,6 +646,14 @@ class BrowserProcessManager:
 			_raise_if_cancelled(cancelEvent)
 			chromePath = self.find_chrome()
 			if not chromePath:
+				if edge_webview2_blocks_effective_runtime():
+					raise _friendly_cdp_error(
+						_(
+							"Microsoft Edge WebView2 Runtime was not found. "
+							"Install or repair Microsoft Edge WebView2 Runtime before using Microsoft Edge as the Google TTS For NVDA browser runtime."
+						),
+						"Microsoft Edge executable was found, but Microsoft Edge WebView2 Runtime was not found.",
+					)
 				raise _friendly_cdp_error(
 					_("Microsoft Edge or Google Chrome was not found. Install one of them, or set EDGE_PATH/CHROME_PATH to a browser executable."),
 					"No supported browser runtime executable was found.",
@@ -1255,4 +1371,3 @@ class ChromeTtsBridge:
 
 	def _format_exception(self, exceptionDetails: dict[str, Any]) -> str:
 		return self._cdp_client.format_exception(exceptionDetails)
-

@@ -154,6 +154,7 @@ This add-on depends on a supported Microsoft Edge or Google Chrome runtime runni
 - Do not document or imply that Google TTS For NVDA is suitable for environments where the browser runtime is unavailable or cannot start.
 - User-facing documentation should warn that the add-on should not be relied on at the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.
 - User-facing documentation should include an Edge-runtime silence troubleshooting note: if Microsoft Edge is selected and speech stays silent even though Edge is installed, direct users to install or repair Microsoft Edge WebView2 Runtime using Microsoft's Evergreen Bootstrapper link (`https://go.microsoft.com/fwlink/p/?LinkId=2124703`), then restart NVDA. Also include Microsoft's WebView2 page (`https://developer.microsoft.com/microsoft-edge/webview2`) for offline installers and fixed-version runtime packages.
+- Microsoft Edge WebView2 Runtime is required only when Microsoft Edge is the selected/effective browser runtime. Google Chrome must not depend on WebView2; Chrome availability should be checked only through the Chrome browser executable/path. Status messages, fallback logic, prompts, and documentation must not imply that Chrome needs Edge WebView2.
 - Keep fallback/error wording clear: if no supported browser runtime is available, the synth cannot provide speech through the Google WASM TTS engine.
 
 ### Supported settings ring parameters

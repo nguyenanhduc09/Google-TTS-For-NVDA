@@ -18,14 +18,14 @@
 		<li><strong>Phản hồi nhanh và độ trễ thấp:</strong> Tối ưu chia đoạn văn bản và bộ nhớ đệm thông minh, giúp NVDA phản hồi tức thì khi bạn nhập liệu và điều hướng.</li>
 		<li><strong>Trình quản lý giọng Google TTS:</strong> Dễ dàng xem danh sách, tải xuống hoặc gỡ bỏ các gói giọng hàng loạt ngay trong hộp thoại dễ tiếp cận.</li>
 		<li><strong>Phím Tắt Nhanh:</strong> Nhấn <kbd>NVDA+Ctrl+Shift+G</kbd> ở bất kỳ đâu để mở Trình quản lý giọng Google TTS ngay lập tức.</li>
-		<li><strong>Lựa Chọn Trình Duyệt:</strong> Tùy chọn sử dụng Microsoft Edge hoặc Google Chrome làm runtime trình duyệt chạy nền ngay trong cấu hình NVDA.</li>
+		<li><strong>Lựa Chọn Trình Duyệt:</strong> Tùy chọn sử dụng Google Chrome hoặc Microsoft Edge làm runtime trình duyệt chạy nền ngay trong cấu hình NVDA. Google Chrome là lựa chọn mặc định; Microsoft Edge được dùng dự phòng khi có sẵn và Microsoft Edge WebView2 Runtime đã được cài đặt.</li>
 		<li><strong>Hồ sơ ngôn ngữ tự động:</strong> Sử dụng hồ sơ giọng riêng cho từng ngôn ngữ. Khi bật nhiều ngôn ngữ, add-on có thể chuyển hồ sơ theo từng câu nhờ nhận diện ngôn ngữ bằng CLD2, với một ngôn ngữ ưu tiên khi văn bản chưa rõ ràng.</li>
 	</ul>
 
 	<h2>Yêu Cầu Hệ Thống</h2>
 	<ul>
 		<li><strong>NVDA:</strong> Phiên bản 2024.1 trở lên. Add-on hỗ trợ NVDA 2024 đến 2026 trên cả bản NVDA 32-bit (x86) và 64-bit (x64).</li>
-		<li><strong>Trình duyệt:</strong> Máy tính cần cài đặt Microsoft Edge hoặc Google Chrome.</li>
+		<li><strong>Trình duyệt:</strong> Máy tính cần cài đặt Google Chrome hoặc Microsoft Edge. Nếu dùng Microsoft Edge làm runtime, Microsoft Edge WebView2 Runtime cũng phải có sẵn.</li>
 		<li><strong>Phiên Windows người dùng đang đăng nhập:</strong> Không nên dựa vào add-on ở những môi trường mà runtime trình duyệt không thể khởi động, chẳng hạn màn hình đăng nhập Windows, secure desktop, Windows PE, môi trường khôi phục hoặc các phiên Windows tối giản khác.</li>
 	</ul>
 
@@ -60,10 +60,10 @@
 	<h3>Cấu Hình Add-on</h3>
 	<p>Trong <strong>Trình đơn NVDA &rarr; Tùy chọn &rarr; Cấu hình &rarr; Google TTS Cho NVDA</strong>, bạn có thể thiết lập:</p>
 	<ul>
-		<li><strong>Runtime trình duyệt:</strong> Chọn Microsoft Edge hoặc Google Chrome làm runtime trình duyệt chạy nền cho add-on. Bảng cấu hình sẽ hiển thị trạng thái có sẵn của các trình duyệt trên hệ thống.</li>
+		<li><strong>Runtime trình duyệt:</strong> Chọn Google Chrome hoặc Microsoft Edge làm runtime trình duyệt chạy nền cho add-on. Bảng cấu hình hiển thị trạng thái có sẵn của các trình duyệt và báo riêng trạng thái Microsoft Edge WebView2 Runtime khi liên quan đến Microsoft Edge.</li>
 		<li><strong>Sử dụng hồ sơ ngôn ngữ tự động:</strong> Bật chọn hồ sơ tự động và mở các điều khiển hồ sơ được mô tả bên dưới.</li>
 	</ul>
-	<p>Danh mục cấu hình Google TTS Cho NVDA cũng có thể được mở bằng cử chỉ tùy chỉnh. Add-on không gán phím tắt mặc định cho lệnh này; bạn có thể tự gán trong <strong>Trình đơn NVDA &rarr; Tùy chọn &rarr; Quản lý cử chỉ</strong>, tại danh mục <strong>Google TTS Cho NVDA</strong>.</p>
+	<p>Danh mục cấu hình Google TTS Cho NVDA cũng có thể được mở bằng cử chỉ tùy chỉnh. Add-on không gán phím tắt mặc định cho lệnh này; bạn có thể tự gán trong <strong>Trình đơn NVDA &rarr; Tùy chọn &rarr; Quản lý thao tác</strong>, tại danh mục <strong>Google TTS Cho NVDA</strong>.</p>
 
 	<h3>Hồ Sơ Ngôn Ngữ Tự Động</h3>
 	<p>Khi <strong>Sử dụng hồ sơ ngôn ngữ tự động</strong> được bật, các câu được phát hiện sẽ dùng hồ sơ riêng của add-on cho từng ngôn ngữ thay vì dùng trực tiếp cấu hình giọng đọc thông thường của NVDA. Nếu chỉ bật một hồ sơ ngôn ngữ, hồ sơ đó sẽ được dùng cho mọi câu. Các giá trị cấu hình giọng đọc bình thường vẫn được giữ lại và sẽ dùng lại khi bạn tắt hồ sơ ngôn ngữ tự động.</p>
@@ -83,10 +83,11 @@
 	<p>Khi hồ sơ ngôn ngữ tự động đang bật, hộp thoại cấu hình giọng đọc của NVDA sẽ không hiển thị các điều khiển giọng, tốc độ, tăng tốc độ, cao độ và âm lượng thông thường cho bộ đọc này. Thay vào đó, nó hiển thị thông báo có thể nhận tiêu điểm bằng phím Tab, hướng dẫn bạn chuyển sang danh mục Google TTS Cho NVDA để thiết lập. Google TTS cũng dùng các tùy chọn chữ hoa và chức năng chính tả của từng hồ sơ đã bật khi hồ sơ ngôn ngữ tự động đang bật; các giá trị Speech Settings bình thường sẽ dùng lại khi bạn tắt hồ sơ ngôn ngữ tự động. Các dòng trạng thái trong danh mục Google TTS Cho NVDA cũng có thể Tab tới để trình đọc màn hình đọc được.</p>
 
 	<h2>Xử Lý Lỗi Im Lặng Với Runtime Edge</h2>
-	<p>Nếu bạn chọn <strong>Microsoft Edge</strong> làm runtime trình duyệt và Google TTS Cho NVDA bị im lặng dù Microsoft Edge vẫn có sẵn trên máy, hãy cài đặt hoặc sửa chữa Microsoft Edge WebView2 Runtime.</p>
-	<p>WebView2 là runtime Microsoft Edge dùng cho các ứng dụng Windows nhúng nội dung web. Nó có liên quan đến Microsoft Edge, nhưng việc máy có trình duyệt Edge bình thường không phải lúc nào cũng có nghĩa là WebView2 Runtime đã được cài đặt và hoạt động tốt cho tình huống ứng dụng. Microsoft khuyến nghị Evergreen WebView2 Runtime cho ứng dụng vì runtime này dùng chung, tự động cập nhật, và trình cài Evergreen Bootstrapper nhỏ sẽ tải runtime phù hợp với kiến trúc của thiết bị.</p>
-	<p>Với máy có Internet, nhấn vào đây để tải trình cài Microsoft Edge WebView2 Evergreen Bootstrapper: <a href="https://go.microsoft.com/fwlink/p/?LinkId=2124703">Tải Microsoft Edge WebView2 Runtime</a>.</p>
-	<p>Chạy trình cài, khởi động lại NVDA, rồi chọn lại <strong>Google TTS Cho NVDA</strong>. Để tải trình cài offline hoặc gói WebView2 Runtime có số phiên bản cố định, hãy mở trang WebView2 của Microsoft: <a href="https://developer.microsoft.com/microsoft-edge/webview2">Microsoft Edge WebView2</a>.</p>
+	<p>Nếu bạn chọn <strong>Microsoft Edge</strong> làm runtime trình duyệt, Google TTS Cho NVDA cũng kiểm tra Microsoft Edge WebView2 Runtime có sẵn hay chưa. Trình duyệt Edge có thể đã được cài đặt nhưng WebView2 bị thiếu hoặc hỏng, và khi đó add-on không thể sử dụng Edge để đọc.</p>
+	<p>WebView2 là runtime Microsoft Edge dùng cho các ứng dụng Windows nhúng nội dung web. Nó có liên quan đến Microsoft Edge, nhưng việc máy có trình duyệt Edge bình thường không phải lúc nào cũng có nghĩa là WebView2 Runtime đã được cài đặt và hoạt động tốt cho tình huống ứng dụng. Microsoft khuyến nghị Evergreen WebView2 Runtime cho ứng dụng vì runtime này dùng chung, tự động cập nhật, và trình cài đặt Evergreen Bootstrapper nhỏ sẽ tải runtime phù hợp với kiến trúc của thiết bị.</p>
+	<p>Khi cần WebView2, Google TTS Cho NVDA sẽ có các nút để tải xuống trình cài đặt trực tuyến Evergreen Bootstrapper của Microsoft, mở trang WebView2 của Microsoft để lấy trình cài đặt ngoại tuyến hoặc gói phiên bản cố định, hoặc để sau. NVDA tiếp tục sử dụng bộ đọc trước đó cho tới khi WebView2 có sẵn.</p>
+	<p>Với máy có Internet, nhấn vào đây để tải xuống trình cài đặt Microsoft Edge WebView2 Evergreen Bootstrapper: <a href="https://go.microsoft.com/fwlink/p/?LinkId=2124703">Tải Microsoft Edge WebView2 Runtime</a>.</p>
+	<p>Chạy trình cài đặt, khởi động lại NVDA, rồi chọn lại <strong>Google TTS Cho NVDA</strong>. Để tải trình cài đặt ngoại tuyến hoặc gói WebView2 Runtime có số phiên bản cố định, hãy mở trang WebView2 của Microsoft: <a href="https://developer.microsoft.com/microsoft-edge/webview2">Microsoft Edge WebView2</a>.</p>
 
 	<h2>Lưu Ý</h2>
 	<ul>

@@ -4,6 +4,7 @@ from __future__ import annotations
 import inspect
 import os
 import threading
+import webbrowser
 from typing import Any
 
 import addonHandler
@@ -34,6 +35,7 @@ from synthDrivers.googleTtsForNvda.bridge import (
 	DEFAULT_AUTO_LANGUAGE_PREFERRED,
 	DEFAULT_AUTO_LANGUAGE_PROFILES,
 	DEFAULT_BROWSER_RUNTIME,
+	edge_webview2_blocks_effective_runtime,
 )
 from synthDrivers.googleTtsForNvda.catalog import EngineLibraryError, VoiceCatalog
 from synthDrivers.googleTtsForNvda import voice_store
@@ -75,7 +77,10 @@ _patchedShortcutKeysShouldUseSpellingFunctionality: Any | None = None
 _patchedPopupSettingsDialog: Any | None = None
 _autoLanguageSpeechFilterRegistered = False
 _missingVoicesPromptActive = False
+_edgeWebView2PromptActive = False
 _speechConfigOverlayLock = threading.RLock()
+_EDGE_WEBVIEW2_BOOTSTRAPPER_URL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+_EDGE_WEBVIEW2_DOWNLOAD_PAGE_URL = "https://developer.microsoft.com/microsoft-edge/webview2"
 
 
 def _call_set_synth_compat(
@@ -274,6 +279,70 @@ def _show_missing_voices_prompt(message: str | None = None) -> None:
 		_missingVoicesPromptActive = False
 
 
+def _open_web_url(url: str) -> None:
+	try:
+		webbrowser.open(url, new=2)
+	except Exception:
+		log.exception("Could not open URL for Microsoft Edge WebView2 Runtime.", exc_info=True)
+		gui.messageBox(
+			_("The download page could not be opened. Please visit this address manually:\n{url}").format(url=url),
+			_("Google TTS For NVDA"),
+			wx.OK | wx.ICON_ERROR,
+			gui.mainFrame,
+		)
+
+
+def show_edge_webview2_prompt() -> None:
+	global _edgeWebView2PromptActive
+	if _edgeWebView2PromptActive:
+		return
+	_edgeWebView2PromptActive = True
+	try:
+		gui.mainFrame.prePopup()
+		result = wx.ID_CANCEL
+		try:
+			dialog = wx.Dialog(gui.mainFrame, title=_("Microsoft Edge WebView2 Runtime is needed"))
+			try:
+				mainSizer = wx.BoxSizer(wx.VERTICAL)
+				message = wx.StaticText(
+					dialog,
+					label=_(
+						"Microsoft Edge is available, but Microsoft Edge WebView2 Runtime is not available.\n\n"
+						"Google TTS For NVDA needs WebView2 when Microsoft Edge is the browser runtime. "
+						"NVDA will keep using the previous synthesizer until WebView2 is installed.\n\n"
+						"Choose Download online installer to download Microsoft's Evergreen Bootstrapper. "
+						"Choose Open Microsoft WebView2 page if you need an offline installer or a fixed-version package."
+					),
+				)
+				message.Wrap(520)
+				mainSizer.Add(message, border=guiHelper.BORDER_FOR_DIALOGS, flag=wx.ALL | wx.EXPAND)
+				buttonSizer = wx.BoxSizer(wx.HORIZONTAL)
+				downloadButton = wx.Button(dialog, label=_("&Download online installer"))
+				webPageButton = wx.Button(dialog, label=_("&Open Microsoft WebView2 page"))
+				laterButton = wx.Button(dialog, id=wx.ID_CANCEL, label=_("&Maybe later"))
+				buttonSizer.Add(downloadButton, border=guiHelper.BORDER_FOR_DIALOGS, flag=wx.RIGHT)
+				buttonSizer.Add(webPageButton, border=guiHelper.BORDER_FOR_DIALOGS, flag=wx.RIGHT)
+				buttonSizer.Add(laterButton)
+				mainSizer.Add(buttonSizer, border=guiHelper.BORDER_FOR_DIALOGS, flag=wx.ALL | wx.ALIGN_RIGHT)
+				dialog.SetSizerAndFit(mainSizer)
+				dialog.SetEscapeId(wx.ID_CANCEL)
+				downloadButton.SetDefault()
+				downloadButton.Bind(wx.EVT_BUTTON, lambda evt: dialog.EndModal(wx.ID_YES))
+				webPageButton.Bind(wx.EVT_BUTTON, lambda evt: dialog.EndModal(wx.ID_NO))
+				laterButton.Bind(wx.EVT_BUTTON, lambda evt: dialog.EndModal(wx.ID_CANCEL))
+				result = dialog.ShowModal()
+			finally:
+				dialog.Destroy()
+		finally:
+			gui.mainFrame.postPopup()
+		if result == wx.ID_YES:
+			_open_web_url(_EDGE_WEBVIEW2_BOOTSTRAPPER_URL)
+		elif result == wx.ID_NO:
+			_open_web_url(_EDGE_WEBVIEW2_DOWNLOAD_PAGE_URL)
+	finally:
+		_edgeWebView2PromptActive = False
+
+
 def _set_synth_with_google_tts_voice_prompt(
 	*args: Any,
 	**kwargs: Any,
@@ -285,6 +354,9 @@ def _set_synth_with_google_tts_voice_prompt(
 		name == SYNTH_NAME
 		and not isFallback
 	):
+		if edge_webview2_blocks_effective_runtime():
+			wx.CallAfter(show_edge_webview2_prompt)
+			return True
 		try:
 			voiceStatus = _google_tts_voice_status()
 		except EngineLibraryError as exc:

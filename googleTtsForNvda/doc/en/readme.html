@@ -18,14 +18,14 @@
 		<li><strong>Fast response and low latency:</strong> Optimized text segmentation and smart audio buffering so NVDA responds instantly when typing and navigating.</li>
 		<li><strong>Google TTS Voice Manager:</strong> Easily browse, download, or remove voice packages in batches through an accessible dialog.</li>
 		<li><strong>Quick Shortcut:</strong> Press <kbd>NVDA+Ctrl+Shift+G</kbd> anywhere to open Google TTS Voice Manager instantly.</li>
-		<li><strong>Browser Selection:</strong> Choose Microsoft Edge or Google Chrome as the background browser runtime directly in NVDA settings.</li>
+		<li><strong>Browser Selection:</strong> Choose Google Chrome or Microsoft Edge as the background browser runtime directly in NVDA settings. Google Chrome is the default choice, with Microsoft Edge used as a fallback when it is available and Microsoft Edge WebView2 Runtime is installed.</li>
 		<li><strong>Automatic language profiles:</strong> Use per-language voice profiles. With multiple enabled languages, the add-on can switch profiles sentence by sentence using bundled CLD2 language detection, with a preferred language used when text is unclear.</li>
 	</ul>
 
 	<h2>System Requirements</h2>
 	<ul>
 		<li><strong>NVDA:</strong> Version 2024.1 or newer. The add-on supports NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) NVDA builds.</li>
-		<li><strong>Browser:</strong> Microsoft Edge or Google Chrome installed on your computer.</li>
+		<li><strong>Browser:</strong> Google Chrome or Microsoft Edge installed on your computer. If you use Microsoft Edge as the runtime, Microsoft Edge WebView2 Runtime must also be available.</li>
 		<li><strong>Interactive Windows user session:</strong> Do not rely on this add-on where the browser runtime cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.</li>
 	</ul>
 
@@ -60,7 +60,7 @@
 	<h3>Add-on Settings</h3>
 	<p>Under <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>, you can configure:</p>
 	<ul>
-		<li><strong>Browser runtime:</strong> Choose Microsoft Edge or Google Chrome as the background browser runtime for the add-on. The settings panel displays the availability status of browsers on your system.</li>
+		<li><strong>Browser runtime:</strong> Choose Google Chrome or Microsoft Edge as the background browser runtime for the add-on. The settings panel displays browser availability and reports Microsoft Edge WebView2 Runtime separately when Microsoft Edge is involved.</li>
 		<li><strong>Use automatic language profiles:</strong> Enable automatic profile selection and open the profile controls described below.</li>
 	</ul>
 	<p>The Google TTS For NVDA settings category can also be opened with a custom input gesture. It has no shortcut assigned by default; assign one from <strong>NVDA Menu &rarr; Preferences &rarr; Input Gestures</strong> under the <strong>Google TTS For NVDA</strong> category.</p>
@@ -83,8 +83,9 @@
 	<p>While automatic language profiles are enabled, NVDA's Speech settings dialog will not offer the normal voice, rate, rate boost, pitch, and volume controls for this synthesizer. It will show a focusable notice directing you to the Google TTS For NVDA settings category instead. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech Settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.</p>
 
 	<h2>Troubleshooting Edge Runtime Silence</h2>
-	<p>If you choose <strong>Microsoft Edge</strong> as the browser runtime and Google TTS For NVDA stays silent even though Microsoft Edge is installed, install or repair the Microsoft Edge WebView2 Runtime.</p>
+	<p>If you choose <strong>Microsoft Edge</strong> as the browser runtime, Google TTS For NVDA also checks whether Microsoft Edge WebView2 Runtime is available. Edge may be installed while WebView2 is missing or damaged, and in that case the add-on cannot use Edge for speech.</p>
 	<p>WebView2 is the Microsoft Edge runtime used by native Windows applications to host web content. It is related to Microsoft Edge, but having the normal Edge browser available does not always mean the WebView2 Runtime is installed and healthy for app scenarios. Microsoft recommends the Evergreen WebView2 Runtime for applications because it is shared, automatically updated, and the small Evergreen Bootstrapper downloads the matching runtime for the device architecture.</p>
+	<p>When WebView2 is needed, Google TTS For NVDA offers buttons to download Microsoft's online Evergreen Bootstrapper, open Microsoft's WebView2 page for offline installers or fixed-version packages, or leave the change for later. NVDA keeps using the previous synthesizer until WebView2 is available.</p>
 	<p>For an online computer, download the Microsoft Edge WebView2 Evergreen Bootstrapper here: <a href="https://go.microsoft.com/fwlink/p/?LinkId=2124703">Download Microsoft Edge WebView2 Runtime</a>.</p>
 	<p>Run the installer, restart NVDA, then select <strong>Google TTS For NVDA</strong> again. For offline installers or a fixed-version WebView2 Runtime package, open Microsoft's WebView2 page: <a href="https://developer.microsoft.com/microsoft-edge/webview2">Microsoft Edge WebView2</a>.</p>
 

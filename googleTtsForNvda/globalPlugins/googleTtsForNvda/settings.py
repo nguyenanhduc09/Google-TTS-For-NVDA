@@ -221,6 +221,11 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._preferredLanguageValues = self._enabled_auto_language_candidates()
 
 		helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
+		self._browserExecutableAvailability = {
+			runtime: browserBridge.browser_executable_available(runtime)
+			for runtime in browserBridge.BROWSER_RUNTIMES
+		}
+		self._edgeWebView2Available = browserBridge.edge_webview2_available()
 		choices = [self._format_runtime_choice(runtime) for runtime in self._runtimeValues]
 		self.runtimeChoice = helper.addLabeledControl(
 			_("Browser &runtime:"),
@@ -236,6 +241,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
 		)
 		self.effectiveRuntimeText.SetName(_("Browser runtime status"))
+		bind_read_only_text_focus_announcement(self.effectiveRuntimeText)
 
 		self.autoLanguageCheck = helper.addItem(
 			wx.CheckBox(self, label=_("&Use automatic language profiles")),
@@ -367,6 +373,19 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		if selectedRuntime == self._savedRuntime:
 			return
 		if not self._availability.get(selectedRuntime, False):
+			if (
+				selectedRuntime == browserBridge.BROWSER_RUNTIME_EDGE
+				and self._browserExecutableAvailability.get(selectedRuntime, False)
+				and not self._edgeWebView2Available
+			):
+				ui.message(
+					_(
+						"Microsoft Edge was found, but Microsoft Edge WebView2 Runtime was not found. "
+						"Keeping the current Google TTS For NVDA browser runtime setting."
+					),
+				)
+				self._select_saved_runtime()
+				return
 			ui.message(
 				_("{runtime} was not found. Keeping the current Google TTS For NVDA browser runtime setting.").format(
 					runtime=_runtime_label(selectedRuntime),
@@ -395,17 +414,51 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 
 		_save_browser_runtime(selectedRuntime)
 		self._savedRuntime = selectedRuntime
+		self._availability = browserBridge.browser_availability()
+		self._browserExecutableAvailability = {
+			runtime: browserBridge.browser_executable_available(runtime)
+			for runtime in browserBridge.BROWSER_RUNTIMES
+		}
+		self._edgeWebView2Available = browserBridge.edge_webview2_available()
 		self._effectiveRuntime = browserBridge.effective_browser_runtime(self._savedRuntime)
 		self.effectiveRuntimeText.SetValue(self._effective_runtime_message())
 
 	def _format_runtime_choice(self, runtime: str) -> str:
-		status = _("Available") if self._availability.get(runtime, False) else _("Unavailable")
+		if runtime == browserBridge.BROWSER_RUNTIME_EDGE and self._browserExecutableAvailability.get(runtime, False):
+			status = _("Available") if self._edgeWebView2Available else _("WebView2 Runtime missing")
+		else:
+			status = _("Available") if self._availability.get(runtime, False) else _("Unavailable")
 		return _("{runtime} ({status})").format(runtime=_runtime_label(runtime), status=status)
 
 	def _effective_runtime_message(self) -> str:
+		selectedRuntime = self._savedRuntime
+		selectedLabel = _runtime_label(selectedRuntime)
+		selectedExecutableStatus = _("found") if self._browserExecutableAvailability.get(selectedRuntime, False) else _("not found")
+		if selectedRuntime == browserBridge.BROWSER_RUNTIME_EDGE:
+			webView2Status = _("found") if self._edgeWebView2Available else _("not found")
+			selectedMessage = _(
+				"Selected browser runtime: {runtime}. Microsoft Edge: {edgeStatus}. "
+				"Microsoft Edge WebView2 Runtime: {webView2Status}."
+			).format(
+				runtime=selectedLabel,
+				edgeStatus=selectedExecutableStatus,
+				webView2Status=webView2Status,
+			)
+		else:
+			selectedMessage = _(
+				"Selected browser runtime: {runtime}. Google Chrome: {chromeStatus}."
+			).format(runtime=selectedLabel, chromeStatus=selectedExecutableStatus)
 		if self._effectiveRuntime is None:
-			return _("No supported browser runtime was found.")
-		return _("Active browser runtime: {runtime}").format(runtime=_runtime_label(self._effectiveRuntime))
+			return _("{selectedStatus} No supported browser runtime was found.").format(selectedStatus=selectedMessage)
+		if self._effectiveRuntime == selectedRuntime:
+			return _("{selectedStatus} Active browser runtime: {runtime}.").format(
+				selectedStatus=selectedMessage,
+				runtime=_runtime_label(self._effectiveRuntime),
+			)
+		return _("{selectedStatus} Falling back to active browser runtime: {runtime}.").format(
+			selectedStatus=selectedMessage,
+			runtime=_runtime_label(self._effectiveRuntime),
+		)
 
 	def _select_saved_runtime(self) -> None:
 		self.runtimeChoice.SetSelection(self._runtimeValues.index(self._savedRuntime))

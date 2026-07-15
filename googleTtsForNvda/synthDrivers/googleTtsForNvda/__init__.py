@@ -36,6 +36,7 @@ from .bridge import (
 	DEFAULT_AUTO_LANGUAGE_PREFERRED,
 	DEFAULT_AUTO_LANGUAGE_PROFILES,
 	SAMPLE_RATE,
+	edge_webview2_blocks_effective_runtime,
 )
 from .catalog import EngineLibraryError, VoiceCatalog
 from . import language_detector, voice_store
@@ -428,6 +429,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 					"Open Google TTS Voice Manager to install another voice package."
 				)
 			)
+		if edge_webview2_blocks_effective_runtime():
+			wx.CallAfter(self._prompt_for_edge_webview2_install)
+			raise RuntimeError(
+				_(
+					"Microsoft Edge WebView2 Runtime was not found. "
+					"Install it before using Microsoft Edge as the Google TTS For NVDA browser runtime."
+				)
+			)
 		if ChromeTtsBridge.find_chrome() is None:
 			wx.CallAfter(self._show_missing_chrome_error)
 			raise RuntimeError(
@@ -506,6 +515,30 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 		# Start checking after 250ms to allow NVDA to catch the RuntimeError,
 		# restore the fallback synthesizer, and display its own warning message box.
+		wx.CallLater(250, prompt_when_ready)
+
+	def _prompt_for_edge_webview2_install(self) -> None:
+		def prompt_when_ready(retries: int = 200) -> None:
+			if retries <= 0:
+				return
+			for win in wx.GetTopLevelWindows():
+				if not win.IsShown():
+					continue
+				clsName = win.__class__.__name__
+				if "MessageDialog" in clsName:
+					wx.CallLater(150, prompt_when_ready, retries - 1)
+					return
+				if isinstance(win, wx.Dialog) and getattr(win, "IsModal", lambda: False)():
+					if not any(known in clsName for known in ("SettingsDialog", "SynthesizerDialog", "VoiceManagerDialog")):
+						wx.CallLater(150, prompt_when_ready, retries - 1)
+						return
+			try:
+				from globalPlugins.googleTtsForNvda import show_edge_webview2_prompt
+
+				show_edge_webview2_prompt()
+			except Exception:
+				log.exception("Could not show Microsoft Edge WebView2 Runtime prompt.", exc_info=True)
+
 		wx.CallLater(250, prompt_when_ready)
 
 	def _engine_library_error_message(self, error: EngineLibraryError) -> str:
