@@ -254,6 +254,7 @@ Automatic language profiles deliberately have their own profile system and must 
   - Profile-aware warm-up ordering lives in the Voice preloading code map: `_warmup_voice_ids()`, `_auto_language_candidates_in_warmup_order()`, `_warmup_options_for_voice_ids()`, `_warmup_voice_ids_for_voice()`, and `_voice_id_for_package()`.
   - NVDA speech pipeline integration lives in `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_filter_auto_language_speech_sequence()`, `_register_auto_language_speech_filter()`, `_unregister_auto_language_speech_filter()`, `_google_lang_change_command()`, `_nvda_locale_for_language()`, `_auto_language_for_process_text()`, `_patch_auto_language_voice_dictionary()`, and `_unpatch_auto_language_voice_dictionary()`.
   - Character, spelling, and symbol-related profile behavior is handled by `_auto_profile_character_settings_for_language()`, `_auto_profile_character_context_for_text()`, `_single_auto_profile_character_settings()`, the patched `speech.getSpellingSpeech`, and the patched `shortcutKeys.shouldUseSpellingFunctionality`. Preserve temporary config overlays and always restore NVDA speech config values.
+  - Automatic-language settings ring notice behavior lives in `SynthDriver.supportedSettings`, `ReadOnlyTextDriverSetting`, `_get_availableNotices()`, `_auto_language_notice_message()`, `_get_notice()`, and `_set_notice()`. Keep `_get_availableNotices()` keyed by the notice message, not the static notice setting ID, so the settings ring can announce the notice when automatic language profiles are enabled.
   - Settings UI storage and validation live in `settings.py`: `_installed_speakers_by_language()`, `_current_speech_defaults()`, `_configured_auto_language_detection()`, `_configured_auto_language_preferred()`, `_configured_auto_language_candidates()`, `_configured_auto_language_profiles()`, `_select_preferred_auto_language()`, `_refresh_preferred_language_choices()`, `_ensure_auto_language_profiles()`, `_default_voice_for_language()`, `_valid_profile_variant()`, `_load_selected_auto_language_profile()`, `_store_selected_auto_language_profile()`, `_enabled_auto_language_candidates()`, `_auto_language_status_message()`, `_refresh_auto_language_controls()`, `_refresh_auto_language_profile_value_controls()`, `_save_auto_language_settings()`, and `_refresh_synth_settings_ring()`.
   - In Settings, profile `voice` values are speaker/variant IDs. `_current_speech_defaults()` should use the current synth `variant` before `voice`, and `_valid_profile_variant()` must validate the saved speaker ID against installed speakers for that Google language.
   - Saving automatic language settings must refresh the settings ring and warm the current voice through `_refresh_synth_settings_ring()` without copying per-language profile values into NVDA's normal speech settings.
@@ -481,27 +482,12 @@ When modifying `voiceManager.py` or any UI:
 ### Translation and localization
 
 - Keep user-facing NVDA UI strings wrapped in `_('...')` after `addonHandler.initTranslation()` is initialized.
-- The translation template is `googleTtsForNvda/locale/nvda.pot`.
-- Locale catalogs live at `googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.po`.
-- Generated translation files are `googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.mo` and `googleTtsForNvda/locale/<language>/manifest.ini`.
-- Localized documentation lives at `googleTtsForNvda/doc/<language>/readme.html`.
-- Translation docs must explain what each translation part affects: UI strings for NVDA dialogs/messages/settings, `.mo` for runtime loading, localized `manifest.ini` for NVDA add-on metadata, localized `readme.html` for user help, `languageSort.json` for visible Voice Manager language ordering, and `nvda.pot` as the source template.
+- `TRANSLATING.md` is the source of truth for translator-facing file layout, workflows, checks, and examples. Keep this section focused on agent rules and code-map details.
+- Core localization files are `googleTtsForNvda/locale/nvda.pot`, `googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.po`, generated `nvda.mo`, localized `manifest.ini`, localized `doc/<language>/readme.html`, and optional `locale/<language>/languageSort.json`.
 - Keep localized `readme.html` terminology aligned with the locale's `nvda.po` UI translations and, where a setting label comes from NVDA itself, with NVDA's own locale translation.
-- Translators may use Poedit to create or edit `nvda.po` from `nvda.pot`; when Poedit saves and keeps `.po` and `.mo` synchronized, `build_i18n.py` is used to validate the translation.
-- If another translation tool edits `.po` but does not generate or synchronize `.mo`, use `build_i18n.py` to build the generated translation files and localized manifest.
-- Running `python build_i18n.py` with no arguments must open the numbered interactive menu by default.
-- Use `python build_i18n.py --all-languages` when automation needs to build or check every add-on locale without opening the interactive menu.
-- Numbered translation menus must put the broad/default choice first: all add-on locales before individual locales, default/all checks before individual check categories, and then any manual/custom entry.
-- Optional visible language sorting rules live at `googleTtsForNvda/locale/<language>/languageSort.json`.
 - `languageSort.json` affects only Voice Manager display order for translated language names; it must not change displayed names, package IDs, catalog data, download behavior, removal behavior, or runtime JSON.
-- If a locale has no valid `languageSort.json`, Voice Manager must keep catalog order for that locale.
-- Use `python build_i18n.py --extract-template` after adding or changing translatable UI strings.
-- Use `python build_i18n.py --check --language <language>` to validate one locale, or `python build_i18n.py --check` to validate all add-on locales.
-- Default translation checks include NVDA language code, manifest, documentation, UI strings, placeholders, language sorting, and obsolete source strings.
-- The `obsolete` check must fail active `.po` `msgid` entries that no longer exist in current Python `_()` strings or `manifest.ini`; commented `#~ msgid` entries from translation tools are ignored.
-- Custom checks can run individual categories such as `manifest`, `docs`, `ui`, `placeholders`, `sort`, or `obsolete`; `--checks all` runs every category.
-- Use `python build_i18n.py --language <language>` to build generated files only when the workflow relies on the script to generate `.mo` and localized `manifest.ini`.
-- `build.bat` must call `python build_i18n.py --all-languages` so release packaging builds every add-on locale non-interactively, then removes `__pycache__` created by syntax checks before packaging.
+- When source strings change, refresh the template and validate/build through `build_i18n.py` as described in `TRANSLATING.md`.
+- `build.bat` must keep using the non-interactive all-locale i18n path before packaging, then remove `__pycache__` created by syntax checks before packaging.
 - Translation tool code map:
   - `build_i18n.py` reads source strings from Python `_()` calls and `googleTtsForNvda/manifest.ini` via `_translatable_source_messages()` and `_manifest_values()`, then writes `googleTtsForNvda/locale/nvda.pot` through `_write_pot()`.
   - `.po` parsing and validation live in `_parse_po()`, `_check_catalog()`, `_check_language_files()`, `_check_language_sort_file()`, `_parse_checks()`, and `_print_run_summary()`. These checks cover NVDA language codes, localized manifest, localized readme, UI strings, placeholders, language sorting, and obsolete active source strings.

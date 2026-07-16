@@ -732,7 +732,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 	def _get_availableNotices(self) -> "OrderedDict[str, VoiceInfo]":
 		message = self._auto_language_notice_message()
-		return OrderedDict({_AUTO_LANGUAGE_NOTICE_ID: VoiceInfo(_AUTO_LANGUAGE_NOTICE_ID, message)})
+		return OrderedDict({message: VoiceInfo(message, message)})
 
 	def _initial_voice(self) -> str:
 		try:

@@ -20,13 +20,7 @@ The English source-string template lives at:
 googleTtsForNvda/locale/nvda.pot
 ```
 
-Regenerate it after adding or changing user-facing strings:
-
-```powershell
-python build_i18n.py --extract-template
-```
-
-The interactive menu also has a numbered option to generate this source-string template.
+Regenerate it after adding or changing user-facing strings. See [Checking and building](#checking-and-building) for the exact commands.
 
 ## What each translation part means
 
@@ -41,35 +35,17 @@ Each translation part affects a different place in the add-on:
 
 ## What the i18n script does
 
-`build_i18n.py` supports both validation and generated-file workflows:
+`build_i18n.py` validates translations, extracts the English source-string template, compiles `.po` files into `.mo`, and writes localized `manifest.ini` files. It does not create translated documentation or `languageSort.json`; those files are written by translators and then validated by the script.
 
-- Check-only mode validates translations and does not write generated translation files:
+## Translation quality
 
-```powershell
-python build_i18n.py --check --language <language>
-```
+Whether you translate a complete locale or only a specific part, every translated part should be complete for its scope, easy for users to understand, and faithful to the source meaning. Do not omit warnings, setup steps, limitations, security notes, or compatibility notes from a translated section.
 
-- Template extraction updates only the English source-string template:
-
-```powershell
-python build_i18n.py --extract-template
-```
-
-- Build mode refreshes the source-string template, compiles `nvda.po` into `nvda.mo`, and writes the localized `manifest.ini` for the selected language:
-
-```powershell
-python build_i18n.py --language <language>
-```
-
-- To build every add-on locale without opening the interactive menu, use:
-
-```powershell
-python build_i18n.py --all-languages
-```
-
-The script does not create translated documentation or `languageSort.json`; those files are written by translators and then validated by the script.
+Use natural wording for the target language while keeping technical meaning accurate. Keep terminology consistent with the add-on UI, NVDA's own translated terms, and the surrounding documentation.
 
 ## Starting a new language
+
+Before starting or updating a translation, sync your local source tree with the latest project changes. This helps you translate the newest source strings, manifest text, documentation, and any updated terminology instead of working from stale files.
 
 Add-on translations should use language codes that NVDA supports. In practice, this means the language has been contributed to NVDA itself, including NVDA's interface and documentation translation, and appears in NVDA's installed `locale` folder. When that is true, this add-on accepts the same locale code.
 
@@ -85,7 +61,7 @@ If a language is not present in NVDA's installed locale folder yet, the add-on t
 
 To start the interface translation:
 
-1. Generate the source template with `python build_i18n.py --extract-template`.
+1. Generate or refresh the source template if it is missing or stale.
 2. Create this folder:
 
 ```text
@@ -98,27 +74,17 @@ googleTtsForNvda/locale/<language>/LC_MESSAGES
 googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.po
 ```
 
-4. Translate all `msgstr` entries. If you use Poedit and save synchronized `.po` and `.mo` files, use the add-on script to check the translation. If your translation tool edits `.po` without generating or synchronizing `.mo`, use the add-on script to build the generated files.
+4. Translate all `msgstr` entries.
 5. Translate the documentation by copying `googleTtsForNvda/doc/en/readme.html` to:
 
 ```text
 googleTtsForNvda/doc/<language>/readme.html
 ```
 
-When translating user documentation, check your locale's `nvda.po` and existing localized UI wording first. Reuse those exact terms for menu paths, dialog names, settings, status labels, and gesture-management wording instead of inventing synonyms. For Vietnamese, follow the terms already used in `googleTtsForNvda/locale/vi/LC_MESSAGES/nvda.po`, such as `Google TTS Cho NVDA`, `cấu hình`, `hồ sơ ngôn ngữ tự động`, `Trình quản lý giọng Google TTS`, and `Quản lý cử chỉ`.
+When translating user documentation, check your locale's `nvda.po` and existing localized UI wording first. Reuse those exact terms for menu paths, dialog names, settings, status labels, and gesture-management wording instead of inventing synonyms. For Vietnamese, follow the terms already used in `googleTtsForNvda/locale/vi/LC_MESSAGES/nvda.po`, such as `Google TTS Cho NVDA`, `cấu hình`, `hồ sơ ngôn ngữ tự động`, `Trình quản lý giọng Google TTS`, and `Quản lý thao tác`.
 
 6. If your language needs a custom alphabetic order for language names in Voice Manager, see [Visible language sorting](#visible-language-sorting).
-7. Run:
-
-```powershell
-python build_i18n.py --check --language <language>
-```
-
-If your translation tool did not generate or synchronize `.mo`, build generated files with:
-
-```powershell
-python build_i18n.py --language <language>
-```
+7. Check or build the locale as described in [Checking and building](#checking-and-building).
 
 ## Visible language sorting
 
@@ -148,19 +114,7 @@ Fields:
 
 For example, Vietnamese displays `Tiếng Anh`, but sorts it internally as `Anh`. The UI must still show `Tiếng Anh`, not `anh`.
 
-If `languageSort.json` is missing, Voice Manager keeps catalog order. If the file is invalid, the translation checker reports an error.
-
-To check only this file:
-
-```powershell
-python build_i18n.py --check --language <language> --checks sort
-```
-
-The interactive menu also supports this through **Custom checks** by entering:
-
-```text
-sort
-```
+If `languageSort.json` is missing, Voice Manager keeps catalog order. If the file is invalid, the translation checker reports an error. To check only this file, use the `sort` check described in [Check categories](#check-categories).
 
 ## Vietnamese
 
@@ -188,13 +142,19 @@ When Vietnamese text names standard dialog buttons, use the same labels NVDA use
 
 ## Checking and building
 
+After adding or changing user-facing source strings, regenerate the source-string template:
+
+```powershell
+python build_i18n.py --extract-template
+```
+
 After editing a translation, check it first:
 
 ```powershell
 python build_i18n.py --check --language <language>
 ```
 
-If Poedit already saved synchronized `.po` and `.mo` files, this check is the normal use of `build_i18n.py` for the interface translation. If another tool edited `.po` without generating or synchronizing `.mo`, or if you want the script to generate `.mo` and localized `manifest.ini`, run:
+If your translation tool already saved synchronized `.po` and `.mo` files, this check is the normal use of `build_i18n.py` for the interface translation. If the `.mo` file or localized `manifest.ini` should be generated by the script, run:
 
 ```powershell
 python build_i18n.py --language <language>
@@ -206,12 +166,7 @@ In non-interactive mode, `--all-languages` checks or builds every language folde
 googleTtsForNvda/locale
 ```
 
-For Vietnamese specifically:
-
-```powershell
-python build_i18n.py --check --language vi
-python build_i18n.py --language vi
-```
+For Vietnamese specifically, replace `<language>` with `vi`.
 
 `build.bat` runs `python build_i18n.py --all-languages` automatically before packaging the add-on, so packaging does not stop at the interactive menu.
 

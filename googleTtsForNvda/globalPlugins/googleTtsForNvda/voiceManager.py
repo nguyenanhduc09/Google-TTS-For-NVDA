@@ -151,7 +151,18 @@ def _language_display_candidates(lang_code: str) -> list[str]:
 	return candidates
 
 
+def _google_language_display_name(lang_code: str) -> str:
+	normalized = str(lang_code or "").strip().replace("_", "-").lower()
+	for code, name in LANGUAGE_NAMES.items():
+		if code.lower() == normalized:
+			return name
+	return ""
+
+
 def get_language_display_name(lang_code: str) -> str:
+	googleName = _google_language_display_name(lang_code)
+	if googleName:
+		return googleName
 	for candidate in _language_display_candidates(lang_code):
 		try:
 			description = languageHandler.getLanguageDescription(candidate)
@@ -159,9 +170,6 @@ def get_language_display_name(lang_code: str) -> str:
 			description = None
 		if description:
 			return description
-	for k, v in LANGUAGE_NAMES.items():
-		if k.lower() == lang_code.lower():
-			return v
 	return lang_code
 
 
