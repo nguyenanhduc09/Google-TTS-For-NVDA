@@ -216,6 +216,7 @@ These were removed and must stay removed unless the user explicitly requests a n
 - Accessibility helper map:
   - Use `settings.py:bind_read_only_text_focus_announcement()` for focusable read-only status/help text that may be long or wrapped, including fallback URL fields.
   - Speech Settings read-only notices are created through `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py:_make_read_only_text_setting_control()` and patched by `_patch_read_only_text_setting()`. Keep `_hide_google_tts_auto_profile_speech_controls()` hiding normal speech controls only while automatic language profiles replace them.
+  - A `RuntimeError: wrapped C/C++ object of type BoxSizer has been deleted` after switching away from Google TTS can come from a stale NVDA `AutoSettingsMixin.refreshGui` callback against a destroyed Voice Settings panel. Preserve the `_patch_read_only_text_setting()` guard that ignores only the wx "has been deleted" refresh on destroyed panels, and keep other `RuntimeError` failures visible.
   - Manual URL fallback dialogs should follow `_show_manual_web_url_dialog()`: real label association, read-only `wx.TextCtrl`, full-value focus announcement, and a Copy link button.
 
 ### Automatic language profiles
@@ -282,7 +283,7 @@ Automatic language profiles deliberately have their own profile system and must 
 - Follow NVDA's `VariantSetting()` pattern from eSpeak: implement `_get_variant()`, `_set_variant()`, and `_getAvailableVariants()`, and keep dynamic variant lists in the `_availableVariants` cache when needed. Do not assign to `self.availableVariants` directly, because that can shadow NVDA's auto-property and break settings loading/caching.
 - NVDA compatibility code map:
   - Synth switching compatibility lives in `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_normalize_set_synth_args()`, `_call_set_synth_compat()`, `_set_synth_with_google_tts_voice_prompt()`, `_patch_synth_selection()`, and `_unpatch_synth_selection()`. These wrappers preserve compatibility with `setSynth` signatures across NVDA versions; do not replace them with a single assumed signature.
-  - Voice dictionary/settings dialog hooks live in `_patch_voice_dictionary_dialog()`, `_unpatch_voice_dictionary_dialog()`, `_patch_read_only_text_setting()`, and `_unpatch_read_only_text_setting()`. Always unpatch only if the current callable is the one installed by this add-on.
+  - Voice dictionary/settings dialog hooks live in `_patch_voice_dictionary_dialog()`, `_unpatch_voice_dictionary_dialog()`, `_patch_read_only_text_setting()`, and `_unpatch_read_only_text_setting()`. This includes the destroyed-panel `AutoSettingsMixin.refreshGui` guard used when stale weakref callbacks run after synth switching. Always unpatch only if the current callable is the one installed by this add-on.
   - Input gesture scripts live in `GlobalPlugin.script_openVoiceManager()` and `GlobalPlugin.script_openSettings()`. `script_openVoiceManager` has the default gesture `kb:NVDA+control+shift+g`; `script_openSettings` intentionally has no default gesture so user assignments are stored by NVDA in `gestures.ini`.
 - Support `synthIndexReached` and `synthDoneSpeaking` notifications.
 - Speech cancellation must be responsive and must not leave browser-runtime/CDP calls hanging.

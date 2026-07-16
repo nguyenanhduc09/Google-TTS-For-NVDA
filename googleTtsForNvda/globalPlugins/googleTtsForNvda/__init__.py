@@ -62,6 +62,7 @@ _originalSettingsDialogSetSynth: Any | None = None
 _originalAutoSettingsGetSettingMaker: Any | None = None
 _originalAutoSettingsUpdateValueForControl: Any | None = None
 _originalAutoSettingsOnDiscard: Any | None = None
+_originalAutoSettingsRefreshGui: Any | None = None
 _originalVoiceSettingsMakeSettings: Any | None = None
 _originalSpeechProcessText: Any | None = None
 _originalSpeechGetSpellingSpeech: Any | None = None
@@ -71,6 +72,7 @@ _originalPopupSettingsDialog: Any | None = None
 _patchedAutoSettingsGetSettingMaker: Any | None = None
 _patchedAutoSettingsUpdateValueForControl: Any | None = None
 _patchedAutoSettingsOnDiscard: Any | None = None
+_patchedAutoSettingsRefreshGui: Any | None = None
 _patchedVoiceSettingsMakeSettings: Any | None = None
 _patchedSpeechProcessText: Any | None = None
 _patchedSpeechGetSpellingSpeech: Any | None = None
@@ -534,8 +536,10 @@ def _hide_google_tts_auto_profile_speech_controls(panel: Any) -> None:
 
 def _patch_read_only_text_setting() -> None:
 	global _originalAutoSettingsGetSettingMaker, _originalAutoSettingsUpdateValueForControl, _originalAutoSettingsOnDiscard
+	global _originalAutoSettingsRefreshGui
 	global _originalVoiceSettingsMakeSettings
 	global _patchedAutoSettingsGetSettingMaker, _patchedAutoSettingsUpdateValueForControl, _patchedAutoSettingsOnDiscard
+	global _patchedAutoSettingsRefreshGui
 	global _patchedVoiceSettingsMakeSettings
 	if _originalAutoSettingsGetSettingMaker is not None:
 		return
@@ -546,9 +550,11 @@ def _patch_read_only_text_setting() -> None:
 	_originalAutoSettingsGetSettingMaker = autoSettingsMixin._getSettingMaker
 	_originalAutoSettingsUpdateValueForControl = autoSettingsMixin._updateValueForControl
 	_originalAutoSettingsOnDiscard = autoSettingsMixin.onDiscard
+	_originalAutoSettingsRefreshGui = autoSettingsMixin.refreshGui
 	originalGetSettingMaker = _originalAutoSettingsGetSettingMaker
 	originalUpdateValueForControl = _originalAutoSettingsUpdateValueForControl
 	originalOnDiscard = _originalAutoSettingsOnDiscard
+	originalRefreshGui = _originalAutoSettingsRefreshGui
 	if voiceSettingsPanel is not None:
 		_originalVoiceSettingsMakeSettings = voiceSettingsPanel.makeSettings
 		originalVoiceMakeSettings = _originalVoiceSettingsMakeSettings
@@ -609,6 +615,14 @@ def _patch_read_only_text_setting() -> None:
 				log.debug("Could not unbind Google TTS speech setting control.", exc_info=True)
 		settingsInst.loadSettings()
 
+	def _refresh_gui(self: Any) -> None:
+		try:
+			return originalRefreshGui(self)
+		except RuntimeError as exc:
+			if "has been deleted" not in str(exc):
+				raise
+			log.debug("Ignoring refresh for destroyed NVDA auto settings panel.", exc_info=True)
+
 	def _voice_make_settings(self: Any, settingsSizer: wx.Sizer) -> None:
 		originalVoiceMakeSettings(self, settingsSizer)
 		_hide_google_tts_auto_profile_speech_controls(self)
@@ -616,9 +630,11 @@ def _patch_read_only_text_setting() -> None:
 	_patchedAutoSettingsGetSettingMaker = _get_setting_maker
 	_patchedAutoSettingsUpdateValueForControl = _update_value_for_control
 	_patchedAutoSettingsOnDiscard = _on_discard
+	_patchedAutoSettingsRefreshGui = _refresh_gui
 	autoSettingsMixin._getSettingMaker = _get_setting_maker
 	autoSettingsMixin._updateValueForControl = _update_value_for_control
 	autoSettingsMixin.onDiscard = _on_discard
+	autoSettingsMixin.refreshGui = _refresh_gui
 	if voiceSettingsPanel is not None and originalVoiceMakeSettings is not None:
 		_patchedVoiceSettingsMakeSettings = _voice_make_settings
 		voiceSettingsPanel.makeSettings = _voice_make_settings
@@ -626,8 +642,10 @@ def _patch_read_only_text_setting() -> None:
 
 def _unpatch_read_only_text_setting() -> None:
 	global _originalAutoSettingsGetSettingMaker, _originalAutoSettingsUpdateValueForControl, _originalAutoSettingsOnDiscard
+	global _originalAutoSettingsRefreshGui
 	global _originalVoiceSettingsMakeSettings
 	global _patchedAutoSettingsGetSettingMaker, _patchedAutoSettingsUpdateValueForControl, _patchedAutoSettingsOnDiscard
+	global _patchedAutoSettingsRefreshGui
 	global _patchedVoiceSettingsMakeSettings
 	if _originalAutoSettingsGetSettingMaker is None:
 		return
@@ -645,6 +663,11 @@ def _unpatch_read_only_text_setting() -> None:
 			and getattr(autoSettingsMixin, "onDiscard", None) is _patchedAutoSettingsOnDiscard
 		):
 			autoSettingsMixin.onDiscard = _originalAutoSettingsOnDiscard
+		if (
+			_originalAutoSettingsRefreshGui is not None
+			and getattr(autoSettingsMixin, "refreshGui", None) is _patchedAutoSettingsRefreshGui
+		):
+			autoSettingsMixin.refreshGui = _originalAutoSettingsRefreshGui
 	voiceSettingsPanel = getattr(gui.settingsDialogs, "VoiceSettingsPanel", None)
 	if (
 		voiceSettingsPanel is not None
@@ -655,10 +678,12 @@ def _unpatch_read_only_text_setting() -> None:
 	_originalAutoSettingsGetSettingMaker = None
 	_originalAutoSettingsUpdateValueForControl = None
 	_originalAutoSettingsOnDiscard = None
+	_originalAutoSettingsRefreshGui = None
 	_originalVoiceSettingsMakeSettings = None
 	_patchedAutoSettingsGetSettingMaker = None
 	_patchedAutoSettingsUpdateValueForControl = None
 	_patchedAutoSettingsOnDiscard = None
+	_patchedAutoSettingsRefreshGui = None
 	_patchedVoiceSettingsMakeSettings = None
 
 
