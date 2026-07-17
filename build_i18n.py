@@ -190,7 +190,8 @@ def _write_pot(messages: dict[str, list[str]]) -> Path:
 			lines.append(f"#: {location}")
 		_append_po_string(lines, "msgid", msgid)
 		lines.append('msgstr ""')
-	POT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+	with POT_PATH.open("w", encoding="utf-8", newline="\n") as stream:
+		stream.write("\n".join(lines) + "\n")
 	return POT_PATH
 
 
@@ -338,7 +339,8 @@ def _write_translated_manifest(language_dir: Path, catalog: dict[str, str]) -> N
 		changelog = catalog.get(values["changelog"], values["changelog"])
 		changelog = changelog.replace('"""', r"\"\"\"")
 		lines.append(f'changelog = """{changelog}"""\n')
-	(language_dir / "manifest.ini").write_text("".join(lines), encoding="utf-8")
+	with (language_dir / "manifest.ini").open("w", encoding="utf-8", newline="\n") as stream:
+		stream.write("".join(lines))
 
 
 def _supported_nvda_languages(locale_dir: Path) -> set[str] | None:

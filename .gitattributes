@@ -1,5 +1,6 @@
 # Set default behavior to automatically normalize line endings
 * text=auto
+.gitattributes text eol=lf
 
 # Explicitly declare text files to always be normalized to LF on checkout
 *.py text eol=lf
@@ -9,6 +10,9 @@
 *.md text eol=lf
 *.ini text eol=lf
 *.json text eol=lf
+*.po text eol=lf
+*.pot text eol=lf
+*.txt text eol=lf
 *.yaml text eol=lf
 *.yml text eol=lf
 
@@ -21,5 +25,6 @@
 *.png binary
 *.jpg binary
 *.ico binary
+*.dll binary
 *.nvda-addon binary
 *.zvoice binary

@@ -2,6 +2,8 @@
 dist/
 *.nvda-addon
 *.zip
+*.mo
+*.pot
 
 # Python artifacts & caches
 __pycache__/

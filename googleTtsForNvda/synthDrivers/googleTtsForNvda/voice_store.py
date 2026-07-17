@@ -185,15 +185,31 @@ def physically_installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
 	return [package for package in catalog.packages if is_package_installed(package)]
 
 
-def installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
-	installed = physically_installed_packages(catalog)
-	installedIds = {package.id for package in installed}
+def usable_installed_packages(packages: list[VoicePackage]) -> list[VoicePackage]:
+	usableIds = {
+		package.id
+		for package in packages
+		if is_package_supported_by_engine(package)
+	}
+	while True:
+		nextUsableIds = {
+			package.id
+			for package in packages
+			if package.id in usableIds
+			and (not package.dependentVoiceId or package.dependentVoiceId in usableIds)
+		}
+		if nextUsableIds == usableIds:
+			break
+		usableIds = nextUsableIds
 	return [
 		package
-		for package in installed
-		if is_package_supported_by_engine(package)
-		and (not package.dependentVoiceId or package.dependentVoiceId in installedIds)
+		for package in packages
+		if package.id in usableIds
 	]
+
+
+def installed_packages(catalog: VoiceCatalog) -> list[VoicePackage]:
+	return usable_installed_packages(physically_installed_packages(catalog))
 
 
 def remove_package(package: VoicePackage) -> None:
@@ -225,13 +241,17 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
 	with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as output:
 		total = int(response.headers.get("Content-Length") or package.compressedSize or 0)
 		downloaded = 0
+		lastPercent = -1
 		for chunk in iter(lambda: response.read(1024 * 256), b""):
 			if not chunk:
 				break
 			output.write(chunk)
 			downloaded += len(chunk)
 			if progress and total:
-				progress(min(99, int(downloaded * 100 / total)), _("Downloading {package}.").format(package=package.id))
+				percent = min(99, int(downloaded * 100 / total))
+				if percent != lastPercent:
+					lastPercent = percent
+					progress(percent, _("Downloading {package}.").format(package=package.id))
 	if package.compressedSize and tmp.stat().st_size != package.compressedSize:
 		tmp.unlink(missing_ok=True)
 		raise RuntimeError(
@@ -260,9 +280,27 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
 def copy_existing_package(source: Path, package: VoicePackage) -> Path:
 	target = package_file(package)
 	target.parent.mkdir(parents=True, exist_ok=True)
-	shutil.copy2(source, target)
-	_forget_verified_package(package.id)
-	if not is_package_installed(package):
-		target.unlink(missing_ok=True)
-		raise RuntimeError(_("Voice package {package} did not pass verification after import.").format(package=package.id))
-	return target
+	tmp = target.with_suffix(".import_tmp")
+	try:
+		tmp.unlink(missing_ok=True)
+		shutil.copy2(source, tmp)
+		if package.compressedSize and tmp.stat().st_size != package.compressedSize:
+			raise RuntimeError(
+				_("Voice package {package} did not pass verification after import.").format(
+					package=package.id
+				)
+			)
+		actualHash = sha256(tmp) if package.sha256Checksum else None
+		if package.sha256Checksum and actualHash is not None:
+			if actualHash.lower() != package.sha256Checksum.lower():
+				raise RuntimeError(
+					_("Voice package {package} did not pass verification after import.").format(
+						package=package.id
+					)
+				)
+		_forget_verified_package(package.id)
+		os.replace(tmp, target)
+		_remember_verified_package(package, target.stat(), actualHash)
+		return target
+	finally:
+		tmp.unlink(missing_ok=True)

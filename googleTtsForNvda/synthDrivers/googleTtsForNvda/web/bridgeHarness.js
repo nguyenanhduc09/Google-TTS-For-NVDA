@@ -2,17 +2,19 @@
 	"use strict";
 
 	let currentSessionId = null;
+	let currentSessionToken = 0;
 	let currentMarkOffset = 0;
 	let currentOutputGain = 1;
 	let currentTempoRate = 1;
+	let currentPostPitchFactor = 1;
 	let currentAgcGain = 1;
 	let currentLimiterGain = 1;
 	let lastChunkAt = 0;
 	let stopped = false;
 	let initPromise = null;
 	let suppressBridgeAudio = false;
-	const firstAudioPacketSamples = 12;
-	const steadyAudioPacketSamples = 240;
+	const firstAudioPacketSamples = 120;
+	const steadyAudioPacketSamples = 1200;
 	const agcTargetRms = 0.18;
 	const agcSilenceFloor = 0.012;
 	const agcMinGain = 0.55;
@@ -37,6 +39,8 @@
 	let emittedAudioPackets = 0;
 	let pendingAudioBuffers = [];
 	let pendingAudioSampleCount = 0;
+	let pitchInputBuffer = new Float32Array(0);
+	let pitchReadOffset = 0;
 	let tempoInputBuffer = new Float32Array(0);
 	let tempoReadOffset = 0;
 	let tempoOverlapTail = new Float32Array(0);
@@ -46,13 +50,25 @@
 	let trimLeadingBoundarySilence = false;
 	let leadingBoundaryTrimBudget = 0;
 	let sawSynthesisEnd = false;
+	let synthesisEndAt = 0;
 	let synthesisGenerating = false;
 	let currentAudioPort = null;
 	let currentEndResolver = null;
 	const messageListeners = [];
 
-	function emit(message) {
-		if (!message || !currentSessionId || suppressBridgeAudio) {
+	function beginSession(sessionId, suppressAudio) {
+		currentSessionToken++;
+		currentSessionId = sessionId;
+		suppressBridgeAudio = suppressAudio;
+		return currentSessionToken;
+	}
+
+	function isCurrentSession(sessionToken) {
+		return sessionToken === currentSessionToken;
+	}
+
+	function emit(message, sessionToken = currentSessionToken) {
+		if (!message || !currentSessionId || suppressBridgeAudio || !isCurrentSession(sessionToken)) {
 			return;
 		}
 		message.sessionId = currentSessionId;
@@ -180,10 +196,17 @@
 
 	function tempoRateFromPayload(payload) {
 		const rate = Number(payload && payload.artificialRate);
-		if (!Number.isFinite(rate)) {
+		const artificialRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2.2, rate)) : 1;
+		const postPitchFactor = Math.max(0.35, Math.min(2.5, currentPostPitchFactor || 1));
+		return Math.max(0.35, Math.min(5.5, artificialRate / postPitchFactor));
+	}
+
+	function postPitchFactorFromPayload(payload) {
+		const pitchFactor = Number(payload && payload.postPitch);
+		if (!Number.isFinite(pitchFactor)) {
 			return 1;
 		}
-		return Math.max(0.5, Math.min(2.2, rate));
+		return Math.max(0.35, Math.min(2.5, pitchFactor));
 	}
 
 	function updateAgcGain(buffers, sampleCount) {
@@ -232,6 +255,45 @@
 		return sign * Math.min(softLimiterCeiling, shaped);
 	}
 
+	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+	function fastUint8ToBase64(uint8Array) {
+		const len = uint8Array.length;
+		const extraBytes = len % 3;
+		let output = "";
+		const parts = [];
+
+		for (let index = 0, len2 = len - extraBytes; index < len2; index += 3) {
+			const triplet = (uint8Array[index] << 16) + (uint8Array[index + 1] << 8) + uint8Array[index + 2];
+			parts.push(
+				base64Chars.charAt((triplet >> 18) & 0x3f) +
+					base64Chars.charAt((triplet >> 12) & 0x3f) +
+					base64Chars.charAt((triplet >> 6) & 0x3f) +
+					base64Chars.charAt(triplet & 0x3f)
+			);
+			if (parts.length >= 1024) {
+				output += parts.join("");
+				parts.length = 0;
+			}
+		}
+		if (parts.length > 0) {
+			output += parts.join("");
+		}
+
+		if (extraBytes === 1) {
+			const val = uint8Array[len - 1];
+			output += base64Chars.charAt(val >> 2) + base64Chars.charAt((val << 4) & 0x3f) + "==";
+		} else if (extraBytes === 2) {
+			const val = (uint8Array[len - 2] << 8) + uint8Array[len - 1];
+			output +=
+				base64Chars.charAt(val >> 10) +
+				base64Chars.charAt((val >> 4) & 0x3f) +
+				base64Chars.charAt((val << 2) & 0x3f) +
+				"=";
+		}
+		return output;
+	}
+
 	function buffersToPcmBase64(buffers, sampleCount) {
 		const bytes = new Uint8Array(sampleCount * 2);
 		const view = new DataView(bytes.buffer);
@@ -245,24 +307,25 @@
 				outputIndex++;
 			}
 		}
-		let binary = "";
-		const chunkSize = 0x8000;
-		for (let index = 0; index < bytes.length; index += chunkSize) {
-			binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-		}
-		return btoa(binary);
+		return fastUint8ToBase64(bytes);
 	}
 
 	function resetAudioQueue() {
 		pendingAudioBuffers = [];
 		pendingAudioSampleCount = 0;
 		emittedAudioPackets = 0;
+		resetPitchProcessor();
 		resetTempoProcessor();
 		heldBoundarySamples = new Float32Array(0);
 		trimLeadingBoundarySilence = false;
 		leadingBoundaryTrimBudget = 0;
 		currentAgcGain = 1;
 		currentLimiterGain = 1;
+	}
+
+	function resetPitchProcessor() {
+		pitchInputBuffer = new Float32Array(0);
+		pitchReadOffset = 0;
 	}
 
 	function resetTempoProcessor() {
@@ -339,6 +402,48 @@
 		return combineSampleParts(parts);
 	}
 
+	function processPitchSamples(samples, final = false) {
+		if (Math.abs(currentPostPitchFactor - 1) < 0.001) {
+			resetPitchProcessor();
+			return samples;
+		}
+		if (samples.length) {
+			pitchInputBuffer = appendSamples(pitchInputBuffer, samples);
+		}
+		const outputParts = [];
+		if (pitchInputBuffer.length > 1) {
+			const outputLength = Math.max(
+				0,
+				Math.floor((pitchInputBuffer.length - 1 - pitchReadOffset) / currentPostPitchFactor)
+			);
+			if (outputLength > 0) {
+				const output = new Float32Array(outputLength);
+				for (let index = 0; index < outputLength; index++) {
+					const inputIndex = Math.floor(pitchReadOffset);
+					const fraction = pitchReadOffset - inputIndex;
+					const current = pitchInputBuffer[inputIndex];
+					const next = pitchInputBuffer[Math.min(inputIndex + 1, pitchInputBuffer.length - 1)];
+					output[index] = current + (next - current) * fraction;
+					pitchReadOffset += currentPostPitchFactor;
+				}
+				appendTempoOutput(outputParts, output);
+			}
+			const discard = Math.max(0, Math.floor(pitchReadOffset) - 1);
+			if (discard > 0) {
+				pitchInputBuffer = pitchInputBuffer.slice(discard);
+				pitchReadOffset -= discard;
+			}
+		}
+		if (final) {
+			if (pitchInputBuffer.length) {
+				const remainingOffset = Math.min(Math.floor(pitchReadOffset), pitchInputBuffer.length - 1);
+				appendTempoOutput(outputParts, pitchInputBuffer.subarray(remainingOffset));
+			}
+			resetPitchProcessor();
+		}
+		return combineSampleParts(outputParts);
+	}
+
 	function processTempoSamples(samples, final = false) {
 		if (Math.abs(currentTempoRate - 1) < 0.001) {
 			resetTempoProcessor();
@@ -371,14 +476,29 @@
 		return combineSampleParts(outputParts);
 	}
 
-	function flushTempoProcessor() {
+	function queueTempoInput(samples, sessionToken = currentSessionToken) {
+		const tempoSamples = processTempoSamples(samples);
+		if (tempoSamples.length) {
+			queueProcessedAudio(tempoSamples, sessionToken);
+		}
+	}
+
+	function flushAudioProcessors(sessionToken = currentSessionToken) {
+		const pitchSamples = processPitchSamples(new Float32Array(0), true);
+		if (pitchSamples.length) {
+			queueTempoInput(pitchSamples, sessionToken);
+		}
+		flushTempoProcessor(sessionToken);
+	}
+
+	function flushTempoProcessor(sessionToken = currentSessionToken) {
 		if (Math.abs(currentTempoRate - 1) < 0.001) {
 			resetTempoProcessor();
 			return;
 		}
 		const output = processTempoSamples(new Float32Array(0), true);
 		if (output.length) {
-			queueProcessedAudio(output);
+			queueProcessedAudio(output, sessionToken);
 		}
 	}
 
@@ -420,7 +540,10 @@
 		return index < 0 ? new Float32Array(0) : samples.subarray(0, index + 1);
 	}
 
-	function queueAudioPacket(samples) {
+	function queueAudioPacket(samples, sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			return;
+		}
 		if (!samples.length) {
 			return;
 		}
@@ -428,7 +551,7 @@
 		pendingAudioSampleCount += samples.length;
 		const packetSamples = emittedAudioPackets === 0 ? firstAudioPacketSamples : steadyAudioPacketSamples;
 		if (pendingAudioSampleCount >= packetSamples) {
-			flushAudioQueue();
+			flushAudioQueue(sessionToken);
 		}
 	}
 
@@ -442,6 +565,7 @@
 		}
 		if (event.type === "end") {
 			sawSynthesisEnd = true;
+			synthesisEndAt = performance.now();
 			if (currentEndResolver) {
 				currentEndResolver();
 			}
@@ -452,7 +576,7 @@
 		}
 	}
 
-	function scheduleWorkletEmpty(port) {
+	function scheduleWorkletEmpty(port, sessionToken = currentSessionToken) {
 		if (!port) {
 			return;
 		}
@@ -461,13 +585,17 @@
 		}
 		port._emptyTimer = setTimeout(() => {
 			port._emptyTimer = null;
-			if (!stopped && typeof port.onmessage === "function") {
+			if (!stopped && isCurrentSession(sessionToken) && typeof port.onmessage === "function") {
 				port.onmessage({ data: { type: "empty" } });
 			}
 		}, synthesisGenerating ? synthesisGeneratingEmptyDelayMs : synthesisFinishedIdleMs);
 	}
 
-	function flushAudioQueue() {
+	function flushAudioQueue(sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			resetAudioQueue();
+			return;
+		}
 		if (stopped) {
 			resetAudioQueue();
 			return;
@@ -479,15 +607,18 @@
 			type: "audio",
 			sampleRate: 24000,
 			data: buffersToPcmBase64(pendingAudioBuffers, pendingAudioSampleCount),
-		});
+		}, sessionToken);
 		pendingAudioBuffers = [];
 		pendingAudioSampleCount = 0;
 		emittedAudioPackets++;
 	}
 
-	function queueProcessedAudio(samples) {
+	function queueProcessedAudio(samples, sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			return;
+		}
 		if (!smoothSegmentBoundaries) {
-			queueAudioPacket(samples);
+			queueAudioPacket(samples, sessionToken);
 			return;
 		}
 		const trimmedSamples = trimLeadingSilence(samples);
@@ -500,32 +631,39 @@
 			return;
 		}
 		const emitCount = joinedSamples.length - boundaryHoldSamples;
-		queueAudioPacket(joinedSamples.subarray(0, emitCount));
+		queueAudioPacket(joinedSamples.subarray(0, emitCount), sessionToken);
 		heldBoundarySamples = joinedSamples.slice(emitCount);
 	}
 
-	function queueAudio(samples) {
-		const tempoSamples = processTempoSamples(samples);
-		if (tempoSamples.length) {
-			queueProcessedAudio(tempoSamples);
+	function queueAudio(samples, sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			return;
+		}
+		const pitchSamples = processPitchSamples(samples);
+		if (pitchSamples.length) {
+			queueTempoInput(pitchSamples, sessionToken);
 		}
 	}
 
-	function finishSegmentAudio(hasNextSegment) {
+	function finishSegmentAudio(hasNextSegment, sessionToken = currentSessionToken) {
+		if (!isCurrentSession(sessionToken)) {
+			resetAudioQueue();
+			return;
+		}
 		if (!smoothSegmentBoundaries) {
 			return;
 		}
 		if (!hasNextSegment) {
-			flushTempoProcessor();
+			flushAudioProcessors(sessionToken);
 		}
 		let samples = heldBoundarySamples;
 		heldBoundarySamples = new Float32Array(0);
 		if (hasNextSegment) {
 			samples = trimTrailingSilence(samples);
 		}
-		queueAudioPacket(samples);
+		queueAudioPacket(samples, sessionToken);
 		if (hasNextSegment) {
-			flushAudioQueue();
+			flushAudioQueue(sessionToken);
 		}
 		if (hasNextSegment) {
 			trimLeadingBoundarySilence = true;
@@ -535,10 +673,18 @@
 
 	class FakeAudioWorkletNode {
 		constructor() {
+			const sessionToken = currentSessionToken;
 			this.port = {
+				_sessionToken: sessionToken,
 				onmessage: null,
 				postMessage(message) {
 					if (!message || stopped) {
+						return;
+					}
+					if (synthesisGenerating) {
+						this._sessionToken = currentSessionToken;
+					}
+					if (!isCurrentSession(this._sessionToken)) {
 						return;
 					}
 					if (message.command === "clearBuffers") {
@@ -560,8 +706,8 @@
 						: new Float32Array(message.buffer);
 					lastChunkAt = performance.now();
 					currentAudioPort = this;
-					queueAudio(samples);
-					scheduleWorkletEmpty(this);
+					queueAudio(samples, this._sessionToken);
+					scheduleWorkletEmpty(this, this._sessionToken);
 				},
 			};
 		}
@@ -577,7 +723,13 @@
 	async function waitForSynthesisComplete(timeoutMs) {
 		const startedAt = performance.now();
 		while (performance.now() - startedAt < timeoutMs) {
-			if (stopped || sawSynthesisEnd) {
+			if (stopped) {
+				return;
+			}
+			const now = performance.now();
+			const audioHasDrained = lastChunkAt > 0 && now - lastChunkAt >= synthesisFinishedIdleMs;
+			const endHasSettled = sawSynthesisEnd && synthesisEndAt > 0 && now - synthesisEndAt >= synthesisFinishedIdleMs;
+			if (audioHasDrained || (endHasSettled && lastChunkAt <= 0)) {
 				return;
 			}
 			await new Promise((resolve) => {
@@ -585,9 +737,6 @@
 				setTimeout(resolve, synthesisIdlePollMs);
 			});
 			currentEndResolver = null;
-			if (lastChunkAt > 0 && performance.now() - lastChunkAt >= synthesisFinishedIdleMs) {
-				return;
-			}
 		}
 		throw new Error("Timed out waiting for browser speech audio.");
 	}
@@ -642,6 +791,7 @@
 	}
 
 	async function stopActiveSynthesis() {
+		currentSessionToken++;
 		stopped = true;
 		synthesisGenerating = false;
 		smoothSegmentBoundaries = false;
@@ -652,7 +802,11 @@
 		resetAudioQueue();
 		const engine = getTtsEngine();
 		if (engine && typeof engine.onStop === "function") {
-			await engine.onStop();
+			try {
+				await engine.onStop();
+			} catch (error) {
+				console.debug("Ignored engine stop failure during cancellation:", error);
+			}
 		}
 	}
 
@@ -665,16 +819,17 @@
 	};
 
 	window.googleTtsForNvdaPreload = async function googleTtsForNvdaPreload(payload) {
-		currentSessionId = payload.sessionId;
+		const sessionToken = beginSession(payload.sessionId, true);
 		currentOutputGain = 0;
-		suppressBridgeAudio = true;
 		try {
 			lastChunkAt = 0;
 			stopped = false;
 			sawSynthesisEnd = false;
+			synthesisEndAt = 0;
 			synthesisGenerating = false;
 			resetAudioQueue();
 			currentTempoRate = 1;
+			currentPostPitchFactor = 1;
 			smoothSegmentBoundaries = false;
 			await ensureEngineInitialized();
 			const engine = getTtsEngine();
@@ -689,7 +844,7 @@
 			}
 			synthesisGenerating = true;
 			try {
-				await engine.onSpeak(payload.text || "a", {
+				await engine.onSpeak(payload.text || " ", {
 					voiceName: payload.voiceName,
 					lang: payload.lang,
 					rate: 1,
@@ -699,16 +854,20 @@
 			} finally {
 				synthesisGenerating = false;
 			}
+			if (!isCurrentSession(sessionToken)) {
+				return { success: false, preloaded: false, cancelled: true };
+			}
 			if (lastChunkAt > 0) {
-				scheduleWorkletEmpty(currentAudioPort);
+				scheduleWorkletEmpty(currentAudioPort, sessionToken);
 			}
 			readyVoices.add(payload.voiceName);
 			return { success: true, preloaded: true };
 		} finally {
-			if (currentSessionId === payload.sessionId) {
+			if (currentSessionId === payload.sessionId && isCurrentSession(sessionToken)) {
 				currentSessionId = null;
+				currentSessionToken++;
+				suppressBridgeAudio = false;
 			}
-			suppressBridgeAudio = false;
 		}
 	};
 
@@ -734,25 +893,26 @@
 				? payload.segments.filter((segment) => typeof segment === "string" && segment.length)
 				: [payload.text];
 			const hasHiddenSegments = textSegments.length > 1;
-			currentSessionId = sessionId;
+			const sessionToken = beginSession(sessionId, false);
 			currentMarkOffset = 0;
 			currentOutputGain = outputGainFromPayload(payload);
-			suppressBridgeAudio = false;
 			lastChunkAt = 0;
 			stopped = false;
 			sawSynthesisEnd = false;
 			synthesisGenerating = false;
 			resetAudioQueue();
+			currentPostPitchFactor = postPitchFactorFromPayload(payload);
 			currentTempoRate = tempoRateFromPayload(payload);
 			smoothSegmentBoundaries = hasHiddenSegments;
-			emit({ type: "started" });
+			emit({ type: "started" }, sessionToken);
 			for (let segmentIndex = 0; segmentIndex < textSegments.length; segmentIndex++) {
-				if (stopped) {
+				if (stopped || !isCurrentSession(sessionToken)) {
 					break;
 				}
 				const textSegment = textSegments[segmentIndex];
 				lastChunkAt = 0;
 				sawSynthesisEnd = false;
+				synthesisEndAt = 0;
 				synthesisGenerating = true;
 				try {
 					await engine.onSpeak(textSegment, {
@@ -760,33 +920,29 @@
 						lang: payload.lang,
 						rate: payload.rate,
 						pitch: payload.pitch,
-						// Forwarded for architectural parity with rate/pitch/volume
-						// (same single-scalar-per-utterance pattern NVDA's eSpeak/IBM
-						// TTS drivers use for their own Inflection setting). The
-						// compiled WASM engine (offscreen_compiled.js /
-						// bindings_main.js) does not currently read this key -- it
-						// only consumes rate/pitch/volume from this options object.
-						// Wiring it up end-to-end here means a future contributor
-						// only needs to add support on the engine side, not rebuild
-						// this plumbing.
-						inflectionScale: payload.inflectionScale,
 						volume: payload.volume,
 					});
 				} finally {
 					synthesisGenerating = false;
 				}
+				if (!isCurrentSession(sessionToken)) {
+					break;
+				}
 				if (lastChunkAt > 0) {
-					scheduleWorkletEmpty(currentAudioPort);
+					scheduleWorkletEmpty(currentAudioPort, sessionToken);
 				}
 				await waitForSynthesisComplete(120000);
-				finishSegmentAudio(segmentIndex < textSegments.length - 1);
+				if (!isCurrentSession(sessionToken)) {
+					break;
+				}
+				finishSegmentAudio(segmentIndex < textSegments.length - 1, sessionToken);
 				currentMarkOffset += textSegment.length;
 			}
 			currentMarkOffset = 0;
 			readyVoices.add(payload.voiceName);
-			flushTempoProcessor();
-			flushAudioQueue();
-			emit({ type: "done" });
+			flushAudioProcessors(sessionToken);
+			flushAudioQueue(sessionToken);
+			emit({ type: "done" }, sessionToken);
 			await stopActiveSynthesis();
 			smoothSegmentBoundaries = false;
 			if (currentSessionId === sessionId) {

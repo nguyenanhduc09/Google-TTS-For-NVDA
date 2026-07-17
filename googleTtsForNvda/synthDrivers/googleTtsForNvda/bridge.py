@@ -60,17 +60,29 @@ STOP_EXPRESSION = "window.googleTtsForNvdaStop && window.googleTtsForNvdaStop()"
 LOCAL_CACHE_DIR_NAME = "googleTtsForNvda"
 CHROME_PROFILE_DIR_NAME = "chromeProfiles"
 EDGE_PROFILE_DIR_NAME = "edgeProfiles"
+BRAVE_PROFILE_DIR_NAME = "braveProfiles"
 PERSISTENT_PROFILE_DIR_NAME = "persistentSession"
+PERSISTENT_PROFILE_MAX_BYTES = 500 * 1024 * 1024
 CONFIG_SECTION = "googleTtsForNvda"
 CONFIG_BROWSER_RUNTIME = "browserRuntime"
+CONFIG_AUTO_LANGUAGE_DETECTION = "autoLanguageDetection"
+CONFIG_AUTO_LANGUAGE_PREFERRED = "autoLanguagePreferred"
+CONFIG_AUTO_LANGUAGE_CANDIDATES = "autoLanguageCandidates"
+CONFIG_AUTO_LANGUAGE_PROFILES = "autoLanguageProfiles"
 BROWSER_RUNTIME_EDGE = "edge"
 BROWSER_RUNTIME_CHROME = "chrome"
-DEFAULT_BROWSER_RUNTIME = BROWSER_RUNTIME_EDGE
+BROWSER_RUNTIME_BRAVE = "brave"
+DEFAULT_BROWSER_RUNTIME = BROWSER_RUNTIME_CHROME
+DEFAULT_AUTO_LANGUAGE_DETECTION = False
+DEFAULT_AUTO_LANGUAGE_PREFERRED = ""
+DEFAULT_AUTO_LANGUAGE_CANDIDATES = ""
+DEFAULT_AUTO_LANGUAGE_PROFILES = ""
 BROWSER_RUNTIME_LABELS = {
 	BROWSER_RUNTIME_EDGE: "Microsoft Edge",
 	BROWSER_RUNTIME_CHROME: "Google Chrome",
+	BROWSER_RUNTIME_BRAVE: "Brave",
 }
-BROWSER_RUNTIMES = (BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_CHROME)
+BROWSER_RUNTIMES = (BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE)
 
 if str(WEBSOCKET_CLIENT_DIR) not in sys.path:
 	sys.path.insert(1, str(WEBSOCKET_CLIENT_DIR))
@@ -82,6 +94,10 @@ class CdpError(Exception):
 	def __init__(self, message: str, technicalDetail: str | None = None) -> None:
 		super().__init__(message)
 		self.technicalDetail = technicalDetail
+
+
+class _BrowserProfileInUseError(CdpError):
+	pass
 
 
 class CdpCancelled(Exception):
@@ -110,7 +126,7 @@ class _ThreadingTcpServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 
 class _BridgeRequestHandler(http.server.SimpleHTTPRequestHandler):
-	server_version = "GoogleTtsForNvda/0.3"
+	server_version = "GoogleTtsForNvda/0.4"
 	extensions_map = {
 		**http.server.SimpleHTTPRequestHandler.extensions_map,
 		".wasm": "application/wasm",
@@ -163,8 +179,34 @@ def _raise_if_cancelled(cancelEvent: threading.Event | None) -> None:
 
 def _friendly_cdp_error(message: str, technicalDetail: str | None = None) -> CdpError:
 	if technicalDetail:
-		log.debug("Google TTS browser runtime detail: %s", technicalDetail)
+		log.debug("Google TTS Chromium browser runtime detail: %s", technicalDetail)
 	return CdpError(message, technicalDetail)
+
+
+_TRANSIENT_RUNTIME_EVALUATE_ERRORS = (
+	"Cannot find default execution context",
+	"Execution context was destroyed",
+	"Cannot find context with specified id",
+	"Inspected target navigated or closed",
+)
+
+
+def _is_transient_runtime_evaluate_error(error: CdpError) -> bool:
+	technicalDetail = str(getattr(error, "technicalDetail", "") or "")
+	return "CDP error for Runtime.evaluate:" in technicalDetail and any(
+		message in technicalDetail
+		for message in _TRANSIENT_RUNTIME_EVALUATE_ERRORS
+	)
+
+
+def _browser_profile_in_use_error() -> _BrowserProfileInUseError:
+	message = _(
+		"The browser profile used by Google TTS For NVDA is already in use. "
+		"Restart NVDA, or close any leftover supported Chromium browser helper processes."
+	)
+	technicalDetail = "Chromium browser runtime exited with profile-in-use code 21."
+	log.debug("Google TTS Chromium browser runtime detail: %s", technicalDetail)
+	return _BrowserProfileInUseError(message, technicalDetail)
 
 
 def _hidden_chrome_startup_kwargs() -> dict[str, Any]:
@@ -228,13 +270,29 @@ def _elevate_chrome_priority(processId: int) -> None:
 		return
 	try:
 		import ctypes
+		from ctypes import wintypes
 
 		ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
 		kernel32 = ctypes.windll.kernel32
-		handle = kernel32.OpenProcess(0x0200, False, processId)
+		openProcess = ctypes.WINFUNCTYPE(
+			wintypes.HANDLE,
+			wintypes.DWORD,
+			wintypes.BOOL,
+			wintypes.DWORD,
+		)(("OpenProcess", kernel32))
+		setPriorityClass = ctypes.WINFUNCTYPE(
+			wintypes.BOOL,
+			wintypes.HANDLE,
+			wintypes.DWORD,
+		)(("SetPriorityClass", kernel32))
+		closeHandle = ctypes.WINFUNCTYPE(
+			wintypes.BOOL,
+			wintypes.HANDLE,
+		)(("CloseHandle", kernel32))
+		handle = openProcess(0x0200, False, processId)
 		if handle:
-			kernel32.SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
-			kernel32.CloseHandle(handle)
+			setPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
+			closeHandle(handle)
 	except Exception:
 		log.debug("Could not elevate Google TTS browser process priority.", exc_info=True)
 
@@ -273,10 +331,91 @@ def set_configured_browser_runtime(runtime: str) -> str:
 	return runtime
 
 
-def _runtime_fallback_order(runtime: str | None = None) -> tuple[str, str]:
+def _runtime_fallback_order(runtime: str | None = None) -> tuple[str, ...]:
 	preferred = _normalize_browser_runtime(runtime)
-	fallback = BROWSER_RUNTIME_CHROME if preferred == BROWSER_RUNTIME_EDGE else BROWSER_RUNTIME_EDGE
-	return preferred, fallback
+	return tuple(dict.fromkeys((preferred, BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE)))
+
+
+def _edge_webview2_candidates() -> list[str]:
+	executableName = "msedgewebview2.exe"
+	envFolder = os.environ.get("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", "")
+	envCandidates: list[str] = []
+	if envFolder:
+		envPath = Path(envFolder)
+		envCandidates.extend(
+			[
+				str(envPath / executableName),
+				*[
+					str(candidate)
+					for candidate in envPath.glob(f"*/{executableName}")
+				],
+			]
+		)
+	commonRoots = [
+		Path(root) / "Microsoft" / "EdgeWebView" / "Application"
+		for root in (
+			os.environ.get("PROGRAMFILES", ""),
+			os.environ.get("PROGRAMFILES(X86)", ""),
+			os.environ.get("LOCALAPPDATA", ""),
+		)
+		if root
+	]
+	commonCandidates = [
+		str(root / executableName)
+		for root in commonRoots
+	]
+	versionedCandidates: list[str] = []
+	for root in commonRoots:
+		try:
+			versionedCandidates.extend(str(candidate) for candidate in root.glob(f"*/{executableName}"))
+		except OSError:
+			pass
+	return [*envCandidates, *commonCandidates, *versionedCandidates]
+
+
+def _registry_has_edge_webview2_runtime() -> bool:
+	if winreg is None:
+		return False
+	registryRoots = [
+		(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\EdgeUpdate\Clients"),
+		(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients"),
+		(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\EdgeUpdate\Clients"),
+		(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+		(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+		(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
+	]
+	for hive, subKey in registryRoots:
+		try:
+			with winreg.OpenKey(hive, subKey) as rootKey:
+				index = 0
+				while True:
+					try:
+						childName = winreg.EnumKey(rootKey, index)
+					except OSError:
+						break
+					index += 1
+					try:
+						with winreg.OpenKey(rootKey, childName) as childKey:
+							values = []
+							for valueName in ("name", "DisplayName"):
+								try:
+									value, _ = winreg.QueryValueEx(childKey, valueName)
+									values.append(str(value))
+								except OSError:
+									pass
+							name = " ".join(values).lower()
+							if "webview2" not in name and "edge webview" not in name:
+								continue
+							try:
+								version, _ = winreg.QueryValueEx(childKey, "pv")
+							except OSError:
+								version = ""
+							return str(version or "installed").strip() not in ("", "0.0.0.0")
+					except OSError:
+						pass
+		except OSError:
+			pass
+	return False
 
 
 def _registry_app_paths(executableName: str) -> list[str]:
@@ -309,6 +448,16 @@ def _browser_candidates(runtime: str) -> list[str]:
 			shutil.which("msedge.exe") or "",
 			shutil.which("msedge") or "",
 		]
+	elif runtime == BROWSER_RUNTIME_BRAVE:
+		executableName = "brave.exe"
+		envPath = os.environ.get("BRAVE_PATH", "")
+		commonPaths = [
+			str(Path(os.environ.get("PROGRAMFILES", "")) / "BraveSoftware" / "Brave-Browser" / "Application" / executableName),
+			str(Path(os.environ.get("PROGRAMFILES(X86)", "")) / "BraveSoftware" / "Brave-Browser" / "Application" / executableName),
+			str(Path(os.environ.get("LOCALAPPDATA", "")) / "BraveSoftware" / "Brave-Browser" / "Application" / executableName),
+			shutil.which("brave.exe") or "",
+			shutil.which("brave") or "",
+		]
 	else:
 		executableName = "chrome.exe"
 		envPath = os.environ.get("CHROME_PATH", "")
@@ -329,74 +478,725 @@ def browser_path_for_runtime(runtime: str) -> str | None:
 	return None
 
 
-def browser_runtime_available(runtime: str) -> bool:
+def browser_executable_available(runtime: str) -> bool:
 	return browser_path_for_runtime(runtime) is not None
+
+
+def edge_webview2_available() -> bool:
+	for candidate in _edge_webview2_candidates():
+		if candidate and Path(candidate).is_file():
+			return True
+	return _registry_has_edge_webview2_runtime()
+
+
+def browser_runtime_available(runtime: str) -> bool:
+	if not browser_executable_available(runtime):
+		return False
+	if _normalize_browser_runtime(runtime) == BROWSER_RUNTIME_EDGE:
+		return edge_webview2_available()
+	return True
 
 
 def browser_availability() -> dict[str, bool]:
 	return {runtime: browser_runtime_available(runtime) for runtime in BROWSER_RUNTIMES}
 
 
+def _find_browser_choice(runtime: str | None = None) -> tuple[str, str] | None:
+	for candidateRuntime in _runtime_fallback_order(runtime or configured_browser_runtime()):
+		path = browser_path_for_runtime(candidateRuntime)
+		if not path:
+			continue
+		if candidateRuntime == BROWSER_RUNTIME_EDGE and not edge_webview2_available():
+			continue
+		return candidateRuntime, path
+	return None
+
+
+def browser_runtime_snapshot(runtime: str | None = None) -> dict[str, Any]:
+	selectedRuntime = _normalize_browser_runtime(runtime or configured_browser_runtime())
+	paths = {candidateRuntime: browser_path_for_runtime(candidateRuntime) for candidateRuntime in BROWSER_RUNTIMES}
+	executableAvailability = {
+		candidateRuntime: path is not None
+		for candidateRuntime, path in paths.items()
+	}
+	edgeWebView2Available = edge_webview2_available()
+	availability = {
+		candidateRuntime: bool(path)
+		and (candidateRuntime != BROWSER_RUNTIME_EDGE or edgeWebView2Available)
+		for candidateRuntime, path in paths.items()
+	}
+	effectivePath = None
+	effectiveRuntime = None
+	for candidateRuntime in _runtime_fallback_order(selectedRuntime):
+		if not availability.get(candidateRuntime, False):
+			continue
+		effectivePath = paths.get(candidateRuntime)
+		if effectivePath:
+			effectiveRuntime = candidateRuntime
+			break
+	return {
+		"selectedRuntime": selectedRuntime,
+		"paths": paths,
+		"executableAvailability": executableAvailability,
+		"edgeWebView2Available": edgeWebView2Available,
+		"availability": availability,
+		"effectivePath": effectivePath,
+		"effectiveRuntime": effectiveRuntime,
+	}
+
+
 def browser_runtime_for_path(browserPath: str) -> str:
 	exeName = Path(browserPath).name.lower()
 	if exeName in ("msedge.exe", "msedge"):
 		return BROWSER_RUNTIME_EDGE
+	if exeName in ("brave.exe", "brave"):
+		return BROWSER_RUNTIME_BRAVE
 	return BROWSER_RUNTIME_CHROME
 
 
 def effective_browser_runtime(runtime: str | None = None) -> str | None:
-	path = find_browser(runtime)
-	if path is None:
+	choice = _find_browser_choice(runtime)
+	if choice is None:
 		return None
-	return browser_runtime_for_path(path)
+	return choice[0]
 
 
 def find_browser(runtime: str | None = None) -> str | None:
-	for candidateRuntime in _runtime_fallback_order(runtime or configured_browser_runtime()):
-		path = browser_path_for_runtime(candidateRuntime)
-		if path:
-			return path
-	return None
+	choice = _find_browser_choice(runtime)
+	if choice is None:
+		return None
+	return choice[1]
 
 
-class ChromeTtsBridge:
-	def __init__(self, catalog: VoiceCatalog | None = None) -> None:
-		self.catalog = catalog or VoiceCatalog.load()
+def edge_webview2_blocks_effective_runtime(runtime: str | None = None) -> bool:
+	selectedRuntime = _normalize_browser_runtime(runtime or configured_browser_runtime())
+	if edge_webview2_available():
+		return False
+	if _find_browser_choice(selectedRuntime) is not None:
+		return False
+	return any(
+		candidateRuntime == BROWSER_RUNTIME_EDGE
+		and browser_executable_available(BROWSER_RUNTIME_EDGE)
+		for candidateRuntime in _runtime_fallback_order(selectedRuntime)
+	)
+
+
+class CdpDispatcher:
+	"""Event-driven WebSocket message dispatcher separating network receive loops from callers."""
+
+	def __init__(self, ws: websocket.WebSocket) -> None:
+		self._ws = ws
+		self._sendLock = threading.Lock()
+		self._stateLock = threading.Lock()
+		self._pendingEvents: dict[int, threading.Event] = {}
+		self._responses: dict[int, dict[str, Any]] = {}
+		self._eventHandlers: dict[int, Callable[[dict[str, Any]], None]] = {}
+		self._stopped = threading.Event()
+		self._readerThread: threading.Thread | None = None
+
+	def start(self) -> None:
+		with self._stateLock:
+			if self._readerThread is not None and self._readerThread.is_alive():
+				return
+			self._stopped.clear()
+			self._readerThread = threading.Thread(
+				name="googleTtsForNvda.cdpReader",
+				target=self._reader_loop,
+				daemon=True,
+			)
+			self._readerThread.start()
+
+	def stop(self) -> None:
+		self._stopped.set()
+		with self._stateLock:
+			for event in self._pendingEvents.values():
+				event.set()
+			self._pendingEvents.clear()
+			self._eventHandlers.clear()
+
+	def send(self, command: dict[str, Any]) -> None:
+		payload = json.dumps(command)
+		with self._sendLock:
+			self._ws.send(payload)
+
+	def register_request(
+		self,
+		msgId: int,
+		eventHandler: Callable[[dict[str, Any]], None] | None = None,
+	) -> threading.Event:
+		event = threading.Event()
+		with self._stateLock:
+			self._pendingEvents[msgId] = event
+			if eventHandler is not None:
+				self._eventHandlers[msgId] = eventHandler
+		return event
+
+	def unregister_request(self, msgId: int) -> dict[str, Any] | None:
+		with self._stateLock:
+			self._pendingEvents.pop(msgId, None)
+			self._eventHandlers.pop(msgId, None)
+			return self._responses.pop(msgId, None)
+
+	def _reader_loop(self) -> None:
+		try:
+			while not self._stopped.is_set():
+				try:
+					rawMessage = self._ws.recv()
+				except (websocket.WebSocketTimeoutException, TimeoutError):
+					continue
+				except Exception:
+					break
+				if not rawMessage:
+					break
+				try:
+					message = json.loads(rawMessage)
+				except Exception:
+					continue
+
+				with self._stateLock:
+					handlers = list(self._eventHandlers.values())
+					msgId = message.get("id")
+					event = self._pendingEvents.get(msgId) if msgId is not None else None
+					if event is not None and msgId is not None:
+						self._responses[msgId] = message
+
+				for handler in handlers:
+					try:
+						handler(message)
+					except Exception:
+						log.debug("Error in CDP event handler", exc_info=True)
+
+				if event is not None:
+					event.set()
+		finally:
+			with self._stateLock:
+				for ev in self._pendingEvents.values():
+					ev.set()
+
+
+class BrowserProcessManager:
+	"""Manages browser executable discovery, profile directories, HTTP server, and subprocess lifecycle."""
+
+	def __init__(self, catalog: VoiceCatalog) -> None:
+		self.catalog = catalog
 		self._server: _ThreadingTcpServer | None = None
 		self._serverThread: threading.Thread | None = None
 		self._serverPort: int | None = None
 		self._chromeProcess: subprocess.Popen[bytes] | None = None
 		self._debugPort: int | None = None
-		self._ws: websocket.WebSocket | None = None
-		self._lock = threading.RLock()
-		self._msgIdLock = threading.Lock()
-		self._stopLock = threading.Lock()
-		self._msgId = 0
 		self._profileDir: Path | None = None
-		self._lastStopSentAt = 0.0
-		self._runtimeBusy = False
+		self._profileRuntime: str | None = None
+		self._profileIsPersistent = False
+		self._lock = threading.RLock()
+
+	@classmethod
+	def find_browser(cls) -> str | None:
+		return find_browser()
 
 	@classmethod
 	def find_chrome(cls) -> str | None:
-		return find_browser()
+		return cls.find_browser()
 
-	def ensure_connection(self) -> None:
+	@property
+	def chrome_process(self) -> subprocess.Popen[bytes] | None:
+		return self._chromeProcess
+
+	@property
+	def debug_port(self) -> int | None:
+		return self._debugPort
+
+	@property
+	def server_port(self) -> int | None:
+		return self._serverPort
+
+	def start_server(self) -> int:
 		with self._lock:
-			if self._ws is not None and self._ws.connected:
-				return
+			if self._server is not None and self._serverPort is not None:
+				return self._serverPort
+			runtimeDir = voice_store.data_root() / "runtime"
+			runtimeDir.mkdir(parents=True, exist_ok=True)
+			(runtimeDir / "voices.json").write_text(self.catalog.to_runtime_json(), encoding="utf-8")
+			self._server = _ThreadingTcpServer(("127.0.0.1", 0), _BridgeRequestHandler)
+			self._serverPort = int(self._server.server_address[1])
+			self._serverThread = threading.Thread(
+				name="googleTtsForNvda.http",
+				target=self._server.serve_forever,
+				daemon=True,
+			)
+			self._serverThread.start()
+			return self._serverPort
+
+	def start_browser(self, cancelEvent: threading.Event | None = None) -> tuple[int, int]:
+		with self._lock:
+			self.start_server()
+			if self._chromeProcess is not None and self._chromeProcess.poll() is None:
+				if self._debugPort is not None and self._serverPort is not None:
+					return self._serverPort, self._debugPort
+				with suppress(Exception):
+					self._chromeProcess.terminate()
+					self._chromeProcess.wait(timeout=2)
+				with suppress(Exception):
+					self._chromeProcess.kill()
+				self._chromeProcess = None
+				self._debugPort = None
+				self._release_chrome_profile()
+			elif self._chromeProcess is not None:
+				self._chromeProcess = None
+				self._debugPort = None
+				self._release_chrome_profile()
+			_raise_if_cancelled(cancelEvent)
+			browserChoice = _find_browser_choice()
+			if browserChoice is None:
+				if edge_webview2_blocks_effective_runtime():
+					raise _friendly_cdp_error(
+						_(
+							"Microsoft Edge WebView2 Runtime was not found. "
+							"Install or repair Microsoft Edge WebView2 Runtime before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
+						),
+						"Microsoft Edge executable was found, but Microsoft Edge WebView2 Runtime was not found.",
+					)
+				raise _friendly_cdp_error(
+					_("No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."),
+					"No supported Chromium browser runtime executable was found.",
+				)
+			browserRuntime, browserPath = browserChoice
+			for usePersistentProfile in (True, False):
+				profileDir = self._get_browser_profile_dir(browserRuntime, usePersistentProfile)
+				devToolsFile = profileDir / "DevToolsActivePort"
+				try:
+					devToolsFile.unlink()
+				except FileNotFoundError:
+					pass
+				pageUrl = self._page_url()
+				args = [
+					browserPath,
+					"--headless=new",
+					"--remote-debugging-port=0",
+					"--remote-allow-origins=*",
+					f"--user-data-dir={profileDir}",
+					"--no-first-run",
+					"--no-default-browser-check",
+					"--disable-background-networking",
+					"--disable-breakpad",
+					"--disable-crash-reporter",
+					"--disable-gpu",
+					"--noerrdialogs",
+					"--autoplay-policy=no-user-gesture-required",
+					"--window-position=-32000,-32000",
+					"--window-size=1,1",
+					"--disable-background-timer-throttling",
+					"--disable-backgrounding-occluded-windows",
+					"--disable-renderer-backgrounding",
+					"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
+					"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
+					"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
+					"--enable-wasm-simd",
+					pageUrl,
+				]
+				self._chromeProcess = subprocess.Popen(
+					args,
+					stdout=subprocess.DEVNULL,
+					stderr=subprocess.DEVNULL,
+					**_hidden_chrome_startup_kwargs(),
+				)
+				_hide_chrome_windows(self._chromeProcess.pid)
+				_elevate_chrome_priority(self._chromeProcess.pid)
+				try:
+					self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
+					_hide_chrome_windows(self._chromeProcess.pid)
+				except _BrowserProfileInUseError:
+					self._debugPort = None
+					if usePersistentProfile:
+						log.debug(
+							"Google TTS persistent browser profile is in use; retrying with a temporary profile."
+						)
+						self._release_chrome_profile()
+						continue
+					self._remove_chrome_profile()
+					raise
+				except Exception:
+					with suppress(Exception):
+						self._chromeProcess.terminate()
+						self._chromeProcess.wait(timeout=2)
+					with suppress(Exception):
+						self._chromeProcess.kill()
+					self._chromeProcess = None
+					self._debugPort = None
+					self._remove_chrome_profile()
+					raise
+				assert self._serverPort is not None and self._debugPort is not None
+				return self._serverPort, self._debugPort
+			raise _browser_profile_in_use_error()
+
+	def get_page_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
+		with self._lock:
+			pageUrl = self._page_url()
+			debugPort = self._debugPort
+			chromeProcess = self._chromeProcess
+		if debugPort is None:
+			raise _friendly_cdp_error(
+				_("The Chromium browser runtime is not ready yet."),
+				"Browser DevTools port is not ready.",
+			)
+		for attempt in range(200):
+			_raise_if_cancelled(cancelEvent)
+			if chromeProcess is not None:
+				_hide_chrome_windows(chromeProcess.pid)
 			try:
-				self._start_server()
-				self._start_chrome()
-				wsUrl = self._get_page_websocket_url()
-				self._ws = websocket.create_connection(wsUrl, timeout=15)
-				self._ws.settimeout(RECV_POLL_TIMEOUT)
-				self._cdp_request("Runtime.enable", timeout=15)
-				self._cdp_request("Page.enable", timeout=15)
-				self._cdp_request("Runtime.addBinding", {"name": BINDING_NAME}, timeout=15)
-				self._wait_until_ready()
-			except Exception:
-				self._close_websocket()
+				targets = _read_json_endpoint(debugPort, "/json/list", timeout=0.5)
+			except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+				time.sleep(STARTUP_POLL_INTERVAL)
+				continue
+			if isinstance(targets, list):
+				for target in targets:
+					if not isinstance(target, dict):
+						continue
+					if target.get("type") != "page":
+						continue
+					wsUrl = target.get("webSocketDebuggerUrl")
+					if not isinstance(wsUrl, str):
+						continue
+					if target.get("url") == pageUrl:
+						return wsUrl
+			time.sleep(STARTUP_POLL_INTERVAL)
+		raise _friendly_cdp_error(
+			_("Google TTS For NVDA could not find its speech page in the Chromium browser runtime."),
+			"Could not find browser speech page target.",
+		)
+
+	def start_and_get_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
+		self.start_browser(cancelEvent)
+		return self.get_page_websocket_url(cancelEvent)
+
+	def terminate(self) -> None:
+		with self._lock:
+			if self._chromeProcess is not None and self._chromeProcess.poll() is None:
+				with suppress(Exception):
+					self._chromeProcess.terminate()
+					self._chromeProcess.wait(timeout=2)
+				with suppress(Exception):
+					self._chromeProcess.kill()
+			self._chromeProcess = None
+			self._debugPort = None
+			if self._server is not None:
+				self._server.shutdown()
+				self._server.server_close()
+			self._server = None
+			self._serverThread = None
+			self._serverPort = None
+			self._release_chrome_profile()
+
+	def _get_browser_profile_dir(self, runtime: str, usePersistentProfile: bool = True) -> Path:
+		runtime = _normalize_browser_runtime(runtime)
+		if self._profileDir is not None:
+			if self._profileRuntime == runtime:
+				self._profileDir.mkdir(parents=True, exist_ok=True)
+				return self._profileDir
+			self._release_chrome_profile()
+		root = self._browser_profile_root(runtime)
+		root.mkdir(parents=True, exist_ok=True)
+		self._cleanup_old_browser_profiles(root, runtime)
+		if usePersistentProfile:
+			profileDir = root / PERSISTENT_PROFILE_DIR_NAME
+		else:
+			profileDir = root / f"session-{os.getpid()}-{time.monotonic_ns()}"
+		reused = profileDir.exists()
+		profileDir.mkdir(parents=True, exist_ok=True)
+		for lockName in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
+			with suppress(OSError):
+				(profileDir / lockName).unlink()
+		with suppress(OSError):
+			(profileDir / "DevToolsActivePort").unlink()
+		self._profileDir = profileDir
+		self._profileRuntime = runtime
+		self._profileIsPersistent = usePersistentProfile
+		log.debug(
+			"Google TTS %s browser profile directory: %s (reused=%s, persistent=%s)",
+			runtime, profileDir, reused, usePersistentProfile,
+		)
+		return self._profileDir
+
+	def _browser_profile_root(self, runtime: str) -> Path:
+		base = os.environ.get("LOCALAPPDATA")
+		root = Path(base) if base else Path(tempfile.gettempdir())
+		return root / LOCAL_CACHE_DIR_NAME / self._browser_profile_dir_name(runtime)
+
+	def _browser_profile_dir_name(self, runtime: str) -> str:
+		runtime = _normalize_browser_runtime(runtime)
+		if runtime == BROWSER_RUNTIME_EDGE:
+			return EDGE_PROFILE_DIR_NAME
+		if runtime == BROWSER_RUNTIME_BRAVE:
+			return BRAVE_PROFILE_DIR_NAME
+		return CHROME_PROFILE_DIR_NAME
+
+	def _cleanup_old_browser_profiles(self, root: Path, runtime: str) -> None:
+		cutoff = time.time() - 2 * 24 * 60 * 60
+		for child in root.iterdir():
+			if not child.is_dir() or not child.name.startswith("session-"):
+				continue
+			try:
+				if child.stat().st_mtime >= cutoff:
+					continue
+				shutil.rmtree(child, ignore_errors=True)
+			except OSError:
+				continue
+		# Guard against unbounded persistent profile growth.
+		persistent = root / PERSISTENT_PROFILE_DIR_NAME
+		if persistent.is_dir():
+			try:
+				totalSize = 0
+				for candidate in persistent.rglob("*"):
+					if not candidate.is_file():
+						continue
+					totalSize += candidate.stat().st_size
+					if totalSize > PERSISTENT_PROFILE_MAX_BYTES:
+						break
+				if totalSize > PERSISTENT_PROFILE_MAX_BYTES:
+					log.debug(
+						"Persistent %s browser profile exceeds 500 MB (%d bytes), resetting.",
+						runtime, totalSize,
+					)
+					shutil.rmtree(persistent, ignore_errors=True)
+			except OSError:
+				pass
+
+	def _release_chrome_profile(self) -> None:
+		"""Release the profile directory reference without deleting it.
+
+		Preserves the persistent profile (including the browser's compiled
+		WASM code cache) so the next startup can skip WASM recompilation.  Only
+		transient files (lock files, DevToolsActivePort) are cleaned up.
+		"""
+		profileDir = self._profileDir
+		profileIsPersistent = self._profileIsPersistent
+		self._profileDir = None
+		self._profileRuntime = None
+		self._profileIsPersistent = False
+		if profileDir is None:
+			return
+		if not profileIsPersistent:
+			with suppress(OSError):
+				shutil.rmtree(profileDir, ignore_errors=True)
+			return
+		for name in ("SingletonLock", "SingletonCookie", "SingletonSocket",
+					 "lockfile", "DevToolsActivePort"):
+			with suppress(OSError):
+				(profileDir / name).unlink()
+
+	def _remove_chrome_profile(self) -> None:
+		"""Fully delete the profile directory (used on browser startup failure)."""
+		profileDir = self._profileDir
+		self._profileDir = None
+		self._profileRuntime = None
+		self._profileIsPersistent = False
+		if profileDir is None:
+			return
+		try:
+			shutil.rmtree(profileDir, ignore_errors=True)
+		except OSError:
+			log.debug("Could not remove Google TTS browser session profile.", exc_info=True)
+
+	def _read_devtools_port(self, devToolsFile: Path, cancelEvent: threading.Event | None = None) -> int:
+		for attempt in range(400):
+			_raise_if_cancelled(cancelEvent)
+			if self._chromeProcess is not None:
+				_hide_chrome_windows(self._chromeProcess.pid)
+			if self._chromeProcess is not None and self._chromeProcess.poll() is not None:
+				exitCode = self._chromeProcess.returncode
+				self._chromeProcess = None
+				if exitCode == 21:
+					raise _browser_profile_in_use_error()
+				raise _friendly_cdp_error(
+					_("The Chromium browser runtime closed before Google TTS For NVDA was ready."),
+					f"Chromium browser runtime exited before DevTools became available: {exitCode}",
+				)
+			if devToolsFile.is_file():
+				lines = devToolsFile.read_text(encoding="utf-8").splitlines()
+				if lines:
+					return int(lines[0])
+			time.sleep(STARTUP_POLL_INTERVAL)
+		raise _friendly_cdp_error(
+			_("The Chromium browser runtime did not start in time."),
+			"Timed out waiting for browser DevTools.",
+		)
+
+	def _page_url(self) -> str:
+		if self._serverPort is None:
+			raise _friendly_cdp_error(
+				_("Google TTS For NVDA could not start its local browser bridge."),
+				"Bridge HTTP server is not running.",
+			)
+		return f"http://127.0.0.1:{self._serverPort}/"
+
+
+class CdpClient:
+	"""Core WebSocket IPC transport and message ID correlation layer for browser CDP interaction."""
+
+	def __init__(self) -> None:
+		self._ws: websocket.WebSocket | None = None
+		self._dispatcher: CdpDispatcher | None = None
+		self._msgId = 0
+		self._msgIdLock = threading.Lock()
+		self._lock = threading.RLock()
+
+	@property
+	def ws(self) -> websocket.WebSocket | None:
+		return self._ws
+
+	@property
+	def dispatcher(self) -> CdpDispatcher | None:
+		return self._dispatcher
+
+	def connect(self, wsUrl: str) -> None:
+		with self._lock:
+			self.close()
+			self._ws = websocket.create_connection(wsUrl, timeout=15)
+			self._ws.settimeout(0.05)
+			self._dispatcher = CdpDispatcher(self._ws)
+			self._dispatcher.start()
+
+	def close(self) -> None:
+		with self._lock:
+			if self._dispatcher is not None:
+				self._dispatcher.stop()
+				self._dispatcher = None
+			if self._ws is not None:
+				with suppress(Exception):
+					self._ws.close()
+				self._ws = None
+
+	def is_connected(self) -> bool:
+		with self._lock:
+			return self._ws is not None and self._ws.connected and self._dispatcher is not None
+
+	def next_msg_id(self) -> int:
+		with self._msgIdLock:
+			self._msgId += 1
+			return self._msgId
+
+	def send_command_async(self, method: str, params: dict[str, Any] | None = None) -> None:
+		with self._lock:
+			dispatcher = self._dispatcher
+			ws = self._ws
+		if ws is None or not ws.connected or dispatcher is None:
+			return
+		msgId = self.next_msg_id()
+		command = {"id": msgId, "method": method, "params": params or {}}
+		try:
+			dispatcher.send(command)
+		except Exception:
+			log.debug("Could not asynchronously send CDP command %s", method, exc_info=True)
+
+	def request(
+		self,
+		method: str,
+		params: dict[str, Any] | None = None,
+		timeout: float = 30,
+		eventHandler: Callable[[dict[str, Any]], None] | None = None,
+		cancelEvent: threading.Event | None = None,
+		onCancelCallback: Callable[[], None] | None = None,
+	) -> dict[str, Any]:
+		with self._lock:
+			dispatcher = self._dispatcher
+			ws = self._ws
+		if ws is None or dispatcher is None or not ws.connected:
+			raise _friendly_cdp_error(
+				_("Google TTS For NVDA is not connected to the Chromium browser runtime."),
+				"Browser DevTools websocket is not connected.",
+			)
+		msgId = self.next_msg_id()
+		command = {"id": msgId, "method": method, "params": params or {}}
+		event = dispatcher.register_request(msgId, eventHandler=eventHandler)
+		try:
+			dispatcher.send(command)
+			deadline = time.monotonic() + timeout
+			while time.monotonic() < deadline:
+				if cancelEvent is not None and cancelEvent.is_set():
+					if onCancelCallback is not None:
+						with suppress(Exception):
+							onCancelCallback()
+					raise CdpCancelled()
+				if event.wait(timeout=0.01):
+					break
+			else:
+				raise _friendly_cdp_error(
+					_("The Chromium browser runtime did not respond in time."),
+					f"Timed out waiting for {method}.",
+				)
+		finally:
+			response = dispatcher.unregister_request(msgId)
+
+		if response is None:
+			raise _friendly_cdp_error(
+				_("The Chromium browser runtime connection closed unexpectedly."),
+				"Browser DevTools websocket closed.",
+			)
+		if "error" in response:
+			raise _friendly_cdp_error(
+				_("The Chromium browser runtime reported an error while processing speech."),
+				f"CDP error for {method}: {response['error']}",
+			)
+		exceptionDetails = response.get("result", {}).get("exceptionDetails")
+		if isinstance(exceptionDetails, dict):
+			raise _friendly_cdp_error(
+				_("The Chromium browser runtime reported an error while preparing speech."),
+				self.format_exception(exceptionDetails),
+			)
+		return response
+
+	def format_exception(self, exceptionDetails: dict[str, Any]) -> str:
+		exception = exceptionDetails.get("exception")
+		if isinstance(exception, dict) and exception.get("description"):
+			return str(exception["description"])
+		if exceptionDetails.get("text"):
+			return str(exceptionDetails["text"])
+		return "Browser DevTools runtime exception."
+
+
+class WasmTtsEngineBridge:
+	"""Routes high-level domain speech synthesis commands to the Google WASM TTS engine via CDP."""
+
+	def __init__(self, cdp_client: CdpClient, catalog: VoiceCatalog) -> None:
+		self._cdp = cdp_client
+		self.catalog = catalog
+		self._lastStopSentAt = 0.0
+		self._stopLock = threading.Lock()
+		self._runtimeBusy = False
+
+	def enable_cdp_domains(self) -> None:
+		self._cdp.request("Runtime.enable", timeout=15)
+		self._cdp.request("Page.enable", timeout=15)
+		self._cdp.request("Runtime.addBinding", {"name": BINDING_NAME}, timeout=15)
+
+	def wait_until_ready(self, cancelEvent: threading.Event | None = None) -> None:
+		expression = """
+		typeof window.googleTtsForNvdaSpeak === "function"
+		&& typeof window.googleTtsForNvdaPreload === "function"
+		&& typeof window.googleTtsForNvdaBridge === "function"
+		&& typeof window.googleTtsForNvdaReady === "function"
+		&& window.googleTtsForNvdaReady() === true
+		"""
+		for attempt in range(400):
+			_raise_if_cancelled(cancelEvent)
+			try:
+				response = self._cdp.request(
+					"Runtime.evaluate",
+					{"expression": expression, "returnByValue": True},
+					timeout=5,
+					cancelEvent=cancelEvent,
+				)
+			except CdpError as exc:
+				if _is_transient_runtime_evaluate_error(exc):
+					time.sleep(STARTUP_POLL_INTERVAL)
+					continue
 				raise
+			if response.get("result", {}).get("result", {}).get("value") is True:
+				return
+			time.sleep(STARTUP_POLL_INTERVAL)
+		raise _friendly_cdp_error(
+			_("Google TTS For NVDA could not finish loading the browser speech engine."),
+			"Browser speech harness did not finish loading.",
+		)
 
 	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
 		package = self.catalog.package_for_voice(str(options["voiceId"]))
@@ -410,15 +1210,14 @@ class ChromeTtsBridge:
 				_("This voice package is not installed. Open Google TTS Voice Manager to install it."),
 				f"Missing voice package: {package.id}.",
 			)
-		self.ensure_connection()
 		_raise_if_cancelled(cancelEvent)
 		payload = {
 			"sessionId": f"preload-{time.monotonic_ns()}",
 			"voiceName": options["voiceName"],
 			"lang": options["lang"],
-			"text": str(options.get("warmupText") or "a"),
+			"text": str(options.get("warmupText") or " "),
 		}
-		response = self._cdp_request(
+		response = self._cdp.request(
 			"Runtime.evaluate",
 			{
 				"expression": f"window.googleTtsForNvdaPreload({json.dumps(payload, ensure_ascii=False)})",
@@ -429,6 +1228,7 @@ class ChromeTtsBridge:
 			},
 			timeout=70,
 			cancelEvent=cancelEvent,
+			onCancelCallback=self.send_fast_stop,
 		)
 		value = response.get("result", {}).get("result", {}).get("value")
 		return value if isinstance(value, dict) else {"success": True}
@@ -455,7 +1255,6 @@ class ChromeTtsBridge:
 				_("This voice package is not installed. Open Google TTS Voice Manager to install it."),
 				f"Missing voice package: {package.id}.",
 			)
-		self.ensure_connection()
 		_raise_if_cancelled(cancelEvent)
 		sessionId = f"{time.monotonic_ns()}"
 		payload = {
@@ -466,11 +1265,7 @@ class ChromeTtsBridge:
 			"rate": options["rate"],
 			"artificialRate": options.get("artificialRate", 1),
 			"pitch": options["pitch"],
-			# NOTE: forwarded as-is to window.googleTtsForNvdaSpeak; whether the
-			# bundled WASM TTS engine's JS actually reads this key and applies
-			# it (e.g. to widen/flatten the pitch contour) depends on that
-			# engine's bindings, which are not part of this Python package.
-			"inflectionScale": options.get("inflectionScale", 1.0),
+			"postPitch": options.get("postPitch", 1),
 			"volume": options["volume"],
 			"outputGain": options.get("outputGain", options["volume"]),
 		}
@@ -502,11 +1297,11 @@ class ChromeTtsBridge:
 				)
 			elif eventType == "audio":
 				if cancelEvent is not None and cancelEvent.is_set():
-					raise CdpCancelled()
+					return
 				audio = base64.b64decode(str(event.get("data") or ""))
 				if audio:
 					if cancelEvent is not None and cancelEvent.is_set():
-						raise CdpCancelled()
+						return
 					if firstAudioAt is None:
 						firstAudioAt = time.perf_counter()
 						log.debug(
@@ -532,8 +1327,9 @@ class ChromeTtsBridge:
 				)
 
 		expression = f"window.googleTtsForNvdaSpeak({json.dumps(payload, ensure_ascii=False)})"
+		self._runtimeBusy = cancelEvent is not None
 		try:
-			response = self._cdp_request(
+			response = self._cdp.request(
 				"Runtime.evaluate",
 				{
 					"expression": expression,
@@ -545,13 +1341,16 @@ class ChromeTtsBridge:
 				timeout=130,
 				eventHandler=handle_event,
 				cancelEvent=cancelEvent,
+				onCancelCallback=self.send_fast_stop,
 			)
 		except CdpCancelled:
 			raise
+		finally:
+			self._runtimeBusy = False
 		result = response.get("result", {}).get("result", {})
 		if result.get("subtype") == "error":
 			raise _friendly_cdp_error(
-				_("Google TTS For NVDA could not start speech in the browser runtime."),
+				_("Google TTS For NVDA could not start speech in the Chromium browser runtime."),
 				result.get("description") or "Browser speech evaluation failed.",
 			)
 		value = result.get("value")
@@ -560,10 +1359,26 @@ class ChromeTtsBridge:
 			return value
 		return state
 
+	def send_fast_stop(self) -> None:
+		if not self._cdp.is_connected():
+			return
+		with self._stopLock:
+			now = time.monotonic()
+			if now - self._lastStopSentAt < 0.02:
+				return
+			self._lastStopSentAt = now
+			self._cdp.send_command_async(
+				"Runtime.evaluate",
+				{
+					"expression": STOP_EXPRESSION,
+					"awaitPromise": False,
+					"returnByValue": True,
+				},
+			)
+
 	def stop_runtime(self) -> None:
 		try:
-			self.ensure_connection()
-			self._cdp_request(
+			self._cdp.request(
 				"Runtime.evaluate",
 				{
 					"expression": STOP_EXPRESSION,
@@ -573,280 +1388,102 @@ class ChromeTtsBridge:
 				timeout=5,
 			)
 		except Exception:
-			log.debug("Could not stop Google TTS browser runtime.", exc_info=True)
+			log.debug("Could not stop Google TTS Chromium browser runtime.", exc_info=True)
 
 	def cancel_current(self) -> None:
 		if self._runtimeBusy:
-			self._send_stop()
+			self.send_fast_stop()
+
+
+class ChromeTtsBridge:
+	"""Public facade orchestrating BrowserProcessManager, CdpClient, and WasmTtsEngineBridge."""
+
+	def __init__(self, catalog: VoiceCatalog | None = None) -> None:
+		self.catalog = catalog or VoiceCatalog.load()
+		self._process_manager = BrowserProcessManager(self.catalog)
+		self._cdp_client = CdpClient()
+		self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
+		self._lock = threading.RLock()
+
+	@classmethod
+	def find_browser(cls) -> str | None:
+		return BrowserProcessManager.find_browser()
+
+	@classmethod
+	def find_chrome(cls) -> str | None:
+		return cls.find_browser()
+
+	@property
+	def _ws(self) -> websocket.WebSocket | None:
+		return self._cdp_client.ws
+
+	@property
+	def _dispatcher(self) -> CdpDispatcher | None:
+		return self._cdp_client.dispatcher
+
+	@property
+	def _chromeProcess(self) -> subprocess.Popen[bytes] | None:
+		return self._process_manager.chrome_process
+
+	@property
+	def _debugPort(self) -> int | None:
+		return self._process_manager.debug_port
+
+	@property
+	def _serverPort(self) -> int | None:
+		return self._process_manager.server_port
+
+	def ensure_connection(self) -> None:
+		with self._lock:
+			if self._cdp_client.is_connected():
+				return
+			try:
+				wsUrl = self._process_manager.start_and_get_websocket_url()
+				self._cdp_client.connect(wsUrl)
+				self._engine.enable_cdp_domains()
+				self._engine.wait_until_ready()
+			except Exception:
+				self._cdp_client.close()
+				self._process_manager.terminate()
+				raise
+
+	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
+		self.ensure_connection()
+		return self._engine.preload_voice(options, cancelEvent=cancelEvent)
+
+	def speak(
+		self,
+		text: str,
+		options: dict[str, Any],
+		onAudio: AudioCallback,
+		cancelEvent: threading.Event | None = None,
+		onMark: MarkCallback | None = None,
+		segments: list[str] | None = None,
+	) -> dict[str, Any]:
+		self.ensure_connection()
+		return self._engine.speak(
+			text,
+			options,
+			onAudio,
+			cancelEvent=cancelEvent,
+			onMark=onMark,
+			segments=segments,
+		)
+
+	def stop_runtime(self) -> None:
+		try:
+			self.ensure_connection()
+			self._engine.stop_runtime()
+		except Exception:
+			log.debug("Could not stop Google TTS Chromium browser runtime.", exc_info=True)
+
+	def cancel_current(self) -> None:
+		self._engine.cancel_current()
 
 	def terminate(self) -> None:
 		with self._lock:
-			self._close_websocket()
-			if self._chromeProcess is not None and self._chromeProcess.poll() is None:
-				with suppress(Exception):
-					self._chromeProcess.terminate()
-					self._chromeProcess.wait(timeout=2)
-				with suppress(Exception):
-					self._chromeProcess.kill()
-			self._chromeProcess = None
-			self._debugPort = None
-			if self._server is not None:
-				self._server.shutdown()
-				self._server.server_close()
-			self._server = None
-			self._serverThread = None
-			self._serverPort = None
-			self._release_chrome_profile()
-
-	def _start_server(self) -> None:
-		if self._server is not None:
-			return
-		runtimeDir = voice_store.data_root() / "runtime"
-		runtimeDir.mkdir(parents=True, exist_ok=True)
-		(runtimeDir / "voices.json").write_text(self.catalog.to_runtime_json(), encoding="utf-8")
-		self._server = _ThreadingTcpServer(("127.0.0.1", 0), _BridgeRequestHandler)
-		self._serverPort = int(self._server.server_address[1])
-		self._serverThread = threading.Thread(
-			name="googleTtsForNvda.http",
-			target=self._server.serve_forever,
-			daemon=True,
-		)
-		self._serverThread.start()
-
-	def _start_chrome(self, cancelEvent: threading.Event | None = None) -> None:
-		if self._chromeProcess is not None and self._chromeProcess.poll() is None:
-			if self._debugPort is not None:
-				return
-			with suppress(Exception):
-				self._chromeProcess.terminate()
-				self._chromeProcess.wait(timeout=2)
-			with suppress(Exception):
-				self._chromeProcess.kill()
-			self._chromeProcess = None
-			self._debugPort = None
-		_raise_if_cancelled(cancelEvent)
-		chromePath = self.find_chrome()
-		if not chromePath:
-			raise _friendly_cdp_error(
-				_("Microsoft Edge or Google Chrome was not found. Install one of them, or set EDGE_PATH/CHROME_PATH to a browser executable."),
-				"No supported browser runtime executable was found.",
-			)
-		profileDir = self._get_chrome_profile_dir(chromePath)
-		devToolsFile = profileDir / "DevToolsActivePort"
-		try:
-			devToolsFile.unlink()
-		except FileNotFoundError:
-			pass
-		pageUrl = self._page_url()
-		args = [
-			chromePath,
-			"--headless=new",
-			"--remote-debugging-port=0",
-			"--remote-allow-origins=*",
-			f"--user-data-dir={profileDir}",
-			"--no-first-run",
-			"--no-default-browser-check",
-			"--disable-background-networking",
-			"--disable-breakpad",
-			"--disable-crash-reporter",
-			"--disable-gpu",
-			"--noerrdialogs",
-			"--autoplay-policy=no-user-gesture-required",
-			"--window-position=-32000,-32000",
-			"--window-size=1,1",
-			"--disable-background-timer-throttling",
-			"--disable-backgrounding-occluded-windows",
-			"--disable-renderer-backgrounding",
-			"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
-			"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
-			"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
-			"--enable-wasm-simd",
-			pageUrl,
-		]
-		self._chromeProcess = subprocess.Popen(
-			args,
-			stdout=subprocess.DEVNULL,
-			stderr=subprocess.DEVNULL,
-			**_hidden_chrome_startup_kwargs(),
-		)
-		_hide_chrome_windows(self._chromeProcess.pid)
-		_elevate_chrome_priority(self._chromeProcess.pid)
-		try:
-			self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
-			_hide_chrome_windows(self._chromeProcess.pid)
-		except Exception:
-			with suppress(Exception):
-				self._chromeProcess.terminate()
-				self._chromeProcess.wait(timeout=2)
-			with suppress(Exception):
-				self._chromeProcess.kill()
-			self._chromeProcess = None
-			self._debugPort = None
-			self._remove_chrome_profile()
-			raise
-
-	def _get_chrome_profile_dir(self, browserPath: str) -> Path:
-		if self._profileDir is not None:
-			self._profileDir.mkdir(parents=True, exist_ok=True)
-			return self._profileDir
-		root = self._browser_profile_root(browserPath)
-		root.mkdir(parents=True, exist_ok=True)
-		self._cleanup_old_chrome_profiles(root)
-		profileDir = root / PERSISTENT_PROFILE_DIR_NAME
-		reused = profileDir.exists()
-		profileDir.mkdir(parents=True, exist_ok=True)
-		for lockName in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
-			with suppress(OSError):
-				(profileDir / lockName).unlink()
-		with suppress(OSError):
-			(profileDir / "DevToolsActivePort").unlink()
-		self._profileDir = profileDir
-		log.debug(
-			"Google TTS browser profile directory: %s (reused=%s)",
-			profileDir, reused,
-		)
-		return self._profileDir
-
-	def _browser_profile_root(self, browserPath: str) -> Path:
-		base = os.environ.get("LOCALAPPDATA")
-		root = Path(base) if base else Path(tempfile.gettempdir())
-		return root / LOCAL_CACHE_DIR_NAME / self._browser_profile_dir_name(browserPath)
-
-	def _browser_profile_dir_name(self, browserPath: str) -> str:
-		exeName = Path(browserPath).name.lower()
-		if exeName in ("msedge.exe", "msedge"):
-			return EDGE_PROFILE_DIR_NAME
-		return CHROME_PROFILE_DIR_NAME
-
-	def _cleanup_old_chrome_profiles(self, root: Path) -> None:
-		cutoff = time.time() - 2 * 24 * 60 * 60
-		for child in root.iterdir():
-			if not child.is_dir() or not child.name.startswith("session-"):
-				continue
-			try:
-				if child.stat().st_mtime >= cutoff:
-					continue
-				shutil.rmtree(child, ignore_errors=True)
-			except OSError:
-				continue
-		# Guard against unbounded persistent profile growth.
-		persistent = root / PERSISTENT_PROFILE_DIR_NAME
-		if persistent.is_dir():
-			try:
-				totalSize = sum(
-					f.stat().st_size for f in persistent.rglob("*") if f.is_file()
-				)
-				if totalSize > 500 * 1024 * 1024:  # 500 MB
-					log.debug(
-						"Persistent browser profile exceeds 500 MB (%d bytes), resetting.",
-						totalSize,
-					)
-					shutil.rmtree(persistent, ignore_errors=True)
-			except OSError:
-				pass
-
-	def _release_chrome_profile(self) -> None:
-		"""Release the profile directory reference without deleting it.
-
-		Preserves the persistent profile (including Chrome's compiled WASM
-		code cache) so the next startup can skip WASM recompilation.  Only
-		transient files (lock files, DevToolsActivePort) are cleaned up.
-		"""
-		profileDir = self._profileDir
-		self._profileDir = None
-		if profileDir is None:
-			return
-		for name in ("SingletonLock", "SingletonCookie", "SingletonSocket",
-					 "lockfile", "DevToolsActivePort"):
-			with suppress(OSError):
-				(profileDir / name).unlink()
-
-	def _remove_chrome_profile(self) -> None:
-		"""Fully delete the profile directory (used on Chrome startup failure)."""
-		profileDir = self._profileDir
-		self._profileDir = None
-		if profileDir is None:
-			return
-		try:
-			shutil.rmtree(profileDir, ignore_errors=True)
-		except OSError:
-			log.debug("Could not remove Google TTS Chrome session profile.", exc_info=True)
-
-	def _read_devtools_port(self, devToolsFile: Path, cancelEvent: threading.Event | None = None) -> int:
-		for attempt in range(400):
-			_raise_if_cancelled(cancelEvent)
-			if self._chromeProcess is not None:
-				_hide_chrome_windows(self._chromeProcess.pid)
-			if self._chromeProcess is not None and self._chromeProcess.poll() is not None:
-				exitCode = self._chromeProcess.returncode
-				self._chromeProcess = None
-				if exitCode == 21:
-					raise _friendly_cdp_error(
-						_(
-							"The browser profile used by Google TTS For NVDA is already in use. "
-							"Restart NVDA, or close any leftover Microsoft Edge or Google Chrome helper processes."
-						),
-						"Browser runtime exited with profile-in-use code 21.",
-					)
-				raise _friendly_cdp_error(
-					_("The browser runtime closed before Google TTS For NVDA was ready."),
-					f"Browser runtime exited before DevTools became available: {exitCode}",
-				)
-			if devToolsFile.is_file():
-				lines = devToolsFile.read_text(encoding="utf-8").splitlines()
-				if lines:
-					return int(lines[0])
-			time.sleep(STARTUP_POLL_INTERVAL)
-		raise _friendly_cdp_error(
-			_("The browser runtime did not start in time."),
-			"Timed out waiting for browser DevTools.",
-		)
-
-	def _page_url(self) -> str:
-		if self._serverPort is None:
-			raise _friendly_cdp_error(
-				_("Google TTS For NVDA could not start its local browser bridge."),
-				"Bridge HTTP server is not running.",
-			)
-		return f"http://127.0.0.1:{self._serverPort}/"
-
-	def _get_page_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
-		pageUrl = self._page_url()
-		if self._debugPort is None:
-			raise _friendly_cdp_error(
-				_("The browser runtime is not ready yet."),
-				"Browser DevTools port is not ready.",
-			)
-		for attempt in range(200):
-			_raise_if_cancelled(cancelEvent)
-			if self._chromeProcess is not None:
-				_hide_chrome_windows(self._chromeProcess.pid)
-			try:
-				targets = _read_json_endpoint(self._debugPort, "/json/list", timeout=0.5)
-			except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
-				time.sleep(STARTUP_POLL_INTERVAL)
-				continue
-			if isinstance(targets, list):
-				for target in targets:
-					if not isinstance(target, dict):
-						continue
-					if target.get("type") != "page":
-						continue
-					wsUrl = target.get("webSocketDebuggerUrl")
-					if not isinstance(wsUrl, str):
-						continue
-					if target.get("url") == pageUrl:
-						return wsUrl
-			time.sleep(STARTUP_POLL_INTERVAL)
-		raise _friendly_cdp_error(
-			_("Google TTS For NVDA could not find its speech page in the browser runtime."),
-			"Could not find browser speech page target.",
-		)
-
-	def _next_msg_id(self) -> int:
-		with self._msgIdLock:
-			self._msgId += 1
-			return self._msgId
+			self._cdp_client.close()
+			self._process_manager.terminate()
 
 	def _cdp_request(
 		self,
@@ -856,122 +1493,23 @@ class ChromeTtsBridge:
 		eventHandler: Callable[[dict[str, Any]], None] | None = None,
 		cancelEvent: threading.Event | None = None,
 	) -> dict[str, Any]:
-		if self._ws is None:
-			raise _friendly_cdp_error(
-				_("Google TTS For NVDA is not connected to the browser runtime."),
-				"Browser DevTools websocket is not connected.",
-			)
-		msgId = self._next_msg_id()
-		command = {"id": msgId, "method": method, "params": params or {}}
-		with self._lock:
-			self._runtimeBusy = cancelEvent is not None
-			try:
-				self._ws.send(json.dumps(command))
-				deadline = time.monotonic() + timeout
-				while time.monotonic() < deadline:
-					if cancelEvent is not None and cancelEvent.is_set():
-						self._send_stop()
-						while True:
-							try:
-								self._ws.recv()
-							except websocket.WebSocketTimeoutException:
-								break
-							except Exception:
-								break
-						raise CdpCancelled()
-					try:
-						rawMessage = self._ws.recv()
-					except websocket.WebSocketTimeoutException:
-						continue
-					if not rawMessage:
-						raise _friendly_cdp_error(
-							_("The browser runtime connection closed unexpectedly."),
-							"Browser DevTools websocket closed.",
-						)
-					message = json.loads(rawMessage)
-					if eventHandler is not None:
-						eventHandler(message)
-					if message.get("id") != msgId:
-						continue
-					if "error" in message:
-						raise _friendly_cdp_error(
-							_("The browser runtime reported an error while processing speech."),
-							f"CDP error for {method}: {message['error']}",
-						)
-					exceptionDetails = message.get("result", {}).get("exceptionDetails")
-					if isinstance(exceptionDetails, dict):
-						raise _friendly_cdp_error(
-							_("The browser runtime reported an error while preparing speech."),
-							self._format_exception(exceptionDetails),
-						)
-					return message
-			finally:
-				self._runtimeBusy = False
-		raise _friendly_cdp_error(
-			_("The browser runtime did not respond in time."),
-			f"Timed out waiting for {method}.",
+		return self._cdp_client.request(
+			method,
+			params,
+			timeout=timeout,
+			eventHandler=eventHandler,
+			cancelEvent=cancelEvent,
+			onCancelCallback=self._engine.send_fast_stop,
 		)
 
 	def _send_stop(self) -> None:
-		ws = self._ws
-		if ws is None or not ws.connected:
-			return
-		with self._stopLock:
-			now = time.monotonic()
-			if now - self._lastStopSentAt < 0.02:
-				return
-			self._lastStopSentAt = now
-			try:
-				command = {
-					"id": self._next_msg_id(),
-					"method": "Runtime.evaluate",
-					"params": {
-						"expression": STOP_EXPRESSION,
-						"awaitPromise": False,
-						"returnByValue": True,
-					},
-				}
-				ws.send(json.dumps(command))
-			except Exception:
-				log.debug("Could not send fast browser speech stop command.", exc_info=True)
+		self._engine.send_fast_stop()
 
 	def _wait_until_ready(self, cancelEvent: threading.Event | None = None) -> None:
-		expression = """
-		typeof window.googleTtsForNvdaSpeak === "function"
-		&& typeof window.googleTtsForNvdaPreload === "function"
-		&& typeof window.googleTtsForNvdaBridge === "function"
-		&& typeof window.googleTtsForNvdaReady === "function"
-		&& window.googleTtsForNvdaReady() === true
-		"""
-		for attempt in range(400):
-			_raise_if_cancelled(cancelEvent)
-			response = self._cdp_request(
-				"Runtime.evaluate",
-				{"expression": expression, "returnByValue": True},
-				timeout=5,
-				cancelEvent=cancelEvent,
-			)
-			if response.get("result", {}).get("result", {}).get("value") is True:
-				return
-			time.sleep(STARTUP_POLL_INTERVAL)
-		raise _friendly_cdp_error(
-			_("Google TTS For NVDA could not finish loading the browser speech engine."),
-			"Browser speech harness did not finish loading.",
-		)
+		self._engine.wait_until_ready(cancelEvent=cancelEvent)
 
 	def _close_websocket(self) -> None:
-		if self._ws is None:
-			return
-		try:
-			self._ws.close()
-		except Exception:
-			pass
-		self._ws = None
+		self._cdp_client.close()
 
 	def _format_exception(self, exceptionDetails: dict[str, Any]) -> str:
-		exception = exceptionDetails.get("exception")
-		if isinstance(exception, dict) and exception.get("description"):
-			return str(exception["description"])
-		if exceptionDetails.get("text"):
-			return str(exceptionDetails["text"])
-		return "Browser DevTools runtime exception."
+		return self._cdp_client.format_exception(exceptionDetails)

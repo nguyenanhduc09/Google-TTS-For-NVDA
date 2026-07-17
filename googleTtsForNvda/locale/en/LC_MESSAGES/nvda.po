@@ -1,0 +1,863 @@
+# English translation for Google TTS Cho NVDA.
+# Copyright (C) 2026 Nguyễn Anh Đức, Đào Đức Trung và Phạm Hùng Vương.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Google TTS Cho NVDA 0.4\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-07-10 00:00+0700\n"
+"PO-Revision-Date: 2026-07-17 00:00+0700\n"
+"Last-Translator: Nguyễn Anh Đức, Đào Đức Trung và Phạm Hùng Vương\n"
+"Language-Team: English\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: Poedit 3.9\n"
+
+msgid "&Download checked voice packages"
+msgstr "&Download checked voice packages"
+
+msgid "&Filter by language:"
+msgstr "&Filter by language:"
+
+msgid "&Open voice packages folder"
+msgstr "&Open voice packages folder"
+
+msgid "&Refresh"
+msgstr "&Refresh"
+
+msgid "&Remove checked voice packages"
+msgstr "&Remove checked voice packages"
+
+msgid "A file system error occurred while managing voice packages. Check the voice packages folder and try again."
+msgstr "A file system error occurred while managing voice packages. Check the voice packages folder and try again."
+
+msgid "A voice package operation is still running."
+msgstr "A voice package operation is still running."
+
+msgid "Albanian"
+msgstr "Albanian"
+
+msgid "All"
+msgstr "All"
+
+msgid "Automatic language profiles are off. Google TTS uses NVDA's normal Speech Settings for voice, variant, rate, pitch, volume, capitals, and spelling."
+msgstr "Automatic language profiles are off. Google TTS uses NVDA's normal Speech Settings for voice, variant, rate, pitch, volume, capitals, and spelling."
+
+msgid "&Use automatic language profiles"
+msgstr "&Use automatic language profiles"
+
+msgid "An unexpected error occurred while managing voice packages."
+msgstr "An unexpected error occurred while managing voice packages."
+
+msgid "Arabic"
+msgstr "Arabic"
+
+msgid "Assamese"
+msgstr "Assamese"
+
+msgid "Automatic language &profile:"
+msgstr "Automatic language &profile:"
+
+msgid "Automatic language profile"
+msgstr "Automatic language profile"
+
+msgid "Automatic language profiles status"
+msgstr "Automatic language profiles status"
+
+msgid "Automatic language profiles were disabled because no languages are selected."
+msgstr "Automatic language profiles were disabled because no languages are selected."
+
+msgid "Automatic language profiles use the selected installed language profiles. If only one language is selected, that profile is used for every sentence."
+msgstr "Automatic language profiles use the selected installed language profiles. If only one language is selected, that profile is used for every sentence."
+
+msgid "Available"
+msgstr "Available"
+
+msgid "Bengali (Bangladesh)"
+msgstr "Bengali (Bangladesh)"
+
+msgid "Bengali (India)"
+msgstr "Bengali (India)"
+
+msgid "Bodo"
+msgstr "Bodo"
+
+msgid "Bosnian"
+msgstr "Bosnian"
+
+msgid "Chromium browser &runtime:"
+msgstr "Chromium browser &runtime:"
+
+msgid "Chromium browser runtime"
+msgstr "Chromium browser runtime"
+
+msgid "Chromium browser runtime status"
+msgstr "Chromium browser runtime status"
+
+msgid "Bulgarian"
+msgstr "Bulgarian"
+
+msgid "Cantonese"
+msgstr "Cantonese"
+
+msgid "Catalan"
+msgstr "Catalan"
+
+msgid "Check &all voice packages"
+msgstr "Check &all voice packages"
+
+msgid "Could not download the voice package. Check your internet connection and try again."
+msgstr "Could not download the voice package. Check your internet connection and try again."
+
+msgid "Could not write to the voice packages folder. Check folder permissions and try again."
+msgstr "Could not write to the voice packages folder. Check folder permissions and try again."
+
+msgid "Croatian"
+msgstr "Croatian"
+
+msgid "Czech"
+msgstr "Czech"
+
+msgid "Danish"
+msgstr "Danish"
+
+msgid "Dogri"
+msgstr "Dogri"
+
+msgid "Download"
+msgstr "Download"
+
+msgid "Downloadable voice packages"
+msgstr "Downloadable voice packages"
+
+msgid "Downloaded {count} voice packages."
+msgstr "Downloaded {count} voice packages."
+
+msgid "Downloaded {package}."
+msgstr "Downloaded {package}."
+
+msgid "Downloading voice packages..."
+msgstr "Downloading voice packages..."
+
+msgid "Downloading {current}/{total}: {package}"
+msgstr "Downloading {current}/{total}: {package}"
+
+msgid "Downloading {current}/{total}: {package}, overall {percent} percent complete"
+msgstr "Downloading {current}/{total}: {package}, overall {percent} percent complete"
+
+msgid "Downloading {package}."
+msgstr "Downloading {package}."
+
+msgid "Dutch"
+msgstr "Dutch"
+
+msgid "English (Australia)"
+msgstr "English (Australia)"
+
+msgid "English (India)"
+msgstr "English (India)"
+
+msgid "English (Nigeria)"
+msgstr "English (Nigeria)"
+
+msgid "English (UK)"
+msgstr "English (UK)"
+
+msgid "English (US)"
+msgstr "English (US)"
+
+msgid "Estonian"
+msgstr "Estonian"
+
+msgid "Filipino"
+msgstr "Filipino"
+
+msgid "Filter downloadable voice packages by language"
+msgstr "Filter downloadable voice packages by language"
+
+msgid "Filter installed voice packages by language"
+msgstr "Filter installed voice packages by language"
+
+msgid "Finnish"
+msgstr "Finnish"
+
+msgid "Flemish"
+msgstr "Flemish"
+
+msgid "French (Canada)"
+msgstr "French (Canada)"
+
+msgid "French (France)"
+msgstr "French (France)"
+
+msgid "German"
+msgstr "German"
+
+msgid "Google TTS For NVDA"
+msgstr "Google TTS For NVDA"
+
+msgid ""
+"Google TTS For NVDA could not be loaded because the WASM TTS Engine library is incomplete.\n"
+"\n"
+"Reinstall Google TTS For NVDA with the complete WASM TTS Engine library."
+msgstr ""
+"Google TTS For NVDA could not be loaded because the WASM TTS Engine library is incomplete.\n"
+"\n"
+"Reinstall Google TTS For NVDA with the complete WASM TTS Engine library."
+
+msgid ""
+"Google TTS For NVDA could not be loaded because the WASM TTS Engine library is missing.\n"
+"\n"
+"Reinstall Google TTS For NVDA with the included WASM TTS Engine library."
+msgstr ""
+"Google TTS For NVDA could not be loaded because the WASM TTS Engine library is missing.\n"
+"\n"
+"Reinstall Google TTS For NVDA with the included WASM TTS Engine library."
+
+msgid ""
+"Google TTS For NVDA could not be loaded because the WASM TTS Engine version is not supported.\n"
+"\n"
+"This add-on supports WASM TTS Engine version {supported}, but found: {found}.\n"
+"\n"
+"Install a Google TTS For NVDA package that includes the supported WASM TTS Engine."
+msgstr ""
+"Google TTS For NVDA could not be loaded because the WASM TTS Engine version is not supported.\n"
+"\n"
+"This add-on supports WASM TTS Engine version {supported}, but found: {found}.\n"
+"\n"
+"Install a Google TTS For NVDA package that includes the supported WASM TTS Engine."
+
+msgid ""
+"Google TTS For NVDA could not be loaded because the WASM TTS Engine voice catalog could not be read.\n"
+"\n"
+"Reinstall Google TTS For NVDA with a supported WASM TTS Engine library."
+msgstr ""
+"Google TTS For NVDA could not be loaded because the WASM TTS Engine voice catalog could not be read.\n"
+"\n"
+"Reinstall Google TTS For NVDA with a supported WASM TTS Engine library."
+
+msgid "Google TTS For NVDA could not find its speech page in the Chromium browser runtime."
+msgstr "Google TTS For NVDA could not find its speech page in the Chromium browser runtime."
+
+msgid "Google TTS For NVDA could not finish loading the browser speech engine."
+msgstr "Google TTS For NVDA could not finish loading the browser speech engine."
+
+msgid "Google TTS For NVDA could not start its local browser bridge."
+msgstr "Google TTS For NVDA could not start its local browser bridge."
+
+msgid "Google TTS For NVDA could not start speech in the Chromium browser runtime."
+msgstr "Google TTS For NVDA could not start speech in the Chromium browser runtime."
+
+msgid "Google TTS For NVDA is not connected to the Chromium browser runtime."
+msgstr "Google TTS For NVDA is not connected to the Chromium browser runtime."
+
+msgid "Google TTS Voice Manager"
+msgstr "Google TTS Voice Manager"
+
+msgid "Google TTS Voice Manager..."
+msgstr "Google TTS Voice Manager..."
+
+msgid "Greek"
+msgstr "Greek"
+
+msgid "Gujarati"
+msgstr "Gujarati"
+
+msgid "Hebrew"
+msgstr "Hebrew"
+
+msgid "Hindi"
+msgstr "Hindi"
+
+msgid "Hungarian"
+msgstr "Hungarian"
+
+msgid "Icelandic"
+msgstr "Icelandic"
+
+msgid "Indonesian"
+msgstr "Indonesian"
+
+msgid "Installed"
+msgstr "Installed"
+
+msgid "Installed voice packages"
+msgstr "Installed voice packages"
+
+msgid "Install at least one language voice package to use automatic language profiles."
+msgstr "Install at least one language voice package to use automatic language profiles."
+
+msgid "Installed {package}."
+msgstr "Installed {package}."
+
+msgid "Italian"
+msgstr "Italian"
+
+msgid "Japanese"
+msgstr "Japanese"
+
+msgid "Javanese"
+msgstr "Javanese"
+
+msgid "Kannada"
+msgstr "Kannada"
+
+msgid "Kashmiri"
+msgstr "Kashmiri"
+
+msgid "Khmer"
+msgstr "Khmer"
+
+msgid "Konkani"
+msgstr "Konkani"
+
+msgid "Korean"
+msgstr "Korean"
+
+msgid "Language"
+msgstr "Language"
+
+msgid "Latvian"
+msgstr "Latvian"
+
+msgid "Lithuanian"
+msgstr "Lithuanian"
+
+msgid "Maithili"
+msgstr "Maithili"
+
+msgid "Malay"
+msgstr "Malay"
+
+msgid "Malayalam"
+msgstr "Malayalam"
+
+msgid "Mandarin Chinese (China)"
+msgstr "Mandarin Chinese (China)"
+
+msgid "Mandarin Chinese (Taiwan)"
+msgstr "Mandarin Chinese (Taiwan)"
+
+msgid "Manipuri"
+msgstr "Manipuri"
+
+msgid "Marathi"
+msgstr "Marathi"
+
+msgid "Missing required package: {dependency}"
+msgstr "Missing required package: {dependency}"
+
+msgid "Nepali"
+msgstr "Nepali"
+
+msgid "No Google TTS For NVDA voice packages are installed. Open Google TTS Voice Manager to download a voice package."
+msgstr "No Google TTS For NVDA voice packages are installed. Open Google TTS Voice Manager to download a voice package."
+
+msgid "No download link is available for voice package {package}."
+msgstr "No download link is available for voice package {package}."
+
+msgid "Norwegian Bokmål"
+msgstr "Norwegian Bokmål"
+
+msgid "Odia"
+msgstr "Odia"
+
+msgid "Opens the Google TTS Voice Manager."
+msgstr "Opens the Google TTS Voice Manager."
+
+msgid "Opens the Google TTS For NVDA settings."
+msgstr "Opens the Google TTS For NVDA settings."
+
+msgid "Package"
+msgstr "Package"
+
+msgid "Polish"
+msgstr "Polish"
+
+msgid "Portuguese (Brazil)"
+msgstr "Portuguese (Brazil)"
+
+msgid "Portuguese (Portugal)"
+msgstr "Portuguese (Portugal)"
+
+msgid "Progress"
+msgstr "Progress"
+
+msgid "Preferred profile &language:"
+msgstr "Preferred profile &language:"
+
+msgid "Preferred profile language"
+msgstr "Preferred profile language"
+
+msgid "Punjabi"
+msgstr "Punjabi"
+
+msgid "Ready."
+msgstr "Ready."
+
+msgid "Remove voice package {package}?"
+msgstr "Remove voice package {package}?"
+
+msgid "Removed {count} voice packages."
+msgstr "Removed {count} voice packages."
+
+msgid "Removed {package}."
+msgstr "Removed {package}."
+
+msgid "Removing voice packages..."
+msgstr "Removing voice packages..."
+
+msgid "Romanian"
+msgstr "Romanian"
+
+msgid "Russian"
+msgstr "Russian"
+
+msgid "Sanskrit"
+msgstr "Sanskrit"
+
+msgid "Santali"
+msgstr "Santali"
+
+msgid "Select Synthesizer dialog class was not found."
+msgstr "Select Synthesizer dialog class was not found."
+
+msgid "Select at least one language profile to use automatic language profiles."
+msgstr "Select at least one language profile to use automatic language profiles."
+
+msgid "Serbian"
+msgstr "Serbian"
+
+msgid "Sindhi"
+msgstr "Sindhi"
+
+msgid "Sinhala"
+msgstr "Sinhala"
+
+msgid "Size"
+msgstr "Size"
+
+msgid "Slovak"
+msgstr "Slovak"
+
+msgid "Slovenian"
+msgstr "Slovenian"
+
+msgid "Spanish (Spain)"
+msgstr "Spanish (Spain)"
+
+msgid "Spanish (US)"
+msgstr "Spanish (US)"
+
+msgid "Status"
+msgstr "Status"
+
+msgid "Sundanese"
+msgstr "Sundanese"
+
+msgid "Swahili"
+msgstr "Swahili"
+
+msgid "Swedish"
+msgstr "Swedish"
+
+msgid "Tamil"
+msgstr "Tamil"
+
+msgid "Telugu"
+msgstr "Telugu"
+
+msgid "Thai"
+msgstr "Thai"
+
+msgid "The browser profile used by Google TTS For NVDA is already in use. Restart NVDA, or close any leftover supported Chromium browser helper processes."
+msgstr "The browser profile used by Google TTS For NVDA is already in use. Restart NVDA, or close any leftover supported Chromium browser helper processes."
+
+msgid "The Chromium browser runtime closed before Google TTS For NVDA was ready."
+msgstr "The Chromium browser runtime closed before Google TTS For NVDA was ready."
+
+msgid "The Chromium browser runtime connection closed unexpectedly."
+msgstr "The Chromium browser runtime connection closed unexpectedly."
+
+msgid "The Chromium browser runtime is not ready yet."
+msgstr "The Chromium browser runtime is not ready yet."
+
+msgid "The Chromium browser runtime reported an error while preparing speech."
+msgstr "The Chromium browser runtime reported an error while preparing speech."
+
+msgid "The Chromium browser runtime reported an error while processing speech."
+msgstr "The Chromium browser runtime reported an error while processing speech."
+
+msgid "The voice package file could not be found. Refresh the list and try again."
+msgstr "The voice package file could not be found. Refresh the list and try again."
+
+msgid "Turkish"
+msgstr "Turkish"
+
+msgid "Ukrainian"
+msgstr "Ukrainian"
+
+msgid "Unavailable"
+msgstr "Unavailable"
+
+msgid "Urdu (India)"
+msgstr "Urdu (India)"
+
+msgid "Urdu (Pakistan)"
+msgstr "Urdu (Pakistan)"
+
+msgid "Vietnamese"
+msgstr "Vietnamese"
+
+msgid "&Close"
+msgstr "&Close"
+
+msgid "&Copy link"
+msgstr "&Copy link"
+
+msgid "&Download online installer"
+msgstr "&Download online installer"
+
+msgid "&Maybe later"
+msgstr "&Maybe later"
+
+msgid "&Open Microsoft WebView2 page"
+msgstr "&Open Microsoft WebView2 page"
+
+msgid "Download address"
+msgstr "Download address"
+
+msgid ""
+"Microsoft Edge is available, but Microsoft Edge WebView2 Runtime is not available.\n"
+"\n"
+"Google TTS For NVDA needs WebView2 when Microsoft Edge is the Chromium browser runtime. NVDA will keep using the previous synthesizer until WebView2 is installed.\n"
+"\n"
+"Choose Download online installer to download Microsoft's Evergreen Bootstrapper. Choose Open Microsoft WebView2 page if you need an offline installer or a fixed-version package."
+msgstr ""
+"Microsoft Edge is available, but Microsoft Edge WebView2 Runtime is not available.\n"
+"\n"
+"Google TTS For NVDA needs WebView2 when Microsoft Edge is the Chromium browser runtime. NVDA will keep using the previous synthesizer until WebView2 is installed.\n"
+"\n"
+"Choose Download online installer to download Microsoft's Evergreen Bootstrapper. Choose Open Microsoft WebView2 page if you need an offline installer or a fixed-version package."
+
+msgid "Microsoft Edge was found, but Microsoft Edge WebView2 Runtime was not found. Keeping the current Google TTS For NVDA Chromium browser runtime setting."
+msgstr "Microsoft Edge was found, but Microsoft Edge WebView2 Runtime was not found. Keeping the current Google TTS For NVDA Chromium browser runtime setting."
+
+msgid "Microsoft Edge WebView2 Runtime is needed"
+msgstr "Microsoft Edge WebView2 Runtime is needed"
+
+msgid "Microsoft Edge WebView2 Runtime was not found. Install it before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
+msgstr "Microsoft Edge WebView2 Runtime was not found. Install it before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
+
+msgid "Microsoft Edge WebView2 Runtime was not found. Install or repair Microsoft Edge WebView2 Runtime before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
+msgstr "Microsoft Edge WebView2 Runtime was not found. Install or repair Microsoft Edge WebView2 Runtime before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
+
+msgid "No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
+msgstr "No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
+
+msgid "Selected Chromium browser runtime: {runtime}. Microsoft Edge: {edgeStatus}. Microsoft Edge WebView2 Runtime: {webView2Status}."
+msgstr "Selected Chromium browser runtime: {runtime}. Microsoft Edge: {edgeStatus}. Microsoft Edge WebView2 Runtime: {webView2Status}."
+
+msgid "Selected Chromium browser runtime: {runtime}. {browser}: {browserStatus}."
+msgstr "Selected Chromium browser runtime: {runtime}. {browser}: {browserStatus}."
+
+msgid "The download page could not be opened. Please visit this address manually:"
+msgstr "The download page could not be opened. Please visit this address manually:"
+
+msgid "The link could not be copied to the clipboard."
+msgstr "The link could not be copied to the clipboard."
+
+msgid "The link was copied to the clipboard."
+msgstr "The link was copied to the clipboard."
+
+msgid "WebView2 Runtime missing"
+msgstr "WebView2 Runtime missing"
+
+msgid "found"
+msgstr "found"
+
+msgid "not found"
+msgstr "not found"
+
+msgid "{selectedStatus} Active Chromium browser runtime: {runtime}."
+msgstr "{selectedStatus} Active Chromium browser runtime: {runtime}."
+
+msgid "{selectedStatus} Falling back to active Chromium browser runtime: {runtime}."
+msgstr "{selectedStatus} Falling back to active Chromium browser runtime: {runtime}."
+
+msgid "{selectedStatus} No supported Chromium browser runtime was found."
+msgstr "{selectedStatus} No supported Chromium browser runtime was found."
+
+msgid "Voice settings are managed by automatic language profiles. Open the Google TTS for NVDA category in NVDA Settings to configure them."
+msgstr "Voice settings are managed by automatic language profiles. Open the Google TTS for NVDA category in NVDA Settings to configure them."
+
+msgid "Voice package operation failed: {message}"
+msgstr "Voice package operation failed: {message}"
+
+msgid "Voice package {package} did not pass verification after download. Please try downloading it again."
+msgstr "Voice package {package} did not pass verification after download. Please try downloading it again."
+
+msgid "Voice package {package} did not pass verification after import."
+msgstr "Voice package {package} did not pass verification after import."
+
+msgid "Voices"
+msgstr "Voices"
+
+msgid "Welsh"
+msgstr "Welsh"
+
+msgid "another version"
+msgstr "another version"
+
+msgid "{installed} installed voice packages, {available} available to download - Google TTS Voice Manager"
+msgstr "{installed} installed voice packages, {available} available to download - Google TTS Voice Manager"
+
+msgid "{installed} installed voice packages, {available} available to download."
+msgstr "{installed} installed voice packages, {available} available to download."
+
+msgid "{message} The current variant was reset to {voice}."
+msgstr "{message} The current variant was reset to {voice}."
+
+msgid "{voice} ({package})"
+msgstr "{voice} ({package})"
+
+msgid "{package} is already installed."
+msgstr "{package} is already installed."
+
+msgid "{runtime} ({status})"
+msgstr "{runtime} ({status})"
+
+msgid "{runtime} was not found. Keeping the current Google TTS For NVDA Chromium browser runtime setting."
+msgstr "{runtime} was not found. Keeping the current Google TTS For NVDA Chromium browser runtime setting."
+
+msgid "{size:.1f} MB"
+msgstr "{size:.1f} MB"
+
+msgid "Available to download"
+msgstr "Available to download"
+
+msgid "Available. Required by {count} downloadable packages"
+msgstr "Available. Required by {count} downloadable packages"
+
+msgid "Available. Required package is installed: {dependency}"
+msgstr "Available. Required package is installed: {dependency}"
+
+msgid "Available. Requires package: {dependency}"
+msgstr "Available. Requires package: {dependency}"
+
+msgid "Not usable. Missing required package: {dependency}"
+msgstr "Not usable. Missing required package: {dependency}"
+
+msgid "Not usable. Required package is not usable: {dependency}"
+msgstr "Not usable. Required package is not usable: {dependency}"
+
+msgid "Usable"
+msgstr "Usable"
+
+msgid "Usable. Required by {count} installed packages"
+msgstr "Usable. Required by {count} installed packages"
+
+msgid "Usable. Requires {dependency}"
+msgstr "Usable. Requires {dependency}"
+
+msgid "Usable. Requires {dependency}; required by {count} installed packages"
+msgstr "Usable. Requires {dependency}; required by {count} installed packages"
+
+msgid ""
+"Remove {count} packages?\n"
+"{packages}"
+msgstr ""
+"Remove {count} packages?\n"
+"{packages}"
+
+msgid "Use Google's WASM text-to-speech voices locally through a supported Chromium browser runtime such as Google Chrome, Microsoft Edge, or Brave as an NVDA synthesizer."
+msgstr "Use Google's WASM text-to-speech voices locally through a supported Chromium browser runtime such as Google Chrome, Microsoft Edge, or Brave as an NVDA synthesizer."
+
+msgid "Download or remove Google TTS For NVDA voice packages"
+msgstr "Download or remove Google TTS For NVDA voice packages"
+
+msgid ""
+"Download required voice packages?\n"
+"Selected: {selected}\n"
+"Also download packages required by your selection: {dependencies}"
+msgstr ""
+"Download required voice packages?\n"
+"Selected: {selected}\n"
+"Also download packages required by your selection: {dependencies}"
+
+msgid "The last usable voice package was kept because Google TTS For NVDA is still the current synthesizer."
+msgstr "The last usable voice package was kept because Google TTS For NVDA is still the current synthesizer."
+
+msgid "Waiting for you to switch away from Google TTS For NVDA before removing the last usable voice package."
+msgstr "Waiting for you to switch away from Google TTS For NVDA before removing the last usable voice package."
+
+msgid ""
+"You are about to remove the last usable voice package. After it is removed, Google TTS For NVDA will not have any voices available until you download another package.\n"
+"\n"
+"Packages to remove, including dependent packages: {packages}\n"
+"\n"
+"Choose Yes to remove these packages. Choose No to keep them installed."
+msgstr ""
+"You are about to remove the last usable voice package. After it is removed, Google TTS For NVDA will not have any voices available until you download another package.\n"
+"\n"
+"Packages to remove, including dependent packages: {packages}\n"
+"\n"
+"Choose Yes to remove these packages. Choose No to keep them installed."
+
+msgid ""
+"You are about to remove the last usable voice package. Google TTS For NVDA is currently selected as your synthesizer, so it needs at least one voice to keep speaking.\n"
+"\n"
+"Packages to remove, including dependent packages: {packages}\n"
+"\n"
+"Choose Yes to open Select Synthesizer and switch first. Choose No to keep this package installed."
+msgstr ""
+"You are about to remove the last usable voice package. Google TTS For NVDA is currently selected as your synthesizer, so it needs at least one voice to keep speaking.\n"
+"\n"
+"Packages to remove, including dependent packages: {packages}\n"
+"\n"
+"Choose Yes to open Select Synthesizer and switch first. Choose No to keep this package installed."
+
+msgid "Downloaded {succeeded} of {total} packages. Could not download: {failList}. First error: {reason}"
+msgstr "Downloaded {succeeded} of {total} packages. Could not download: {failList}. First error: {reason}"
+
+msgid "Google TTS For NVDA could not speak this text."
+msgstr "Google TTS For NVDA could not speak this text."
+
+msgid ""
+"Google TTS For NVDA is using the selected Chromium browser runtime now. To change it safely, switch to another synthesizer first.\n"
+"\n"
+"Choose OK to open Select Synthesizer. Choose Cancel to keep the current Chromium browser runtime."
+msgstr ""
+"Google TTS For NVDA is using the selected Chromium browser runtime now. To change it safely, switch to another synthesizer first.\n"
+"\n"
+"Choose OK to open Select Synthesizer. Choose Cancel to keep the current Chromium browser runtime."
+
+msgid "Google TTS For NVDA will use {runtime} as its Chromium browser runtime."
+msgstr "Google TTS For NVDA will use {runtime} as its Chromium browser runtime."
+
+msgid ""
+"No Google TTS For NVDA voices are installed.\n"
+"\n"
+"Press OK to open Google TTS Voice Manager and download a voice package.\n"
+"Press Cancel to keep using your current synthesizer for now.\n"
+"\n"
+"You can also open Voice Manager later from NVDA Menu > Tools > Google TTS Voice Manager, or press NVDA+Ctrl+Shift+G."
+msgstr ""
+"No Google TTS For NVDA voices are installed.\n"
+"\n"
+"Press OK to open Google TTS Voice Manager and download a voice package.\n"
+"Press Cancel to keep using your current synthesizer for now.\n"
+"\n"
+"You can also open Voice Manager later from NVDA Menu > Tools > Google TTS Voice Manager, or press NVDA+Ctrl+Shift+G."
+
+msgid ""
+"No installed Google TTS For NVDA voices can be used.\n"
+"\n"
+"Press OK to open Google TTS Voice Manager and install another voice package.\n"
+"Press Cancel to keep using your current synthesizer for now."
+msgstr ""
+"No installed Google TTS For NVDA voices can be used.\n"
+"\n"
+"Press OK to open Google TTS Voice Manager and install another voice package.\n"
+"Press Cancel to keep using your current synthesizer for now."
+
+msgid "No voice packages are checked for download."
+msgstr "No voice packages are checked for download."
+
+msgid "No voice packages are checked for removal."
+msgstr "No voice packages are checked for removal."
+
+msgid "Not supported by the bundled engine"
+msgstr "Not supported by the bundled engine"
+
+msgid ""
+"Remove {count} packages?\n"
+"Selected: {selected}\n"
+"Also remove packages that depend on your selection: {dependents}"
+msgstr ""
+"Remove {count} packages?\n"
+"Selected: {selected}\n"
+"Also remove packages that depend on your selection: {dependents}"
+
+msgid "Removed {succeeded} of {total} packages. Could not remove: {failList}. First error: {reason}"
+msgstr "Removed {succeeded} of {total} packages. Could not remove: {failList}. First error: {reason}"
+
+msgid "The Select Synthesizer dialog could not be opened."
+msgstr "The Select Synthesizer dialog could not be opened."
+
+msgid "The Chromium browser runtime did not respond in time."
+msgstr "The Chromium browser runtime did not respond in time."
+
+msgid "The Chromium browser runtime did not start in time."
+msgstr "The Chromium browser runtime did not start in time."
+
+msgid "The Chromium browser runtime was left unchanged because Google TTS For NVDA is still the current synthesizer."
+msgstr "The Chromium browser runtime was left unchanged because Google TTS For NVDA is still the current synthesizer."
+
+msgid "The checked voice packages are not supported by the bundled Google TTS engine."
+msgstr "The checked voice packages are not supported by the bundled Google TTS engine."
+
+msgid "The installed Google TTS For NVDA voice packages do not include any voices this engine can use. Open Google TTS Voice Manager to install another voice package."
+msgstr "The installed Google TTS For NVDA voice packages do not include any voices this engine can use. Open Google TTS Voice Manager to install another voice package."
+
+msgid "This voice package is not installed. Open Google TTS Voice Manager to install it."
+msgstr "This voice package is not installed. Open Google TTS Voice Manager to install it."
+
+msgid "This voice package is not supported by the bundled Google TTS engine."
+msgstr "This voice package is not supported by the bundled Google TTS engine."
+
+msgid "&Use this language profile"
+msgstr "&Use this language profile"
+
+msgid "Use automatic language profiles"
+msgstr "Use automatic language profiles"
+
+msgid "Use this language profile"
+msgstr "Use this language profile"
+
+msgid ""
+"Voice dictionary preferences are unavailable while automatic language profiles are enabled.\n"
+"\n"
+"Google TTS For NVDA may switch between several profile variants while speaking, so NVDA cannot know which single variant voice dictionary to edit.\n"
+"\n"
+"Open the Google TTS For NVDA category in NVDA Settings and turn off automatic language profiles, then open Voice dictionary again."
+msgstr ""
+"Voice dictionary preferences are unavailable while automatic language profiles are enabled.\n"
+"\n"
+"Google TTS For NVDA may switch between several profile variants while speaking, so NVDA cannot know which single variant voice dictionary to edit.\n"
+"\n"
+"Open the Google TTS For NVDA category in NVDA Settings and turn off automatic language profiles, then open Voice dictionary again."
+
+msgid "Waiting for you to switch away from Google TTS For NVDA before changing the Chromium browser runtime."
+msgstr "Waiting for you to switch away from Google TTS For NVDA before changing the Chromium browser runtime."
+
+msgid "{message} Also downloaded required packages: {packages}"
+msgstr "{message} Also downloaded required packages: {packages}"
+
+msgid "{message} Skipped packages not supported by this engine: {packages}"
+msgstr "{message} Skipped packages not supported by this engine: {packages}"
+
+#: manifest.ini:changelog
+msgid "{language} ({count} voices)"
+msgstr "{language} ({count} voices)"
+
+msgid ""
+"Version 0.4:\n"
+"- Added automatic language profiles configurable from Google TTS For NVDA settings, with per-language voice, variant, rate, pitch, volume, capital, and spelling settings.\n"
+"- Improved compatibility with NVDA 2024.1 through 2026 and safer synthesizer switching.\n"
+"- Improved multilingual long-text reading with broader Unicode punctuation and no-space script handling.\n"
+"- Added Brave as a supported Chromium browser runtime and improved Chrome, Edge, and Brave fallback behavior.\n"
+"- Clarified Edge WebView2 troubleshooting and documented custom Chrome, Edge, and Brave paths in the GitHub README.\n"
+"- Added an assignable gesture for opening Google TTS For NVDA settings and improved the synth settings ring notice while automatic language profiles are enabled; voice parameters are managed from profiles in this mode for NVDA Speech Settings compatibility.\n"
+"- Improved Voice and Variant selection, voice warm-up, Voice Manager safety, and speech cancellation."
+msgstr ""
+"Version 0.4:\n"
+"- Added automatic language profiles configurable from Google TTS For NVDA settings, with per-language voice, variant, rate, pitch, volume, capital, and spelling settings.\n"
+"- Improved compatibility with NVDA 2024.1 through 2026 and safer synthesizer switching.\n"
+"- Improved multilingual long-text reading with broader Unicode punctuation and no-space script handling.\n"
+"- Added Brave as a supported Chromium browser runtime and improved Chrome, Edge, and Brave fallback behavior.\n"
+"- Clarified Edge WebView2 troubleshooting and documented custom Chrome, Edge, and Brave paths in the GitHub README.\n"
+"- Added an assignable gesture for opening Google TTS For NVDA settings and improved the synth settings ring notice while automatic language profiles are enabled; voice parameters are managed from profiles in this mode for NVDA Speech Settings compatibility.\n"
+"- Improved Voice and Variant selection, voice warm-up, Voice Manager safety, and speech cancellation."
