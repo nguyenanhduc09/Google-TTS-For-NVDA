@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -360,16 +361,15 @@ def remove_update_manifest(updateCheckResult: UpdateCheckResult) -> None:
 
 def cleanup_update_files() -> None:
 	downloadDir = _update_download_dir()
-	if not downloadDir.exists():
-		return
-	for path in downloadDir.iterdir():
-		try:
-			if path.is_dir():
-				continue
-			_remove_file_if_present(path)
-		except OSError:
-			continue
-	_remove_update_dir_if_empty()
+	try:
+		if downloadDir.is_dir() and not downloadDir.is_symlink():
+			shutil.rmtree(downloadDir)
+		else:
+			_remove_file_if_present(downloadDir)
+	except FileNotFoundError:
+		pass
+	except OSError:
+		pass
 
 
 def format_size(size: int) -> str:

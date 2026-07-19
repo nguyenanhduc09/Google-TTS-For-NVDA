@@ -41,7 +41,8 @@ from synthDrivers.googleTtsForNvda.catalog import EngineLibraryError, VoiceCatal
 from synthDrivers.googleTtsForNvda import voice_store
 
 from . import updater, updateGui
-from .settings import GoogleTtsSettingsPanel, bind_read_only_text_focus_announcement
+from .settings import GoogleTtsSettingsPanel
+from .uiUtils import bind_read_only_text_focus_announcement
 from .voiceManager import VoiceManagerDialog
 
 
