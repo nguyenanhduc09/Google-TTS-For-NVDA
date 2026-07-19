@@ -187,7 +187,7 @@ This add-on depends on a supported Chromium browser runtime, such as Google Chro
   - Persistent profile reset is controlled by `PERSISTENT_PROFILE_MAX_BYTES` and must run per runtime profile root only. Resetting an oversized Chrome profile must not remove Edge or Brave profile data, and custom `CHROME_PATH`, `EDGE_PATH`, or `BRAVE_PATH` executable names must not cause profile roots or snapshot runtime status to be inferred from the path basename.
   - Temporary browser profiles are a resilience fallback only. `_release_chrome_profile()` must preserve persistent profiles but remove temporary profiles, while `_remove_chrome_profile()` may delete the current profile after startup failure. Do not make temporary profiles the normal path unless persistent profile reuse is deliberately removed.
 
-### Supported settings ring parameters
+### Supported speech settings parameters
 
 Current supported settings:
 
@@ -197,6 +197,17 @@ Current supported settings:
 - `RateBoostSetting()` — boolean, doubles computed desired speech rate when enabled. For `*-seanet` packages at high rates, this can increase CPU usage because audio is processed after synthesis.
 - `PitchSetting()` — pitch, 0-100, maps through the existing semitone curve
 - `VolumeSetting()` — volume, 0-100, maps to browser-runtime volume 0.0-1.0
+- `pauseMode` / `DriverSetting("&Pauses")` — string choice with `Do not shorten`, `Shorten at end of text only`, and `Shorten all pauses`. The default must remain `Do not shorten` to preserve existing speech timing unless the user opts in. Match the IBMTTS-style behavior by exposing this in the Speech Settings dialog without putting it in NVDA's quick settings ring. This is a global Google TTS speech option and must remain available whether automatic language profiles are on or off.
+
+Pause shortening is implemented in the synth driver after PCM audio returns from the browser runtime, not in the browser harness or WASM files. Keep pause mode in the short-audio cache key so cached audio generated with one pause mode is never reused for another mode.
+
+Pause shortening code map:
+
+- Constants and settings live in `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py`: `_PAUSE_MODE_DO_NOT_SHORTEN`, `_PAUSE_MODE_SHORTEN_END_ONLY`, `_PAUSE_MODE_SHORTEN_ALL`, `_SHORTENED_SILENCE_KEEP_MS`, `_SILENCE_SAMPLE_THRESHOLD`, `_NORMAL_SENTENCE_BREAK_MS`, `_SHORTENED_SENTENCE_BREAK_MS`, `_PAUSE_MODE_SETTING`, and `_pauseModes`.
+- PCM silence processing lives in `_PcmSilenceShortener`, `_PcmSilenceShortener._hold_silence()`, `_pcm_bytes_for_milliseconds()`, and `_align_pcm_bytes()`. Keep the PCM scanner run-based rather than slice/convert every individual sample, because pause shortening can run over long synthesized audio.
+- Speech flow integration lives in `speak()`, `_iter_speech_chunks()`, `_sentence_break_milliseconds()`, `_speak_worker()`, `_speak_text()`, and `_short_cache_key()`.
+- Short-audio cache cleanup lives in `_clear_short_audio_cache()`. `_short_cache_key()` must include pause mode to avoid stale playback, and `_set_pauseMode()` must clear the short-audio cache when the global pause mode changes so audio generated for the old mode is not retained in memory.
+- NVDA Speech Settings accessors live in `_get_availablePausemodes()`, `_get_pauseMode()`, and `_set_pauseMode()`.
 
 Do **not** re-add:
 
@@ -208,6 +219,7 @@ These were removed and must stay removed unless the user explicitly requests a n
 ### Long-text segmentation
 
 - Long-text latency segmentation should prefer natural sentence and phrase punctuation before falling back to forced length cuts.
+- Unicode punctuation helpers live in `_unicode_name()`, `_is_sentence_terminator_character()`, `_is_soft_break_character()`, and `_is_sentence_trailing_closer()`. Keep these cached because they run repeatedly while segmenting long text. Sentence trailing closers should accept Unicode closing/final punctuation categories (`Pe`/`Pf`) so sentence breaks can cross localized brackets and quotes.
 - For scripts that often do not separate words with spaces, the synth driver may use conservative fixed-size script-window cuts after punctuation and whitespace checks have failed. This is a latency fallback, not language detection and not word segmentation.
 - Keep this fallback independent from automatic language profiles, NVDA Speech Settings, speech dictionaries, and voice dictionary handling.
 - Current no-space/low-space script coverage includes CJK/Han and CJK extensions, Bopomofo, Japanese Kana, Thai, Lao, Limbu, Tai Le, New Tai Lue, Buginese, Tai Tham, Khmer, Myanmar, Tibetan, Philippine Brahmic scripts, Balinese, Sundanese, Batak, Javanese, Lepcha, Yi, Rejang, Cham, Tai Viet, and similar scripts where long text commonly cannot rely on spaces as word boundaries.
@@ -274,7 +286,7 @@ Automatic language profiles deliberately have their own profile system and must 
 - Rate, pitch, and volume profile controls should use sliders, matching NVDA's Speech Settings interaction style. Capital pitch should use NVDA's numeric edit/spin control (`nvdaControls.SelectOnFocusSpinCtrl`) to match Speech Settings.
 - Use NVDA's own translated setting names for voice/rate/rate boost/pitch/volume labels where possible instead of inventing add-on-specific translated terms.
 - The main checkbox label should describe the broader behavior as automatic language profiles, not only switching between voices, because one enabled profile is valid and applies to every sentence.
-- When automatic language profiles are enabled, `SynthDriver.supportedSettings` should hide normal `VoiceSetting`, `VariantSetting`, `RateSetting`, `RateBoostSetting`, `PitchSetting`, and `VolumeSetting`, and instead expose a read-only notice that directs the user to the Google TTS For NVDA settings category. Refresh the settings ring after saving the automatic language profile setting.
+- When automatic language profiles are enabled, `SynthDriver.supportedSettings` should hide normal `VoiceSetting`, `VariantSetting`, `RateSetting`, `RateBoostSetting`, `PitchSetting`, and `VolumeSetting`, and expose a read-only notice that directs the user to the Google TTS For NVDA settings category. Keep global `pauseMode` visible and effective for all speech in this mode. Refresh the settings ring after saving the automatic language profile setting.
 - Vietnamese UI/docs must translate "Google TTS for NVDA" as "Google TTS Cho NVDA" when it is user-facing text.
 - Automatic language profile code map:
   - Synth-side selection lives in `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py`: `_auto_detect_profile_for_text()`, `_auto_language_profile()`, `_auto_language_profile_for_language()`, `_auto_language_candidates()`, `_auto_language_preferred()`, `_auto_language_candidate_for_language()`, `_detect_auto_language()`, `_language_token_signal()`, `_language_script_signal()`, `_voice_for_language()`, `_voice_matches_language()`, `_current_speaker_id()`, and `_speech_options()`.

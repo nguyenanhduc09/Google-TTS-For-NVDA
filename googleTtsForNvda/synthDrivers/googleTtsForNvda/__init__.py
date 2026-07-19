@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterator
 from contextlib import suppress
+from functools import lru_cache
 import os
 import json
 import re
@@ -19,6 +20,7 @@ import languageHandler
 import synthDriverHandler
 import wx
 from autoSettingsUtils.driverSetting import DriverSetting
+from autoSettingsUtils.utils import StringParameterInfo
 from logHandler import log
 from nvwave import WavePlayer
 from speech.commands import BreakCommand, IndexCommand, LangChangeCommand, PitchCommand, RateCommand, VolumeCommand
@@ -53,7 +55,15 @@ _OUTPUT_GAIN_MAKEUP = 2.0
 _PROTECTED_ENGINE_RATE = 1.0
 _MIN_ARTIFICIAL_RATE = 0.5
 _MAX_ARTIFICIAL_RATE = 2.2
-_SpeechRequest = tuple[list[Any], str, int, bool, int, int, threading.Event]
+_PAUSE_MODE_DO_NOT_SHORTEN = "0"
+_PAUSE_MODE_SHORTEN_END_ONLY = "1"
+_PAUSE_MODE_SHORTEN_ALL = "2"
+_SHORTENED_SILENCE_KEEP_MS = 35
+_SILENCE_SAMPLE_THRESHOLD = 48
+_BYTES_PER_SAMPLE = 2
+_NORMAL_SENTENCE_BREAK_MS = 95
+_SHORTENED_SENTENCE_BREAK_MS = 25
+_SpeechRequest = tuple[list[Any], str, int, bool, int, int, str, threading.Event]
 _IndexMarker = tuple[Any, int]
 _FAST_FIRST_SEGMENT_MIN_CHARS = 30
 _REGULAR_SEGMENT_MIN_CHARS = 110
@@ -117,6 +127,12 @@ _UNICODE_SENTENCE_TERMINATOR_NAME_PARTS = (
 	"END OF PARAGRAPH",
 	"END OF SECTION",
 	"END OF TEXT",
+	"PARAGRAPH SEPARATOR",
+	"PARAGRAPHOS",
+	"PARAGRAPHUS",
+	"SECTION MARK",
+	"DOUBLE SECTION MARK",
+	"SMALL SECTION",
 	"LITTLE SECTION",
 	"SIGN SECTION",
 	"PUNCTUATION MUCAAD",
@@ -215,6 +231,74 @@ class ReadOnlyTextDriverSetting(DriverSetting):
 
 	readOnlyText = True
 
+
+def _pcm_bytes_for_milliseconds(milliseconds: int) -> int:
+	frames = max(0, int(SAMPLE_RATE * milliseconds / 1000))
+	return frames * _BYTES_PER_SAMPLE
+
+
+def _align_pcm_bytes(byteCount: int) -> int:
+	return max(0, int(byteCount) - (int(byteCount) % _BYTES_PER_SAMPLE))
+
+
+class _PcmSilenceShortener:
+	def __init__(self, shortenAllPauses: bool) -> None:
+		self._shortenAllPauses = bool(shortenAllPauses)
+		self._heldSilence = bytearray()
+		self._keepSilenceBytes = _pcm_bytes_for_milliseconds(_SHORTENED_SILENCE_KEEP_MS)
+
+	def _release_held_silence(self, *, final: bool) -> bytes:
+		if not self._heldSilence:
+			return b""
+		if final or self._shortenAllPauses:
+			output = bytes(self._heldSilence[: self._keepSilenceBytes])
+		else:
+			output = bytes(self._heldSilence)
+		self._heldSilence.clear()
+		return output
+
+	def _hold_silence(self, pcm: bytes) -> None:
+		if not pcm:
+			return
+		if not self._shortenAllPauses:
+			self._heldSilence.extend(pcm)
+			return
+		bytesNeeded = self._keepSilenceBytes - len(self._heldSilence)
+		if bytesNeeded > 0:
+			self._heldSilence.extend(pcm[:bytesNeeded])
+
+	def feed(self, pcm: bytes) -> bytes:
+		pcmLength = _align_pcm_bytes(len(pcm))
+		if pcmLength <= 0:
+			return b""
+		pcm = pcm[:pcmLength]
+		samples = memoryview(pcm).cast("h")
+		output = bytearray()
+		runStart = 0
+		runIsSilence = -_SILENCE_SAMPLE_THRESHOLD <= samples[0] <= _SILENCE_SAMPLE_THRESHOLD
+		for sampleIndex in range(1, len(samples)):
+			isSilence = -_SILENCE_SAMPLE_THRESHOLD <= samples[sampleIndex] <= _SILENCE_SAMPLE_THRESHOLD
+			if isSilence == runIsSilence:
+				continue
+			run = pcm[runStart * _BYTES_PER_SAMPLE : sampleIndex * _BYTES_PER_SAMPLE]
+			if runIsSilence:
+				self._hold_silence(run)
+			else:
+				output.extend(self._release_held_silence(final=False))
+				output.extend(run)
+			runStart = sampleIndex
+			runIsSilence = isSilence
+		run = pcm[runStart * _BYTES_PER_SAMPLE : pcmLength]
+		if runIsSilence:
+			self._hold_silence(run)
+		else:
+			output.extend(self._release_held_silence(final=False))
+			output.extend(run)
+		return bytes(output)
+
+	def finish(self) -> bytes:
+		return self._release_held_silence(final=True)
+
 _COMMON_ABBREVIATIONS = {
 	# English
 	"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "rev", "gen", "col", "maj", "capt", "lt", "sgt",
@@ -235,10 +319,12 @@ _COMMON_ABBREVIATIONS = {
 }
 
 
+@lru_cache(maxsize=4096)
 def _unicode_name(character: str) -> str:
 	return unicodedata.name(character, "")
 
 
+@lru_cache(maxsize=4096)
 def _is_sentence_terminator_character(character: str) -> bool:
 	if character in _ASCII_SENTENCE_TERMINATORS or character in _EXPLICIT_SENTENCE_TERMINATORS:
 		return True
@@ -250,6 +336,7 @@ def _is_sentence_terminator_character(character: str) -> bool:
 	return any(part in name for part in _UNICODE_SENTENCE_TERMINATOR_NAME_PARTS)
 
 
+@lru_cache(maxsize=4096)
 def _is_soft_break_character(character: str) -> bool:
 	if character in _SOFT_BREAK_CHARS:
 		return True
@@ -272,8 +359,13 @@ def _is_soft_break_character(character: str) -> bool:
 	return any(part in name for part in _UNICODE_SOFT_BREAK_NAME_PARTS)
 
 
+@lru_cache(maxsize=1024)
 def _is_sentence_trailing_closer(character: str) -> bool:
-	return character in _SENTENCE_TRAILING_CLOSERS or "\u2018" <= character <= "\u201F"
+	return (
+		character in _SENTENCE_TRAILING_CLOSERS
+		or "\u2018" <= character <= "\u201F"
+		or unicodedata.category(character) in {"Pe", "Pf"}
+	)
 
 
 def _is_no_space_script_character(character: str) -> bool:
@@ -361,6 +453,11 @@ _LANGUAGE_SCRIPT_RANGES = {
 class SynthDriver(synthDriverHandler.SynthDriver):
 	name = "googleTtsForNvda"
 	description = _("Google TTS For NVDA")
+	_PAUSE_MODE_SETTING = DriverSetting(
+		"pauseMode",
+		_("&Pauses"),
+		defaultVal=_PAUSE_MODE_DO_NOT_SHORTEN,
+	)
 	_STANDARD_SUPPORTED_SETTINGS = (
 		synthDriverHandler.SynthDriver.VoiceSetting(),
 		synthDriverHandler.SynthDriver.VariantSetting(),
@@ -368,6 +465,17 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		synthDriverHandler.SynthDriver.RateBoostSetting(),
 		synthDriverHandler.SynthDriver.PitchSetting(),
 		synthDriverHandler.SynthDriver.VolumeSetting(),
+		_PAUSE_MODE_SETTING,
+	)
+	_pauseModes = OrderedDict(
+		(
+			(_PAUSE_MODE_DO_NOT_SHORTEN, StringParameterInfo(_PAUSE_MODE_DO_NOT_SHORTEN, _("Do not shorten"))),
+			(
+				_PAUSE_MODE_SHORTEN_END_ONLY,
+				StringParameterInfo(_PAUSE_MODE_SHORTEN_END_ONLY, _("Shorten at end of text only")),
+			),
+			(_PAUSE_MODE_SHORTEN_ALL, StringParameterInfo(_PAUSE_MODE_SHORTEN_ALL, _("Shorten all pauses"))),
+		)
 	)
 	_AUTO_LANGUAGE_NOTICE_SETTING = ReadOnlyTextDriverSetting(
 		_AUTO_LANGUAGE_NOTICE_ID,
@@ -390,7 +498,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 	@property
 	def supportedSettings(self) -> tuple[Any, ...]:
 		if self._auto_language_detection_enabled():
-			return (self._AUTO_LANGUAGE_NOTICE_SETTING,)
+			return (self._AUTO_LANGUAGE_NOTICE_SETTING, self._PAUSE_MODE_SETTING)
 		return self._STANDARD_SUPPORTED_SETTINGS
 
 	@classmethod
@@ -478,6 +586,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._rateBoost = False
 		self._pitch = 50
 		self._volume = 100
+		self._pauseMode = _PAUSE_MODE_DO_NOT_SHORTEN
 		self._warmupThread: threading.Thread | None = None
 		self._warmupCancelEvent = threading.Event()
 		self._warm_current_voice_async()
@@ -620,12 +729,13 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		rateBoost = self._rateBoost
 		pitch = self._pitch
 		volume = self._volume
+		pauseMode = self._pauseMode
 		with suppress(Exception):
 			self._warmupCancelEvent.set()
 		with self._speechCondition:
 			if self._shutdownEvent.is_set():
 				return
-			self._speechQueue.append((sequence, voice, rate, rateBoost, pitch, volume, cancelEvent))
+			self._speechQueue.append((sequence, voice, rate, rateBoost, pitch, volume, pauseMode, cancelEvent))
 			self._speechCondition.notify()
 
 	def cancel(self, *args: Any, **kwargs: Any) -> None:
@@ -806,6 +916,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		rateBoost: bool,
 		pitch: int,
 		volume: int,
+		pauseMode: str,
 		cancelEvent: threading.Event,
 	) -> Iterator[tuple[str, Any]]:
 		textParts: list[str] = []
@@ -840,7 +951,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			segments = list(self._iter_indexed_text_segments(text, indexes, firstTextSegment))
 			groupedSegments: list[tuple[str, list[_IndexMarker]]] = []
 
-			def flush_grouped_segments() -> Iterator[tuple[str, Any]]:
+			def flush_grouped_segments(pauseShorteningMode: str = _PAUSE_MODE_DO_NOT_SHORTEN) -> Iterator[tuple[str, Any]]:
 				nonlocal firstTextSegment
 				if not groupedSegments:
 					return
@@ -876,16 +987,23 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				)
 				groupedSegments.clear()
 				firstTextSegment = False
-				yield ("text", (textGroup, options, groupIndexes, hiddenSegments))
+				yield ("text", (textGroup, options, groupIndexes, hiddenSegments, pauseShorteningMode))
 
 			for i, (segment, segmentIndexes) in enumerate(segments):
 				if cancelEvent.is_set():
 					return
 				groupedSegments.append((segment, segmentIndexes))
 				if i < len(segments) - 1 and self._should_pause_after_segment(segment):
-					yield from flush_grouped_segments()
-					yield ("break", 95)
-			yield from flush_grouped_segments()
+					yield from flush_grouped_segments(
+						_PAUSE_MODE_SHORTEN_ALL
+						if pauseMode == _PAUSE_MODE_SHORTEN_ALL
+						else _PAUSE_MODE_DO_NOT_SHORTEN,
+					)
+					yield ("break", self._sentence_break_milliseconds(pauseMode))
+			yield from flush_grouped_segments(
+				pauseMode if pauseMode in (_PAUSE_MODE_SHORTEN_END_ONLY, _PAUSE_MODE_SHORTEN_ALL)
+				else _PAUSE_MODE_DO_NOT_SHORTEN,
+			)
 
 		for item in speechSequence:
 			if cancelEvent.is_set():
@@ -1321,6 +1439,11 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			stripped = stripped[:-1].rstrip()
 		return bool(stripped) and _is_sentence_terminator_character(stripped[-1])
 
+	def _sentence_break_milliseconds(self, pauseMode: str) -> int:
+		if pauseMode == _PAUSE_MODE_SHORTEN_ALL:
+			return _SHORTENED_SENTENCE_BREAK_MS
+		return _NORMAL_SENTENCE_BREAK_MS
+
 	def _speech_loop(self) -> None:
 		while not self._shutdownEvent.is_set():
 			with self._speechCondition:
@@ -1345,6 +1468,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		rateBoost: bool,
 		pitch: int,
 		volume: int,
+		pauseMode: str,
 		cancelEvent: threading.Event,
 	) -> None:
 		try:
@@ -1357,13 +1481,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				rateBoost,
 				pitch,
 				volume,
+				pauseMode,
 				cancelEvent,
 			):
 				if cancelEvent.is_set():
 					return
 				if kind == "text":
-					text, options, indexes, hiddenSegments = payload
-					self._speak_text(text, options, cancelEvent, indexes, hiddenSegments)
+					text, options, indexes, hiddenSegments, pauseShorteningMode = payload
+					self._speak_text(text, options, cancelEvent, indexes, hiddenSegments, pauseShorteningMode)
 				elif kind == "break":
 					self._feed_silence(payload)
 				elif kind == "index":
@@ -1388,6 +1513,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		cancelEvent: threading.Event,
 		indexes: list[_IndexMarker] | None = None,
 		hiddenSegments: list[str] | None = None,
+		pauseShorteningMode: str = _PAUSE_MODE_DO_NOT_SHORTEN,
 	) -> None:
 		indexes = indexes or []
 		leadingIndexes = [index for index, charOffset in indexes if charOffset <= 0]
@@ -1400,7 +1526,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
 		hasInternalIndexes = any(0 < charOffset < len(text) for _index, charOffset in remainingIndexes)
 
-		cacheKey = self._short_cache_key(text, options, hiddenSegments)
+		cacheKey = self._short_cache_key(text, options, hiddenSegments, pauseShorteningMode)
 		if cacheKey is not None:
 			cached = self._get_cached_audio(cacheKey)
 			if cached is not None:
@@ -1417,6 +1543,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 				return
 
 		audioParts: list[bytes] = []
+		shortenPauses = pauseShorteningMode in (_PAUSE_MODE_SHORTEN_END_ONLY, _PAUSE_MODE_SHORTEN_ALL)
+		silenceShortener = _PcmSilenceShortener(
+			shortenAllPauses=pauseShorteningMode == _PAUSE_MODE_SHORTEN_ALL,
+		) if shortenPauses else None
 		pendingIndexes = sorted(remainingIndexes, key=lambda item: item[1])
 
 		def notify_indexes_through(charOffset: int, *, sync: bool = False) -> None:
@@ -1433,11 +1563,19 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			if not cancelEvent.is_set():
 				notify_indexes_through(max(0, min(len(text), charOffset)))
 
-		def on_audio(pcm: bytes) -> None:
-			if cacheKey is not None and pcm:
+		def feed_processed_audio(pcm: bytes) -> None:
+			if not pcm:
+				return
+			if cacheKey is not None:
 				audioParts.append(pcm)
 			if not cancelEvent.is_set():
 				self._feed_audio(pcm)
+
+		def on_audio(pcm: bytes) -> None:
+			if silenceShortener is not None:
+				feed_processed_audio(silenceShortener.feed(pcm))
+			else:
+				feed_processed_audio(pcm)
 
 		speechResult = self._bridge.speak(
 			text,
@@ -1447,6 +1585,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			onMark=on_mark if hasInternalIndexes else None,
 			segments=hiddenSegments,
 		)
+		if silenceShortener is not None:
+			feed_processed_audio(silenceShortener.finish())
 
 		audio = b"".join(audioParts) if audioParts else b""
 		if pendingIndexes and not cancelEvent.is_set():
@@ -1532,6 +1672,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		text: str,
 		options: dict[str, Any],
 		hiddenSegments: list[str] | None = None,
+		pauseShorteningMode: str = _PAUSE_MODE_DO_NOT_SHORTEN,
 	) -> tuple[Any, ...] | None:
 		if len(text) > _SHORT_CACHE_MAX_CHARS:
 			return None
@@ -1545,6 +1686,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			options.get("volume"),
 			options.get("outputGain"),
 			options.get("artificialRate"),
+			pauseShorteningMode,
 		)
 
 	def _get_cached_audio(self, key: tuple[Any, ...]) -> bytes | None:
@@ -1573,6 +1715,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			):
 				_, removedAudio = self._shortAudioCache.popitem(last=False)
 				self._shortAudioCacheBytes -= len(removedAudio)
+
+	def _clear_short_audio_cache(self) -> None:
+		cacheLock = getattr(self, "_cacheLock", None)
+		if cacheLock is None:
+			return
+		with cacheLock:
+			self._shortAudioCache.clear()
+			self._shortAudioCacheBytes = 0
 
 	def _feed_silence(self, milliseconds: int) -> None:
 		if milliseconds <= 0:
@@ -2211,3 +2361,17 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		self._volume = max(0, min(100, int(value)))
 		with suppress(Exception):
 			self._player.setVolume(all=1.0)
+
+	def _get_availablePausemodes(self) -> "OrderedDict[str, StringParameterInfo]":
+		return self._pauseModes
+
+	def _get_pauseMode(self) -> str:
+		return self._pauseMode
+
+	def _set_pauseMode(self, value: str) -> None:
+		value = str(value)
+		pauseMode = value if value in self._pauseModes else _PAUSE_MODE_DO_NOT_SHORTEN
+		if pauseMode == self._pauseMode:
+			return
+		self._pauseMode = pauseMode
+		self._clear_short_audio_cache()

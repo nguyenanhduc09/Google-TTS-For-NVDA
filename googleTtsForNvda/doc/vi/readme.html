@@ -57,7 +57,7 @@
 
 	<h2>Cấu Hình</h2>
 	<h3>Cấu Hình Giọng Đọc</h3>
-	<p>Khi hồ sơ ngôn ngữ tự động đang tắt, hộp thoại cấu hình giọng đọc của NVDA (<kbd>NVDA+Ctrl+V</kbd>) cung cấp:</p>
+	<p>Hộp thoại cấu hình giọng đọc của NVDA (<kbd>NVDA+Ctrl+V</kbd>) có mục <strong>Khoảng lặng</strong> cho Google TTS Cho NVDA dù hồ sơ ngôn ngữ tự động đang bật hay tắt. Khi hồ sơ ngôn ngữ tự động đang tắt, hộp thoại cũng cung cấp:</p>
 	<ul>
 		<li><strong>Giọng:</strong> Chọn ngôn ngữ Google TTS đã cài đặt.</li>
 		<li><strong>Tên giọng:</strong> Chọn tên giọng trong ngôn ngữ đó, bao gồm giọng Chrome OS và Google Natural khi đã cài đặt.</li>
@@ -66,6 +66,7 @@
 		<li><strong>Cao độ:</strong> Điều chỉnh cao độ của giọng.</li>
 		<li><strong>Âm lượng:</strong> Điều chỉnh âm lượng của giọng.</li>
 	</ul>
+	<p><strong>Khoảng lặng:</strong> Chọn giữ nguyên khoảng lặng, chỉ rút ngắn ở cuối văn bản hoặc rút ngắn trong toàn bộ phần đọc để đọc nhanh hơn. Tùy chọn này áp dụng cho toàn bộ phần đọc bằng Google TTS.</p>
 
 	<h3>Cấu Hình Add-on</h3>
 	<p>Trong <strong>Trình đơn NVDA &rarr; Tùy chọn &rarr; Cấu hình &rarr; Google TTS Cho NVDA</strong>, bạn có thể thiết lập:</p>
@@ -106,7 +107,7 @@
 	<p>Các thiết lập chung của NVDA như mức độ dấu câu/ký hiệu, tự động chuyển vùng, đọc ngôn ngữ khi thay đổi, chuẩn hóa Unicode, dữ liệu Unicode Consortium bao gồm biểu tượng cảm xúc, từ điển ký hiệu bổ sung, mô tả ký tự bị trì hoãn và các chế độ trong lệnh chuyển chế độ đọc vẫn nằm trong cấu hình giọng đọc của NVDA.</p>
 	<p>Hồ sơ ngôn ngữ tự động đặt ngữ cảnh ngôn ngữ trước khi NVDA xử lý văn bản, vì vậy phát âm ký hiệu và xử lý từ điển phát âm của NVDA vẫn đi theo luồng đọc bình thường cho ngữ cảnh ngôn ngữ đã chọn.</p>
 	<p>Khi tắt hồ sơ ngôn ngữ tự động, từ điển giọng đọc của NVDA hoạt động bình thường cho tên giọng Google TTS đang được chọn. Khi bật hồ sơ ngôn ngữ tự động, add-on tạm thời dùng từ điển giọng đọc của tên giọng đã chọn trong từng hồ sơ ngôn ngữ đang bật trong lúc NVDA xử lý đoạn đó. Từ điển phát âm mặc định và từ điển phát âm tạm thời của NVDA vẫn theo hành vi bình thường của NVDA.</p>
-	<p>Khi hồ sơ ngôn ngữ tự động đang bật, hộp thoại cấu hình giọng đọc của NVDA sẽ không hiển thị các điều khiển giọng, tên giọng, tốc độ, tăng tốc độ, cao độ và âm lượng thông thường cho bộ đọc này. Thay vào đó, nó hiển thị thông báo có thể nhận tiêu điểm bằng phím Tab, hướng dẫn bạn chuyển sang danh mục Google TTS Cho NVDA để thiết lập. Các lệnh trong vòng thiết lập tham số cho giọng đọc, chẳng hạn <kbd>NVDA+control+các phím mũi tên</kbd> trên bàn phím Desktop hoặc <kbd>NVDA+shift+control+các phím mũi tên</kbd> trên bàn phím Laptop, sẽ đọc thông báo này thay vì đổi giọng hay giá trị đọc Google TTS trong chế độ này. Google TTS cũng dùng các tùy chọn chữ hoa và đánh vần của từng hồ sơ đã bật khi hồ sơ ngôn ngữ tự động đang bật; các giá trị cấu hình giọng đọc bình thường sẽ dùng lại khi bạn tắt hồ sơ ngôn ngữ tự động. Các dòng trạng thái trong danh mục Google TTS Cho NVDA cũng có thể Tab tới để trình đọc màn hình đọc được.</p>
+	<p>Khi hồ sơ ngôn ngữ tự động đang bật, hộp thoại cấu hình giọng đọc của NVDA sẽ không hiển thị các điều khiển giọng, tên giọng, tốc độ, tăng tốc độ, cao độ và âm lượng thông thường cho bộ đọc này. Thay vào đó, nó hiển thị thông báo có thể nhận tiêu điểm bằng phím Tab, hướng dẫn bạn chuyển sang danh mục Google TTS Cho NVDA để thiết lập. <strong>Khoảng lặng</strong> vẫn khả dụng trong cấu hình giọng đọc và áp dụng cho toàn bộ phần đọc bằng Google TTS. Các lệnh trong vòng thiết lập tham số cho giọng đọc, chẳng hạn <kbd>NVDA+control+các phím mũi tên</kbd> trên bàn phím Desktop hoặc <kbd>NVDA+shift+control+các phím mũi tên</kbd> trên bàn phím Laptop, sẽ đọc thông báo này thay vì đổi giọng hay giá trị đọc Google TTS trong chế độ này. Google TTS cũng dùng các tùy chọn chữ hoa và đánh vần của từng hồ sơ đã bật khi hồ sơ ngôn ngữ tự động đang bật; các giá trị cấu hình giọng đọc bình thường sẽ dùng lại khi bạn tắt hồ sơ ngôn ngữ tự động. Các dòng trạng thái trong danh mục Google TTS Cho NVDA cũng có thể Tab tới để trình đọc màn hình đọc được.</p>
 
 	<h2>Xử Lý Lỗi Im Lặng Với Runtime Edge</h2>
 	<p>Nếu bạn chọn <strong>Microsoft Edge</strong> làm runtime trình duyệt nhân Chromium, Google TTS Cho NVDA cũng kiểm tra Microsoft Edge WebView2 Runtime có sẵn hay chưa. Trình duyệt Edge có thể đã được cài đặt nhưng WebView2 bị thiếu hoặc hỏng và khi đó add-on không thể sử dụng Edge để đọc. Google Chrome và Brave không phụ thuộc WebView2.</p>
@@ -140,7 +141,7 @@
 		<li><strong>Dự phòng runtime trình duyệt nhân Chromium:</strong> Cải thiện dự phòng giữa Chrome, Edge và Brave để Google TTS Cho NVDA có thể thử runtime trình duyệt được hỗ trợ khác khi runtime đã chọn không khởi động được hoặc chưa sẵn sàng. Edge có thể được bỏ qua khi thiếu WebView2 và runtime được hỗ trợ khác dùng được.</li>
 		<li><strong>Tương thích NVDA:</strong> Cải thiện tương thích với các phiên bản NVDA cũ và mới trong các phần đọc, đánh vần, từ điển giọng, cấu hình, đổi bộ đọc, plugin toàn cục và trình điều khiển bộ đọc.</li>
 		<li><strong>Bản địa hóa tiếng Trung giản thể và tiếng Nga:</strong> Thêm bản dịch giao diện và tài liệu người dùng bằng tiếng Trung giản thể và tiếng Nga. Tiếng Trung giản thể cũng có siêu dữ liệu và sắp xếp ngôn ngữ đã bản địa hóa.</li>
-		<li><strong>Độ ổn định giọng đọc:</strong> Sửa lỗi hiếm khi phần đọc bị ngắt có thể được phát lại chưa hoàn chỉnh, khôi phục điều chỉnh Cao độ cho giọng SeaNet và tránh lỗi Cấu hình giọng nói hiếm gặp sau khi chuyển khỏi Google TTS.</li>
+		<li><strong>Độ ổn định giọng đọc:</strong> Sửa lỗi hiếm khi phần đọc bị ngắt có thể được phát lại chưa hoàn chỉnh, khôi phục điều chỉnh Cao độ cho giọng SeaNet và tránh lỗi Cấu hình giọng nói hiếm gặp sau khi chuyển khỏi Google TTS. Thêm mục <strong>Khoảng lặng</strong> để tùy chọn rút ngắn khoảng lặng; bật trong hộp thoại cấu hình giọng đọc của NVDA (<kbd>NVDA+Ctrl+V</kbd>), chi tiết ở phần Cấu Hình.</li>
 		<li><strong>Khả năng tiếp cận của ô trạng thái:</strong> Giúp các ô trạng thái về runtime, hồ sơ ngôn ngữ tự động, cập nhật, thông báo trong Cấu hình giọng nói và URL dự phòng thủ công dễ nhận tiêu điểm và duyệt lại hơn mà không tự đọc lặp lại sau một khoảng trễ.</li>
 	</ul>
 

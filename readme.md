@@ -76,7 +76,7 @@ Downloads and removals run in the background. Progress announcements are kept to
 
 ### Synthesizer Settings
 
-When automatic language profiles are off, the synthesizer supports the standard NVDA Speech settings ring:
+NVDA's Speech settings dialog provides **Pauses** for Google TTS For NVDA whether automatic language profiles are on or off. When automatic language profiles are off, the dialog also provides:
 
 * **Voice**: Choose the installed Google TTS language.
 * **Variant**: Choose the voice name within that language, including Chrome OS and Google Natural voices when installed.
@@ -84,6 +84,8 @@ When automatic language profiles are off, the synthesizer supports the standard 
 * **Rate Boost**: Enable to double the computed speech rate for fast reading. High-speed SeaNet speech may use more CPU because the add-on processes generated audio after synthesis.
 * **Pitch**: Speech pitch adjustment.
 * **Volume**: Speech volume (maps to the Chromium browser runtime's 0.0 - 1.0 volume range).
+
+**Pauses** lets you choose whether pauses stay unchanged, are shortened only at the end of text, or are shortened throughout speech for faster reading. It applies to all Google TTS speech.
 
 ### Google TTS For NVDA Settings
 
@@ -180,7 +182,7 @@ Automatic language profiles set the language context before NVDA processes text,
 
 When automatic language profiles are off, NVDA voice dictionaries work normally for the currently selected Google TTS variant. When automatic language profiles are on, the add-on temporarily uses the voice dictionary for each enabled language profile's selected variant while NVDA processes that segment. NVDA's default and temporary dictionaries still follow NVDA's normal behavior.
 
-While automatic language profiles are enabled, NVDA's Speech settings will not offer the normal voice, variant, rate, rate boost, pitch, and volume controls for this synthesizer. Instead, it shows a focusable notice telling you to configure these values from **NVDA Settings -> Google TTS For NVDA**. The normal synth settings ring commands, such as **NVDA+Ctrl+Arrow keys** on desktop keyboards or **NVDA+Shift+Ctrl+Arrow keys** on laptop keyboards, announce this notice instead of changing the Google TTS voice or speech values in this mode. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.
+While automatic language profiles are enabled, NVDA's Speech settings will not offer the normal voice, variant, rate, rate boost, pitch, and volume controls for this synthesizer. Instead, it shows a focusable notice telling you to configure these values from **NVDA Settings -> Google TTS For NVDA**. **Pauses** remains available in Speech settings and applies to all Google TTS speech. The normal synth settings ring commands, such as **NVDA+Ctrl+Arrow keys** on desktop keyboards or **NVDA+Shift+Ctrl+Arrow keys** on laptop keyboards, announce this notice instead of changing the Google TTS voice or speech values in this mode. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.
 
 ---
 
