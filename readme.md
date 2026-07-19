@@ -178,6 +178,8 @@ The Google TTS settings category includes a focusable status line for automatic 
 
 NVDA-wide settings such as punctuation and symbol level, automatic dialect switching, language change reporting, Unicode normalization, Unicode Consortium data including emoji, extra symbol dictionaries, delayed character descriptions, and speech mode choices remain in NVDA's Speech settings.
 
+Google TTS ignores NVDA's own automatic language and dialect switching commands for this synthesizer, so those global options do not force Google TTS to change voices. Use Google TTS automatic language profiles when you want automatic voice/profile selection in this add-on. If NVDA's "Report language changes while reading" option is enabled, reported language names follow Google TTS automatic language profile detection while profiles are on. When profiles are off, NVDA can still use app-provided language changes for language reporting and character/symbol processing, including punctuation and symbol dictionaries, but Google TTS will not change voices from those commands.
+
 Automatic language profiles set the language context before NVDA processes text, so NVDA's symbol pronunciation and speech dictionary processing stay in the normal speech flow for the selected language context.
 
 When automatic language profiles are off, NVDA voice dictionaries work normally for the currently selected Google TTS variant. When automatic language profiles are on, the add-on temporarily uses the voice dictionary for each enabled language profile's selected variant while NVDA processes that segment. NVDA's default and temporary dictionaries still follow NVDA's normal behavior.

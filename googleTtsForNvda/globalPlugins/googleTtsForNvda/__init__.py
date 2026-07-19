@@ -83,6 +83,8 @@ _patchedShortcutKeysShouldUseSpellingFunctionality: Any | None = None
 _patchedSpeechDictLoadVoiceDict: Any | None = None
 _patchedPopupSettingsDialog: Any | None = None
 _autoLanguageSpeechFilterRegistered = False
+_GOOGLE_TTS_LANG_CHANGE_ATTR = "googleTtsForNvdaLanguage"
+_MISSING_GOOGLE_TTS_LANGUAGE = object()
 _missingVoicesPromptActive = False
 _edgeWebView2PromptActive = False
 _speechConfigOverlayLock = threading.RLock()
@@ -802,10 +804,14 @@ def _same_language(left: str | None, right: str | None) -> bool:
 def _google_lang_change_command(language: str | None) -> LangChangeCommand:
 	command = LangChangeCommand(_nvda_locale_for_language(language))
 	try:
-		setattr(command, "googleTtsForNvdaLanguage", language)
+		setattr(command, _GOOGLE_TTS_LANG_CHANGE_ATTR, language)
 	except Exception:
 		log.debug("Could not preserve Google TTS language code on LangChangeCommand.", exc_info=True)
 	return command
+
+
+def _google_lang_change_language(command: LangChangeCommand) -> object:
+	return getattr(command, _GOOGLE_TTS_LANG_CHANGE_ATTR, _MISSING_GOOGLE_TTS_LANGUAGE)
 
 
 def _normalize_nvda_locale_for_language(language: str | None) -> str | None:
@@ -848,32 +854,6 @@ def _nvda_locale_for_language(language: str | None) -> str | None:
 	return "en"
 
 
-def _nvda_uses_lang_change_commands() -> bool:
-	try:
-		if bool(config.conf["speech"]["autoLanguageSwitching"]):
-			return True
-	except Exception:
-		pass
-	try:
-		return bool(config.conf["speech"]["reportLanguage"])
-	except Exception:
-		return False
-
-
-def _auto_language_candidate_for_locale(synth: Any, locale: str | None, candidates: list[str]) -> str | None:
-	if not locale or not candidates:
-		return None
-	localeKeys = _language_match_keys(locale)
-	for candidate in candidates:
-		if _language_match_keys(candidate).intersection(localeKeys):
-			return candidate
-	localeRoot = str(locale or "").replace("_", "-").split("-", 1)[0].lower()
-	for candidate in candidates:
-		if synth._language_root(candidate) == localeRoot:
-			return candidate
-	return None
-
-
 def _auto_detect_language_for_speech_filter(synth: Any, text: str) -> str | None:
 	candidates = synth._auto_language_candidates()
 	if not candidates:
@@ -886,19 +866,16 @@ def _auto_detect_language_for_speech_filter(synth: Any, text: str) -> str | None
 	return synth._auto_language_preferred(candidates, synth.voice)
 
 
-def _auto_language_for_process_text(synth: Any, locale: str, text: str) -> str | None:
+def _auto_language_for_process_text(synth: Any, _locale: str, text: str) -> str | None:
 	candidates = synth._auto_language_candidates()
 	if not candidates:
 		return None
-	candidateForLocale = _auto_language_candidate_for_locale(synth, locale, candidates)
-	if _nvda_uses_lang_change_commands() and candidateForLocale:
-		return candidateForLocale
 	if len(candidates) >= 2:
 		detected = synth._detect_auto_language(text, candidates)
 		if detected is not None:
 			return detected
 		return synth._auto_language_preferred(candidates, synth.voice)
-	return candidateForLocale or candidates[0]
+	return candidates[0]
 
 
 def _auto_profile_variant_for_language(synth: Any, language: str | None) -> str | None:
@@ -1077,24 +1054,42 @@ def _unpatch_google_tts_voice_dictionary_loading() -> None:
 def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any, **kwargs: Any) -> list[Any]:
 	try:
 		synth = synthDriverHandler.getSynth()
-		if getattr(synth, "name", "") != SYNTH_NAME or not synth._auto_language_detection_enabled():
-			return speechSequence
-		baseLanguage = synth.voice
-		if baseLanguage not in getattr(synth, "availableVoices", {}):
-			baseLanguage = synth.catalog.language_for_voice(synth.voice)
 	except Exception:
 		return speechSequence
+	if getattr(synth, "name", "") != SYNTH_NAME:
+		return speechSequence
+	try:
+		autoLanguageEnabled = bool(synth._auto_language_detection_enabled())
+	except Exception:
+		log.debug("Could not read Google TTS automatic language profile state.", exc_info=True)
+		autoLanguageEnabled = False
+	if not autoLanguageEnabled:
+		return speechSequence
+	baseLanguage = None
+	if autoLanguageEnabled:
+		try:
+			baseLanguage = synth.voice
+			if baseLanguage not in getattr(synth, "availableVoices", {}):
+				baseLanguage = synth.catalog.language_for_voice(synth.voice)
+		except Exception:
+			log.debug("Could not resolve Google TTS base language for speech filtering.", exc_info=True)
+			autoLanguageEnabled = False
 	filtered: list[Any] = []
 	currentAutoLanguage: str | None = None
-	explicitLanguageActive = False
 	for item in speechSequence:
 		if isinstance(item, LangChangeCommand):
-			currentAutoLanguage = getattr(item, "googleTtsForNvdaLanguage", None) or getattr(item, "lang", None)
-			filtered.append(_google_lang_change_command(currentAutoLanguage))
-			explicitLanguageActive = bool(currentAutoLanguage)
+			googleLanguage = _google_lang_change_language(item)
+			if googleLanguage is _MISSING_GOOGLE_TTS_LANGUAGE:
+				continue
+			currentAutoLanguage = googleLanguage if isinstance(googleLanguage, str) else None
+			filtered.append(item)
 			continue
-		if isinstance(item, str) and item and not explicitLanguageActive:
-			targetLanguage = _auto_detect_language_for_speech_filter(synth, item)
+		if autoLanguageEnabled and isinstance(item, str) and item:
+			try:
+				targetLanguage = _auto_detect_language_for_speech_filter(synth, item)
+			except Exception:
+				log.debug("Could not auto-detect Google TTS speech language.", exc_info=True)
+				targetLanguage = None
 			if targetLanguage is None and currentAutoLanguage is not None:
 				targetLanguage = baseLanguage
 			if targetLanguage is not None and not _same_language(currentAutoLanguage, targetLanguage):
@@ -1109,6 +1104,11 @@ def _register_auto_language_speech_filter() -> None:
 	if _autoLanguageSpeechFilterRegistered:
 		return
 	speech.extensions.filter_speechSequence.register(_filter_auto_language_speech_sequence)
+	try:
+		# Run before NVDA language reporting so profile-enabled names follow Google detection.
+		speech.extensions.filter_speechSequence.moveToEnd(_filter_auto_language_speech_sequence, last=False)
+	except Exception:
+		log.debug("Could not prioritize Google TTS speech sequence filter.", exc_info=True)
 	_autoLanguageSpeechFilterRegistered = True
 
 
