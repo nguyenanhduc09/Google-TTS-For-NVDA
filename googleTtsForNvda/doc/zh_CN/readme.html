@@ -19,6 +19,7 @@
 		<li><strong>Google TTS 语音管理器:</strong> 可在无障碍对话框中浏览、下载、移除并查看语音包。</li>
 		<li><strong>Chromium 浏览器运行环境选择:</strong> 可选择 Google Chrome、Microsoft Edge 或 Brave 作为受支持的后台浏览器运行环境。</li>
 		<li><strong>自动语言配置文件:</strong> 可选择按语言分别设置配置文件,让不同语言拥有各自的语音和语音参数。</li>
+		<li><strong>内置插件更新:</strong> 可在 NVDA 设置中检查插件更新,并可选择在每次启动时自动检查一次。</li>
 	</ul>
 
 	<h2>系统要求</h2>
@@ -47,6 +48,7 @@
 		<li><strong>已安装:</strong> 显示已存储在您电脑上的语音包。<strong>状态</strong>列会说明每个语音包是<strong>可用</strong>、不受内置引擎支持、缺少所需的语音包、被其他已安装语音包依赖,还是依赖于其他语音包。</li>
 		<li><strong>下载:</strong> 显示可供下载的语音包。<strong>状态</strong>列会说明该语音包是否可供下载、是否需要其他语音包、所需语音包是否已安装,或是否被其他可下载语音包依赖。</li>
 	</ul>
+	<p>每个选项卡中的控件按以下顺序排列:<strong>按语言筛选</strong>、<strong>选中全部语音包</strong>、语音包列表,然后是<strong>移除选中的语音包</strong>或<strong>下载选中的语音包</strong>(视选项卡而定)。对话框还包含一个<strong>状态</strong>行,以及<strong>刷新</strong>、<strong>打开语音包文件夹</strong>和<strong>关闭</strong>按钮。</p>
 	<p>要添加语音,请在<strong>下载</strong>选项卡中勾选所需的语音包,然后按<strong>下载选中的语音包</strong>。要移除语音,请在<strong>已安装</strong>选项卡中勾选不再需要的语音包,然后按<strong>移除选中的语音包</strong>。</p>
 	<p>部分语音包依赖于其他语音包。下载有依赖关系的语音包时,语音管理器也会一并下载所需的语音包。移除某个被其他已安装语音包依赖的语音包时,语音管理器会将这些相关联的语音包一并列出,避免留下无法使用的语音。</p>
 	<p>语音管理器可防止您误删最后一个可用的语音包。如果 Google TTS For NVDA 并非当前的语音合成器,警告对话框默认选中<strong>否</strong>。如果 Google TTS For NVDA 正是当前的语音合成器,语音管理器会要求您先切换到其他语音合成器;若不切换,则会保留最后一个可用的语音包。</p>
@@ -69,9 +71,24 @@
 	<p>在<strong>NVDA 菜单 &rarr; 首选项 &rarr; 设置 &rarr; Google TTS For NVDA</strong>中,您可以配置:</p>
 	<ul>
 		<li><strong>Chromium 浏览器运行环境:</strong> 选择 Google Chrome、Microsoft Edge 或 Brave 作为插件的后台 Chromium 浏览器运行环境。设置面板会显示各浏览器的可用状态。</li>
+		<li><strong>Chromium 浏览器运行环境状态:</strong> 查看当前选择的运行环境、各浏览器的可用情况,以及使用中的回退运行环境(如适用)。</li>
 		<li><strong>使用自动语言配置文件:</strong> 启用自动配置文件选择,并展开下文所述的配置文件控件。</li>
+		<li><strong>首选配置文件语言:</strong> 选择当句子语义不清时使用的已启用配置文件语言。在至少启用一个语言配置文件之前,此列表可能为空。</li>
+		<li><strong>自动语言配置文件:</strong> 选择要编辑的已安装语言配置文件。</li>
+		<li><strong>使用此语言配置文件:</strong> 启用选中的语言配置文件。</li>
+		<li><strong>变体、语速、加速朗读、音调、音量、大写字母音调变化百分比、大写字母提示方式、大写提示音、如支持则使用拼读功能:</strong> 为选中的已启用配置文件设置语音参数。</li>
+		<li><strong>自动语言配置文件状态:</strong> 查看配置文件当前是关闭、不可用、尚未选择配置文件,还是已启用。</li>
+		<li><strong>更新:</strong> 包含下文所述的插件更新控件。</li>
+		<li><strong>在 NVDA 启动时自动检查插件更新:</strong> 让 Google TTS For NVDA 在下一次 NVDA 启动后检查一次更新。此选项默认关闭。</li>
+		<li><strong>插件更新状态:</strong> 查看当前已安装的插件版本、自动启动检查是否开启,以及当前是否正在检查更新。</li>
+		<li><strong>检查更新...</strong>:手动检查最新的稳定版插件。</li>
 	</ul>
 	<p>Google TTS For NVDA 设置分类也可通过自定义的按键手势打开。默认未分配快捷键;可在<strong>NVDA 菜单 &rarr; 首选项 &rarr; 按键手势</strong>的 <strong>Google TTS For NVDA</strong> 分类下自行分配。</p>
+
+	<h3>插件更新</h3>
+	<p>打开<strong>NVDA 菜单 &rarr; 首选项 &rarr; 设置 &rarr; Google TTS For NVDA</strong>,然后按<strong>检查更新...</strong>以检查最新的稳定版本。手动检查时,如果插件已是最新版本、无法连接网络,或无法解析更新响应,都会显示一个"确定"对话框提示相应信息。</p>
+	<p>当有新版本可用时,Google TTS For NVDA 会显示一个<strong>更新信息</strong>对话框,列出下载大小、所需的最低 NVDA 版本、最后测试通过的 NVDA 版本以及更新日志。选择<strong>是</strong>即可在 NVDA 内下载 <code>.nvda-addon</code> 安装包。下载过程中,<strong>正在下载 Google TTS For NVDA 更新</strong>对话框会显示<strong>下载状态</strong>、进度条(在已知文件大小时)以及<strong>取消</strong>按钮。插件会依据更新清单中记录的文件大小和 SHA256 校验值验证下载的文件,然后打开 NVDA 常规的插件安装程序。</p>
+	<p>自动启动检查默认处于关闭状态。如果启用该选项,Google TTS For NVDA 会在下一次 NVDA 启动后检查一次更新,若没有新版本则不会有任何提示。无论自动检查是否启用,手动检查功能始终可用。如果在打开设置分类时后台启动检查仍在进行,"检查更新"按钮会保持禁用状态,直到该次检查完成为止。更改<strong>在 NVDA 启动时自动检查插件更新</strong>复选框只会影响之后的 NVDA 启动,不会中断正在进行的检查。</p>
 
 	<h3>自动语言配置文件</h3>
 	<p>启用<strong>使用自动语言配置文件</strong>后,检测到的句子将使用插件按语言划分的配置文件,而不是 NVDA 常规的语音设置。如果只启用了一种语言配置文件,则该配置文件会用于每一个句子。关闭自动语言配置文件后,您常规的 Google TTS 语言和变体设置会重新生效。</p>
@@ -79,14 +96,15 @@
 	<ol>
 		<li>打开<strong>NVDA 菜单 &rarr; 首选项 &rarr; 设置 &rarr; Google TTS For NVDA</strong>。</li>
 		<li>启用<strong>使用自动语言配置文件</strong>。</li>
+		<li>移至<strong>首选配置文件语言</strong>。该列表中只会显示已启用的语言,因此在您启用配置文件之前该列表可能为空。</li>
 		<li>选择一个<strong>自动语言配置文件</strong>。</li>
-		<li>为每种您希望自动语言配置文件使用的语言勾选<strong>使用此语言配置文件</strong>。语言配置文件在勾选之前处于关闭状态。</li>
-		<li>为每种已启用的语言分别选择其变体,并设置语速、加速朗读、音调、音量、大写字母音调、大写提示方式、大写提示音以及拼读方式。</li>
-		<li>选择<strong>首选配置文件语言</strong>。该列表中只会显示已启用的语言,当某个句子语义不清时,将使用该首选语言。</li>
+		<li>为每种您希望自动语言配置文件使用的语言选中<strong>使用此语言配置文件</strong>复选框。语言配置文件在勾选之前处于关闭状态。</li>
+		<li>为每种已启用的语言设置<strong>变体</strong>、<strong>语速</strong>、<strong>加速朗读</strong>、<strong>音调</strong>、<strong>音量</strong>、<strong>大写字母音调变化百分比</strong>、<strong>大写字母提示方式</strong>、<strong>大写提示音</strong>以及<strong>如支持则使用拼读功能</strong>。</li>
+		<li>返回<strong>首选配置文件语言</strong>,选择当某个句子语义不清时使用的已启用语言。</li>
 	</ol>
 	<p>语速、音调和音量使用与 NVDA 语音设置相同的滑动条控件。大写字母音调则使用数字编辑/微调控件,便于精确调整。</p>
 	<p>诸如标点符号与特殊符号朗读级别、自动方言切换、语言切换播报、Unicode 规范化、包含表情符号在内的 Unicode 联盟数据、额外符号词典、延迟字符描述,以及语音模式选择等 NVDA 全局设置,仍保留在 NVDA 的语音设置中。</p>
-	<p>自动语言配置文件会在 NVDA 处理文本之前标记语言,因此 NVDA 的符号发音和语音词典处理仍会在所选语言语境下按常规语音流程进行。</p>
+	<p>自动语言配置文件会在 NVDA 处理文本之前设置语言语境,因此 NVDA 的符号发音和语音词典处理仍会在所选语言语境下按常规语音流程进行。</p>
 	<p>当自动语言配置文件关闭时,NVDA 语音词典会针对当前所选的 Google TTS 变体正常工作。当自动语言配置文件启用时,插件会在处理相应文本段落期间,临时使用该语言配置文件所选变体对应的语音词典。NVDA 的默认词典与临时词典仍会按 NVDA 的常规行为运作。</p>
 	<p>启用自动语言配置文件期间,NVDA 的语音设置对话框将不再为本合成器提供常规的语音、变体、语速、加速朗读、音调和音量控件,而是显示一条可聚焦的提示,引导您前往 Google TTS For NVDA 设置分类进行配置。此模式下,常规的语音设置环命令(桌面键盘为 <kbd>NVDA+Ctrl+方向键</kbd>,笔记本键盘为 <kbd>NVDA+Shift+Ctrl+方向键</kbd>)只会播报该提示,而不会更改 Google TTS 的语音或语音参数。启用自动语言配置文件期间,Google TTS 同样会使用各已启用配置文件中的大写字母及拼读选项;关闭自动语言配置文件后,常规语音设置中的数值将重新生效。Google TTS For NVDA 设置分类中的状态信息同样可通过 Tab 键访问,便于读屏软件播报。</p>
 
@@ -116,6 +134,16 @@
 	</ul>
 
 	<h2>更新日志</h2>
+	<h3>版本 0.5(2026-07-19)</h3>
+	<ul>
+		<li><strong>插件更新:</strong> 新增可在 Google TTS For NVDA 设置分类中进行的内置更新检查,支持可选的启动时检查、本地化的更新信息、在 NVDA 内下载安装包,并可转交给 NVDA 标准的插件安装程序处理。</li>
+		<li><strong>Chromium 运行环境回退:</strong> 改进了 Chrome、Edge 与 Brave 之间的回退逻辑,当所选运行环境无法启动或尚未就绪时,Google TTS For NVDA 现在可以尝试其他受支持的浏览器运行环境。当 WebView2 缺失且有其他受支持的运行环境可用时,现在可以跳过 Edge。</li>
+		<li><strong>NVDA 兼容性:</strong> 改进了与新旧版本 NVDA 在语音、拼读、语音词典、设置、语音合成器切换、全局插件以及语音合成驱动等方面的兼容性。</li>
+		<li><strong>简体中文与俄语本地化:</strong> 新增了简体中文和俄语的界面翻译及用户文档。简体中文还包含本地化的元数据和语言排序。</li>
+		<li><strong>语音可靠性:</strong> 修复了在极少数情况下语音被中断后可能不完整重播的问题,恢复了 SeaNet 语音的音调控制功能,并避免了从 Google TTS 切换到其他语音合成器后偶发的语音设置错误。</li>
+		<li><strong>状态字段无障碍性:</strong> 改进了运行环境、自动语言配置文件、更新、语音设置提示以及手动网址回退等状态字段,使其更易于聚焦和查看,不会出现延迟的重复播报。</li>
+	</ul>
+
 	<h3>版本 0.4(2026-07-16)</h3>
 	<ul>
 		<li><strong>自动语言配置文件:</strong> 新增按语言划分的 Google TTS 配置文件,灵感来自 Android 上的 <a href="https://play.google.com/store/apps/details?id=com.vnspeak.autotts">Auto TTS</a>。可在 Google TTS For NVDA 设置分类中进行配置;每种已启用的语言均可拥有各自的变体、语速、加速朗读、音调、音量、大写字母处理方式和拼读方式,而在该功能关闭时,NVDA 常规语音设置仍可正常使用。</li>
@@ -148,6 +176,6 @@
 	<ul>
 		<li>首次发布。</li>
 	</ul>
-	<p>最后编辑于 2026-07-16</p>
+	<p>最后编辑于 2026-07-19</p>
 </body>
 </html>
