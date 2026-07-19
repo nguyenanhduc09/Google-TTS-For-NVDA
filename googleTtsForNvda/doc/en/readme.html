@@ -48,6 +48,7 @@
 		<li><strong>Installed:</strong> Shows voice packages that are already stored on your computer. The <strong>Status</strong> column tells you whether each package is <strong>Usable</strong>, not supported by the bundled engine, missing a required package, required by another installed package, or dependent on another package.</li>
 		<li><strong>Download:</strong> Shows packages that can be downloaded. The <strong>Status</strong> column explains whether a package is available to download, requires another package, already has its required package installed, or is required by other downloadable packages.</li>
 	</ul>
+	<p>On each tab, the controls appear in this order: <strong>Filter by language</strong>, <strong>Check all voice packages</strong>, the package list, then either <strong>Remove checked voice packages</strong> or <strong>Download checked voice packages</strong>. The dialog also has a <strong>Status</strong> line and the buttons <strong>Refresh</strong>, <strong>Open voice packages folder</strong>, and <strong>Close</strong>.</p>
 	<p>To add voices, use the <strong>Download</strong> tab, check the packages you want, and press <strong>Download checked voice packages</strong>. To remove voices, use the <strong>Installed</strong> tab, check the packages you no longer want, and press <strong>Remove checked voice packages</strong>.</p>
 	<p>Some voice packages depend on another package. When you download a dependent package, Voice Manager can also download the required package. When you remove a package that other installed packages depend on, Voice Manager includes those dependent packages so you do not leave unusable voices behind.</p>
 	<p>Voice Manager protects you from accidentally removing the last usable voice package. If Google TTS For NVDA is not the current synthesizer, the warning defaults to <strong>No</strong>. If Google TTS For NVDA is the current synthesizer, Voice Manager asks you to switch to another synthesizer first and keeps the last usable package installed if you do not switch away.</p>
@@ -70,7 +71,14 @@
 	<p>Under <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>, you can configure:</p>
 	<ul>
 		<li><strong>Chromium browser runtime:</strong> Choose Google Chrome, Microsoft Edge, or Brave as the background Chromium browser runtime for the add-on. The settings panel displays browser availability.</li>
+		<li><strong>Chromium browser runtime status:</strong> Review the selected runtime, browser availability, and the active fallback runtime when one is used.</li>
 		<li><strong>Use automatic language profiles:</strong> Enable automatic profile selection and open the profile controls described below.</li>
+		<li><strong>Preferred profile language:</strong> Choose the enabled profile language used when a sentence is unclear. This list can be empty until at least one language profile is enabled.</li>
+		<li><strong>Automatic language profile:</strong> Choose which installed language profile to edit.</li>
+		<li><strong>Use this language profile:</strong> Enable the selected language profile.</li>
+		<li><strong>Variant, Rate, Rate boost, Pitch, Volume, Capital pitch change percentage, Say cap before capitals, Beep for capitals, Use spelling functionality if supported:</strong> Configure speech values for the selected enabled profile.</li>
+		<li><strong>Automatic language profiles status:</strong> Review whether profiles are off, unavailable, missing a selected profile, or active.</li>
+		<li><strong>Updates:</strong> Contains the add-on update controls below.</li>
 		<li><strong>Automatically check for add-on updates when NVDA starts:</strong> Let Google TTS For NVDA check once after the next NVDA startup. This is off by default.</li>
 		<li><strong>Add-on update status:</strong> Review the installed add-on version, whether automatic startup checks are on or off, and whether a check is currently running.</li>
 		<li><strong>Check for updates...</strong>: Manually check for the latest stable add-on release.</li>
@@ -79,8 +87,8 @@
 
 	<h3>Add-on Updates</h3>
 	<p>Open <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong> and press <strong>Check for updates...</strong> to check the latest stable release. Manual checks show an OK dialog when the add-on is already up to date, when the internet connection cannot be reached, or when the update response cannot be understood.</p>
-	<p>When a newer version is available, Google TTS For NVDA shows an update information dialog with the download size, minimum NVDA version, last tested NVDA version, and the change log. Choose <strong>Yes</strong> to download the <code>.nvda-addon</code> package inside NVDA. The add-on verifies the downloaded file against the update manifest's size and SHA256 checksum, then opens NVDA's normal add-on installer.</p>
-	<p>Automatic startup checks are off by default. If you turn them on, Google TTS For NVDA checks once after the next NVDA startup and stays silent unless a newer version is available. Manual checking remains available whether automatic checks are on or off. If a background startup check is already running while the settings category is open, the manual check button is disabled until that check finishes. Changing the automatic update checkbox affects future NVDA startups and does not interrupt a check that is already running.</p>
+	<p>When a newer version is available, Google TTS For NVDA shows an <strong>Update information</strong> dialog with the download size, minimum NVDA version, last tested NVDA version, and the change log. Choose <strong>Yes</strong> to download the <code>.nvda-addon</code> package inside NVDA. While downloading, the <strong>Downloading Google TTS For NVDA update</strong> dialog shows <strong>Download status</strong>, a progress bar when the size is known, and <strong>Cancel</strong>. The add-on verifies the downloaded file against the update manifest's size and SHA256 checksum, then opens NVDA's normal add-on installer.</p>
+	<p>Automatic startup checks are off by default. If you turn them on, Google TTS For NVDA checks once after the next NVDA startup and stays silent unless a newer version is available. Manual checking remains available whether automatic checks are on or off. If a background startup check is already running while the settings category is open, the manual check button is disabled until that check finishes. Changing the <strong>Automatically check for add-on updates when NVDA starts</strong> checkbox affects future NVDA startups and does not interrupt a check that is already running.</p>
 
 	<h3>Automatic Language Profiles</h3>
 	<p>When <strong>Use automatic language profiles</strong> is enabled, detected sentences use the add-on's per-language profiles instead of the normal NVDA Speech settings. If only one language profile is enabled, that profile is used for every sentence. Your regular Google TTS language and variant settings remain available again when automatic language profiles are turned off.</p>
@@ -88,14 +96,15 @@
 	<ol>
 		<li>Open <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>.</li>
 		<li>Enable <strong>Use automatic language profiles</strong>.</li>
+		<li>Move to <strong>Preferred profile language</strong>. Only enabled languages appear in this list, so it may be empty until you enable a profile.</li>
 		<li>Select an <strong>Automatic language profile</strong>.</li>
-		<li>Check <strong>Use this language profile</strong> for each language you want automatic language profiles to use. Language profiles are off until you check them.</li>
-		<li>For each enabled language, choose its variant and set rate, rate boost, pitch, volume, capital-letter pitch, cap announcement, capital beep, and spelling behavior.</li>
-		<li>Choose the <strong>Preferred profile language</strong>. Only enabled languages appear in this list, and the preferred language is used when a sentence is unclear.</li>
+		<li>Select the <strong>Use this language profile</strong> checkbox for each language you want automatic language profiles to use. Language profiles are off until this checkbox is selected.</li>
+		<li>For each enabled language, set <strong>Variant</strong>, <strong>Rate</strong>, <strong>Rate boost</strong>, <strong>Pitch</strong>, <strong>Volume</strong>, <strong>Capital pitch change percentage</strong>, <strong>Say cap before capitals</strong>, <strong>Beep for capitals</strong>, and <strong>Use spelling functionality if supported</strong>.</li>
+		<li>Return to <strong>Preferred profile language</strong> and choose the enabled language used when a sentence is unclear.</li>
 	</ol>
 	<p>Rate, pitch, and volume use slider controls like NVDA's Speech Settings. Capital-letter pitch uses a numeric edit/spin control so you can adjust it precisely.</p>
 	<p>NVDA-wide settings such as punctuation and symbol level, automatic dialect switching, language change reporting, Unicode normalization, Unicode Consortium data including emoji, extra symbol dictionaries, delayed character descriptions, and speech mode choices remain in NVDA's Speech Settings.</p>
-	<p>Automatic language profiles mark the language before NVDA processes text, so NVDA's symbol pronunciation and speech dictionary processing stay in the normal speech flow for the selected language context.</p>
+	<p>Automatic language profiles set the language context before NVDA processes text, so NVDA's symbol pronunciation and speech dictionary processing stay in the normal speech flow for the selected language context.</p>
 	<p>When automatic language profiles are off, NVDA voice dictionaries work normally for the currently selected Google TTS variant. When automatic language profiles are on, the add-on temporarily uses the voice dictionary for each enabled language profile's selected variant while NVDA processes that segment. NVDA's default and temporary dictionaries still follow NVDA's normal behavior.</p>
 	<p>While automatic language profiles are enabled, NVDA's Speech settings dialog will not offer the normal voice, variant, rate, rate boost, pitch, and volume controls for this synthesizer. It will show a focusable notice directing you to the Google TTS For NVDA settings category instead. The normal synth settings ring commands, such as <kbd>NVDA+Ctrl+Arrow keys</kbd> on desktop keyboards or <kbd>NVDA+Shift+Ctrl+Arrow keys</kbd> on laptop keyboards, announce this notice instead of changing the Google TTS voice or speech values in this mode. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech Settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.</p>
 
@@ -125,6 +134,16 @@
 	</ul>
 
 	<h2>Change Log</h2>
+	<h3>Version 0.5 (2026-07-19)</h3>
+	<ul>
+		<li><strong>Add-on Updates:</strong> Added built-in update checking from the Google TTS For NVDA settings category, with optional startup checks, localized update information, in-NVDA package download, size and SHA-256 verification, and handoff to NVDA's standard add-on installer.</li>
+		<li><strong>Chromium Runtime Fallback:</strong> Improved Chrome, Edge, and Brave fallback so a runtime is used only after browser startup, DevTools connection, speech page WebSocket discovery, CDP setup, and browser harness readiness succeed. Edge can now be skipped when WebView2 is missing and another supported runtime is usable.</li>
+		<li><strong>NVDA Compatibility &amp; CLD2:</strong> Improved compatibility with older and newer NVDA callback signatures across speech, spelling, voice dictionary, settings, synth switching, global plugin, and synth driver hooks. Rebuilt bundled CLD2 DLLs from upstream source and documented their provenance for future maintenance and antivirus review.</li>
+		<li><strong>Simplified Chinese Localization:</strong> Added Simplified Chinese UI translation, localized metadata, language sorting, and user documentation.</li>
+		<li><strong>Speech Reliability:</strong> Fixed rare incomplete speech cache replay, restored Pitch control for SeaNet voices, and guarded against stale Voice Settings refresh errors after switching away from Google TTS.</li>
+		<li><strong>Status Field Accessibility:</strong> Improved read-only runtime, automatic language profile, update status, update information, Speech Settings notice, and manual URL fallback fields so they are focusable, labeled, reviewable, and sized to their content without delayed automatic readback.</li>
+	</ul>
+
 	<h3>Version 0.4 (2026-07-16)</h3>
 	<ul>
 		<li><strong>Automatic Language Profiles:</strong> Added per-language Google TTS profiles inspired by <a href="https://play.google.com/store/apps/details?id=com.vnspeak.autotts">Auto TTS</a> on Android. Configure them from the Google TTS For NVDA settings category; each enabled language can use its own variant, rate, rate boost, pitch, volume, capital-letter behavior, and spelling behavior while normal NVDA Speech Settings remain available when the feature is off.</li>
@@ -157,6 +176,6 @@
 	<ul>
 		<li>Initial release.</li>
 	</ul>
-	<p>Last edited on 2026-07-18</p>
+	<p>Last edited on 2026-07-19</p>
 </body>
 </html>
