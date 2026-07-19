@@ -501,15 +501,27 @@ def browser_availability() -> dict[str, bool]:
 	return {runtime: browser_runtime_available(runtime) for runtime in BROWSER_RUNTIMES}
 
 
-def _find_browser_choice(runtime: str | None = None) -> tuple[str, str] | None:
+def _browser_choices(
+	runtime: str | None = None,
+	skipRuntimes: set[str] | None = None,
+) -> tuple[tuple[str, str], ...]:
+	skipRuntimes = skipRuntimes or set()
+	choices: list[tuple[str, str]] = []
 	for candidateRuntime in _runtime_fallback_order(runtime or configured_browser_runtime()):
+		if candidateRuntime in skipRuntimes:
+			continue
 		path = browser_path_for_runtime(candidateRuntime)
 		if not path:
 			continue
 		if candidateRuntime == BROWSER_RUNTIME_EDGE and not edge_webview2_available():
 			continue
-		return candidateRuntime, path
-	return None
+		choices.append((candidateRuntime, path))
+	return tuple(choices)
+
+
+def _find_browser_choice(runtime: str | None = None) -> tuple[str, str] | None:
+	choices = _browser_choices(runtime)
+	return choices[0] if choices else None
 
 
 def browser_runtime_snapshot(runtime: str | None = None) -> dict[str, Any]:
@@ -709,6 +721,10 @@ class BrowserProcessManager:
 	def server_port(self) -> int | None:
 		return self._serverPort
 
+	@property
+	def profile_runtime(self) -> str | None:
+		return self._profileRuntime
+
 	def start_server(self) -> int:
 		with self._lock:
 			if self._server is not None and self._serverPort is not None:
@@ -726,73 +742,103 @@ class BrowserProcessManager:
 			self._serverThread.start()
 			return self._serverPort
 
-	def start_browser(self, cancelEvent: threading.Event | None = None) -> tuple[int, int]:
-		with self._lock:
-			self.start_server()
-			if self._chromeProcess is not None and self._chromeProcess.poll() is None:
-				if self._debugPort is not None and self._serverPort is not None:
-					return self._serverPort, self._debugPort
-				with suppress(Exception):
-					self._chromeProcess.terminate()
-					self._chromeProcess.wait(timeout=2)
-				with suppress(Exception):
-					self._chromeProcess.kill()
-				self._chromeProcess = None
-				self._debugPort = None
-				self._release_chrome_profile()
-			elif self._chromeProcess is not None:
-				self._chromeProcess = None
-				self._debugPort = None
-				self._release_chrome_profile()
-			_raise_if_cancelled(cancelEvent)
-			browserChoice = _find_browser_choice()
-			if browserChoice is None:
-				if edge_webview2_blocks_effective_runtime():
-					raise _friendly_cdp_error(
-						_(
-							"Microsoft Edge WebView2 Runtime was not found. "
-							"Install or repair Microsoft Edge WebView2 Runtime before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
-						),
-						"Microsoft Edge executable was found, but Microsoft Edge WebView2 Runtime was not found.",
-					)
-				raise _friendly_cdp_error(
-					_("No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."),
-					"No supported Chromium browser runtime executable was found.",
-				)
-			browserRuntime, browserPath = browserChoice
-			for usePersistentProfile in (True, False):
-				profileDir = self._get_browser_profile_dir(browserRuntime, usePersistentProfile)
-				devToolsFile = profileDir / "DevToolsActivePort"
-				try:
-					devToolsFile.unlink()
-				except FileNotFoundError:
-					pass
-				pageUrl = self._page_url()
-				args = [
-					browserPath,
-					"--headless=new",
-					"--remote-debugging-port=0",
-					"--remote-allow-origins=*",
-					f"--user-data-dir={profileDir}",
-					"--no-first-run",
-					"--no-default-browser-check",
-					"--disable-background-networking",
-					"--disable-breakpad",
-					"--disable-crash-reporter",
-					"--disable-gpu",
-					"--noerrdialogs",
-					"--autoplay-policy=no-user-gesture-required",
-					"--window-position=-32000,-32000",
-					"--window-size=1,1",
-					"--disable-background-timer-throttling",
-					"--disable-backgrounding-occluded-windows",
-					"--disable-renderer-backgrounding",
-					"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
-					"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
-					"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
-					"--enable-wasm-simd",
-					pageUrl,
-				]
+	def _stop_browser_process(self, *, removeProfile: bool) -> None:
+		if self._chromeProcess is not None and self._chromeProcess.poll() is None:
+			with suppress(Exception):
+				self._chromeProcess.terminate()
+				self._chromeProcess.wait(timeout=2)
+			with suppress(Exception):
+				self._chromeProcess.kill()
+		self._chromeProcess = None
+		self._debugPort = None
+		if removeProfile:
+			self._remove_chrome_profile()
+		else:
+			self._release_chrome_profile()
+
+	def _prepare_browser_start(self, cancelEvent: threading.Event | None = None) -> bool:
+		self.start_server()
+		if self._chromeProcess is not None and self._chromeProcess.poll() is None:
+			if self._debugPort is not None and self._serverPort is not None:
+				return True
+			self._stop_browser_process(removeProfile=False)
+		elif self._chromeProcess is not None:
+			self._stop_browser_process(removeProfile=False)
+		_raise_if_cancelled(cancelEvent)
+		return False
+
+	def _browser_choices_or_raise(
+		self,
+		skipRuntimes: set[str] | None = None,
+	) -> tuple[tuple[str, str], ...]:
+		choices = _browser_choices(skipRuntimes=skipRuntimes)
+		if choices:
+			return choices
+		if edge_webview2_blocks_effective_runtime():
+			raise _friendly_cdp_error(
+				_(
+					"Microsoft Edge WebView2 Runtime was not found. "
+					"Install or repair Microsoft Edge WebView2 Runtime before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
+				),
+				"Microsoft Edge executable was found, but Microsoft Edge WebView2 Runtime was not found.",
+			)
+		raise _friendly_cdp_error(
+			_("No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."),
+			"No supported Chromium browser runtime executable was found.",
+		)
+
+	def _log_browser_runtime_failure(self, runtime: str, error: Exception, willTryFallback: bool) -> None:
+		label = BROWSER_RUNTIME_LABELS.get(runtime, runtime)
+		action = "trying the next fallback runtime" if willTryFallback else "no fallback runtime remains"
+		detail = str(getattr(error, "technicalDetail", "") or error)
+		log.debug(
+			"Google TTS %s browser runtime failed; %s. %s",
+			label,
+			action,
+			detail,
+			exc_info=True,
+		)
+
+	def _start_browser_choice(
+		self,
+		browserRuntime: str,
+		browserPath: str,
+		cancelEvent: threading.Event | None = None,
+	) -> tuple[int, int]:
+		for usePersistentProfile in (True, False):
+			profileDir = self._get_browser_profile_dir(browserRuntime, usePersistentProfile)
+			devToolsFile = profileDir / "DevToolsActivePort"
+			try:
+				devToolsFile.unlink()
+			except FileNotFoundError:
+				pass
+			pageUrl = self._page_url()
+			args = [
+				browserPath,
+				"--headless=new",
+				"--remote-debugging-port=0",
+				"--remote-allow-origins=*",
+				f"--user-data-dir={profileDir}",
+				"--no-first-run",
+				"--no-default-browser-check",
+				"--disable-background-networking",
+				"--disable-breakpad",
+				"--disable-crash-reporter",
+				"--disable-gpu",
+				"--noerrdialogs",
+				"--autoplay-policy=no-user-gesture-required",
+				"--window-position=-32000,-32000",
+				"--window-size=1,1",
+				"--disable-background-timer-throttling",
+				"--disable-backgrounding-occluded-windows",
+				"--disable-renderer-backgrounding",
+				"--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
+				"--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
+				"--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
+				"--enable-wasm-simd",
+				pageUrl,
+			]
+			try:
 				self._chromeProcess = subprocess.Popen(
 					args,
 					stdout=subprocess.DEVNULL,
@@ -801,32 +847,56 @@ class BrowserProcessManager:
 				)
 				_hide_chrome_windows(self._chromeProcess.pid)
 				_elevate_chrome_priority(self._chromeProcess.pid)
-				try:
-					self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
-					_hide_chrome_windows(self._chromeProcess.pid)
-				except _BrowserProfileInUseError:
-					self._debugPort = None
-					if usePersistentProfile:
-						log.debug(
-							"Google TTS persistent browser profile is in use; retrying with a temporary profile."
-						)
-						self._release_chrome_profile()
-						continue
-					self._remove_chrome_profile()
-					raise
-				except Exception:
-					with suppress(Exception):
-						self._chromeProcess.terminate()
-						self._chromeProcess.wait(timeout=2)
-					with suppress(Exception):
-						self._chromeProcess.kill()
-					self._chromeProcess = None
-					self._debugPort = None
-					self._remove_chrome_profile()
-					raise
+				self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
+				_hide_chrome_windows(self._chromeProcess.pid)
+			except _BrowserProfileInUseError:
+				self._debugPort = None
+				if usePersistentProfile:
+					log.debug(
+						"Google TTS persistent browser profile is in use; retrying with a temporary profile."
+					)
+					self._release_chrome_profile()
+					continue
+				self._remove_chrome_profile()
+				raise
+			except Exception:
+				self._stop_browser_process(removeProfile=True)
+				raise
+			assert self._serverPort is not None and self._debugPort is not None
+			return self._serverPort, self._debugPort
+		raise _browser_profile_in_use_error()
+
+	def _start_first_available_browser(
+		self,
+		choices: tuple[tuple[str, str], ...],
+		cancelEvent: threading.Event | None = None,
+	) -> tuple[int, int]:
+		lastError: Exception | None = None
+		for index, (browserRuntime, browserPath) in enumerate(choices):
+			_raise_if_cancelled(cancelEvent)
+			try:
+				return self._start_browser_choice(browserRuntime, browserPath, cancelEvent)
+			except CdpCancelled:
+				raise
+			except Exception as exc:
+				lastError = exc
+				self._log_browser_runtime_failure(browserRuntime, exc, index < len(choices) - 1)
+		if lastError is not None:
+			raise lastError
+		raise _friendly_cdp_error(
+			_("No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."),
+			"No supported Chromium browser runtime executable was found.",
+		)
+
+	def start_browser(self, cancelEvent: threading.Event | None = None) -> tuple[int, int]:
+		with self._lock:
+			if self._prepare_browser_start(cancelEvent):
 				assert self._serverPort is not None and self._debugPort is not None
 				return self._serverPort, self._debugPort
-			raise _browser_profile_in_use_error()
+			return self._start_first_available_browser(
+				self._browser_choices_or_raise(),
+				cancelEvent,
+			)
 
 	def get_page_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
 		with self._lock:
@@ -864,9 +934,44 @@ class BrowserProcessManager:
 			"Could not find browser speech page target.",
 		)
 
-	def start_and_get_websocket_url(self, cancelEvent: threading.Event | None = None) -> str:
-		self.start_browser(cancelEvent)
-		return self.get_page_websocket_url(cancelEvent)
+	def start_and_get_websocket_url(
+		self,
+		cancelEvent: threading.Event | None = None,
+		skipRuntimes: set[str] | None = None,
+	) -> str:
+		with self._lock:
+			if self._prepare_browser_start(cancelEvent):
+				try:
+					return self.get_page_websocket_url(cancelEvent)
+				except CdpCancelled:
+					raise
+				except Exception as exc:
+					self._log_browser_runtime_failure(
+						self._profileRuntime or configured_browser_runtime(),
+						exc,
+						True,
+					)
+					self._stop_browser_process(removeProfile=True)
+
+			choices = self._browser_choices_or_raise(skipRuntimes=skipRuntimes)
+			lastError: Exception | None = None
+			for index, (browserRuntime, browserPath) in enumerate(choices):
+				_raise_if_cancelled(cancelEvent)
+				try:
+					self._start_browser_choice(browserRuntime, browserPath, cancelEvent)
+					return self.get_page_websocket_url(cancelEvent)
+				except CdpCancelled:
+					raise
+				except Exception as exc:
+					lastError = exc
+					self._stop_browser_process(removeProfile=True)
+					self._log_browser_runtime_failure(browserRuntime, exc, index < len(choices) - 1)
+			if lastError is not None:
+				raise lastError
+			raise _friendly_cdp_error(
+				_("No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."),
+				"No supported Chromium browser runtime executable was found.",
+			)
 
 	def terminate(self) -> None:
 		with self._lock:
@@ -1437,15 +1542,33 @@ class ChromeTtsBridge:
 		with self._lock:
 			if self._cdp_client.is_connected():
 				return
-			try:
-				wsUrl = self._process_manager.start_and_get_websocket_url()
-				self._cdp_client.connect(wsUrl)
-				self._engine.enable_cdp_domains()
-				self._engine.wait_until_ready()
-			except Exception:
-				self._cdp_client.close()
-				self._process_manager.terminate()
-				raise
+			skipRuntimes: set[str] = set()
+			while True:
+				runtime: str | None = None
+				try:
+					wsUrl = self._process_manager.start_and_get_websocket_url(
+						skipRuntimes=skipRuntimes,
+					)
+					runtime = self._process_manager.profile_runtime
+					self._cdp_client.connect(wsUrl)
+					self._engine.enable_cdp_domains()
+					self._engine.wait_until_ready()
+					return
+				except CdpCancelled:
+					self._cdp_client.close()
+					self._process_manager.terminate()
+					raise
+				except Exception as exc:
+					self._cdp_client.close()
+					runtime = runtime or self._process_manager.profile_runtime
+					self._process_manager.terminate()
+					if runtime:
+						runtime = _normalize_browser_runtime(runtime)
+						skipRuntimes.add(runtime)
+						if _browser_choices(skipRuntimes=skipRuntimes):
+							self._process_manager._log_browser_runtime_failure(runtime, exc, True)
+							continue
+					raise
 
 	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
 		self.ensure_connection()

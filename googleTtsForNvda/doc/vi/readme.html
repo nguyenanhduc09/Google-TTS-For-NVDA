@@ -19,6 +19,7 @@
 		<li><strong>Trình quản lý giọng Google TTS:</strong> Xem danh sách, tải xuống, xóa bỏ và kiểm tra gói giọng trong hộp thoại dễ tiếp cận.</li>
 		<li><strong>Lựa Chọn Trình Duyệt Nhân Chromium:</strong> Chọn Google Chrome, Microsoft Edge hoặc Brave làm runtime trình duyệt nền được hỗ trợ.</li>
 		<li><strong>Hồ sơ ngôn ngữ tự động:</strong> Tùy chọn dùng hồ sơ riêng cho từng ngôn ngữ để mỗi ngôn ngữ có tên giọng và giá trị đọc riêng.</li>
+		<li><strong>Cập nhật add-on tích hợp:</strong> Kiểm tra cập nhật add-on từ Cấu hình NVDA, với tùy chọn tự động kiểm tra một lần khi NVDA khởi động.</li>
 	</ul>
 
 	<h2>Yêu Cầu Hệ Thống</h2>
@@ -70,8 +71,16 @@
 	<ul>
 		<li><strong>Runtime trình duyệt nhân Chromium:</strong> Chọn Google Chrome, Microsoft Edge hoặc Brave làm runtime trình duyệt nhân Chromium chạy nền cho add-on. Bảng cấu hình hiển thị trạng thái có sẵn của các trình duyệt.</li>
 		<li><strong>Sử dụng hồ sơ ngôn ngữ tự động:</strong> Bật chọn hồ sơ tự động và mở các điều khiển hồ sơ được mô tả bên dưới.</li>
+		<li><strong>Tự động kiểm tra cập nhật add-on khi NVDA khởi động:</strong> Cho phép Google TTS Cho NVDA kiểm tra một lần sau lần khởi động NVDA tiếp theo. Tùy chọn này mặc định tắt.</li>
+		<li><strong>Trạng thái cập nhật add-on:</strong> Xem phiên bản add-on đang cài đặt, trạng thái bật/tắt của kiểm tra cập nhật tự động và liệu quá trình kiểm tra có đang chạy hay không.</li>
+		<li><strong>Kiểm tra cập nhật...</strong>: Kiểm tra thủ công bản cập nhật stable mới nhất của add-on.</li>
 	</ul>
 	<p>Danh mục cấu hình Google TTS Cho NVDA cũng có thể được mở bằng cử chỉ tùy chỉnh. Add-on không gán phím tắt mặc định cho lệnh này; bạn có thể tự gán trong <strong>Trình đơn NVDA &rarr; Tùy chọn &rarr; Quản lý thao tác</strong>, tại danh mục <strong>Google TTS Cho NVDA</strong>.</p>
+
+	<h3>Cập Nhật Add-on</h3>
+	<p>Mở <strong>Trình đơn NVDA &rarr; Tùy chọn &rarr; Cấu hình &rarr; Google TTS Cho NVDA</strong> rồi nhấn <strong>Kiểm tra cập nhật...</strong> để kiểm tra bản cập nhật stable mới nhất. Khi kiểm tra thủ công, add-on sẽ hiển thị hộp thoại có nút Đồng ý nếu add-on đã được cập nhật, nếu không thể kết nối internet hoặc nếu không hiểu được phản hồi cập nhật.</p>
+	<p>Khi có phiên bản mới hơn, Google TTS Cho NVDA hiển thị hộp thoại <strong>Thông tin cập nhật</strong> với kích thước tải xuống, phiên bản NVDA tối thiểu, phiên bản NVDA đã kiểm tra mới nhất và nhật kí thay đổi. Chọn <strong>Có</strong> để tải tệp <code>.nvda-addon</code> ngay trong NVDA. Add-on xác minh tệp đã tải bằng kích thước và SHA256 trong manifest cập nhật, rồi mở trình cài đặt add-on bình thường của NVDA.</p>
+	<p>Kiểm tra cập nhật tự động khi khởi động mặc định tắt. Nếu bật, Google TTS Cho NVDA sẽ kiểm tra một lần sau lần khởi động NVDA tiếp theo và im lặng nếu không có phiên bản mới hơn. Bạn vẫn có thể kiểm tra thủ công dù kiểm tra tự động đang bật hay tắt. Nếu một lần kiểm tra tự động đang chạy trong nền khi bạn mở danh mục cấu hình, nút kiểm tra thủ công sẽ bị vô hiệu cho đến khi quá trình đó hoàn tất. Thay đổi hộp kiểm cập nhật tự động chỉ có hiệu lực cho các lần khởi động NVDA sau và không làm gián đoạn quá trình kiểm tra đang chạy.</p>
 
 	<h3>Hồ Sơ Ngôn Ngữ Tự Động</h3>
 	<p>Khi <strong>Sử dụng hồ sơ ngôn ngữ tự động</strong> được bật, các câu được phát hiện sẽ dùng hồ sơ riêng của add-on cho từng ngôn ngữ thay vì dùng trực tiếp cấu hình giọng đọc thông thường của NVDA. Nếu chỉ bật một hồ sơ ngôn ngữ, hồ sơ đó sẽ được dùng cho mọi câu. Các giá trị ngôn ngữ Google TTS và tên giọng bình thường vẫn được giữ lại và sẽ dùng lại khi bạn tắt hồ sơ ngôn ngữ tự động.</p>
@@ -148,6 +157,6 @@
 	<ul>
 		<li>Phiên bản phát hành đầu tiên.</li>
 	</ul>
-	<p>Cập nhật lần cuối vào ngày 16/07/2026</p>
+	<p>Cập nhật lần cuối vào ngày 19/07/2026</p>
 </body>
 </html>

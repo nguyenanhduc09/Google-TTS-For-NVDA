@@ -40,6 +40,7 @@ from synthDrivers.googleTtsForNvda.bridge import (
 from synthDrivers.googleTtsForNvda.catalog import EngineLibraryError, VoiceCatalog
 from synthDrivers.googleTtsForNvda import voice_store
 
+from . import updater, updateGui
 from .settings import GoogleTtsSettingsPanel, bind_read_only_text_focus_announcement
 from .voiceManager import VoiceManagerDialog
 
@@ -51,6 +52,7 @@ config.conf.spec[CONFIG_SECTION] = {
 	CONFIG_AUTO_LANGUAGE_DETECTION: f"boolean(default={str(DEFAULT_AUTO_LANGUAGE_DETECTION).lower()})",
 	CONFIG_AUTO_LANGUAGE_PREFERRED: f"string(default={DEFAULT_AUTO_LANGUAGE_PREFERRED})",
 	CONFIG_AUTO_LANGUAGE_PROFILES: f"string(default={DEFAULT_AUTO_LANGUAGE_PROFILES})",
+	updateGui.CONFIG_AUTO_UPDATE_CHECK: f"boolean(default={str(updateGui.DEFAULT_AUTO_UPDATE_CHECK).lower()})",
 	CONFIG_BROWSER_RUNTIME: f"string(default={DEFAULT_BROWSER_RUNTIME})",
 }
 
@@ -322,7 +324,7 @@ def _show_manual_web_url_dialog(url: str) -> None:
 				style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
 			)
 			urlControl.SetName(_("Download address"))
-			bind_read_only_text_focus_announcement(urlControl)
+			bind_read_only_text_focus_announcement(urlControl, minLines=2, maxLines=5)
 			buttonSizer = wx.BoxSizer(wx.HORIZONTAL)
 			copyButton = wx.Button(dialog, label=_("&Copy link"))
 			closeButton = wx.Button(dialog, id=wx.ID_OK, label=_("&Close"))
@@ -479,7 +481,7 @@ def _make_read_only_text_setting_control(self: Any, setting: Any, settingsStorag
 	)
 	edit = labeledControl.control
 	edit.SetName(str(getattr(setting, "displayName", setting.id)))
-	bind_read_only_text_focus_announcement(edit)
+	bind_read_only_text_focus_announcement(edit, minLines=2, maxLines=5)
 	setattr(self, f"{setting.id}Edit", edit)
 	setattr(self, f"{setting.id}List", edit)
 	try:
@@ -561,17 +563,38 @@ def _patch_read_only_text_setting() -> None:
 	else:
 		originalVoiceMakeSettings = None
 
-	def _get_setting_maker(self: Any, setting: Any) -> Any:
+	def _get_setting_maker(self: Any, setting: Any, *args: Any, **kwargs: Any) -> Any:
 		if _is_google_tts_read_only_setting(setting):
-			def _make_control(setting: Any, settingsStorage: Any) -> wx.BoxSizer:
+			def _make_control(
+				setting: Any,
+				settingsStorage: Any,
+				*controlArgs: Any,
+				**controlKwargs: Any,
+			) -> wx.BoxSizer:
 				if not _is_google_tts_read_only_setting(setting, settingsStorage):
-					return originalGetSettingMaker(self, setting)(setting, settingsStorage)
+					return originalGetSettingMaker(self, setting, *args, **kwargs)(
+						setting,
+						settingsStorage,
+						*controlArgs,
+						**controlKwargs,
+					)
 				return _make_read_only_text_setting_control(self, setting, settingsStorage)
 
 			return _make_control
-		return originalGetSettingMaker(self, setting)
+		return originalGetSettingMaker(self, setting, *args, **kwargs)
 
-	def _update_value_for_control(self: Any, setting: Any, settingsStorage: Any) -> None:
+	def _update_value_for_control(
+		self: Any,
+		setting: Any,
+		settingsStorage: Any = None,
+		*args: Any,
+		**kwargs: Any,
+	) -> None:
+		originalKwargs = dict(kwargs)
+		if "settingsStorage" in originalKwargs:
+			if settingsStorage is None:
+				settingsStorage = originalKwargs["settingsStorage"]
+			del originalKwargs["settingsStorage"]
 		if _is_google_tts_read_only_setting(setting, settingsStorage):
 			try:
 				if setting.id not in getattr(self, "sizerDict", {}):
@@ -594,15 +617,15 @@ def _patch_read_only_text_setting() -> None:
 							control.Append(option.displayName)
 			except Exception:
 				log.debug("Could not refresh Google TTS variant choices.", exc_info=True)
-		return originalUpdateValueForControl(self, setting, settingsStorage)
+		return originalUpdateValueForControl(self, setting, settingsStorage, *args, **originalKwargs)
 
-	def _on_discard(self: Any) -> None:
+	def _on_discard(self: Any, *args: Any, **kwargs: Any) -> None:
 		try:
 			settingsInst = self.getSettings()
 		except Exception:
-			return originalOnDiscard(self)
+			return originalOnDiscard(self, *args, **kwargs)
 		if getattr(settingsInst, "name", "") != SYNTH_NAME:
-			return originalOnDiscard(self)
+			return originalOnDiscard(self, *args, **kwargs)
 		for setting in getattr(settingsInst, "supportedSettings", ()):
 			if isinstance(setting, (NumericDriverSetting, BooleanDriverSetting)):
 				continue
@@ -615,16 +638,16 @@ def _patch_read_only_text_setting() -> None:
 				log.debug("Could not unbind Google TTS speech setting control.", exc_info=True)
 		settingsInst.loadSettings()
 
-	def _refresh_gui(self: Any) -> None:
+	def _refresh_gui(self: Any, *args: Any, **kwargs: Any) -> None:
 		try:
-			return originalRefreshGui(self)
+			return originalRefreshGui(self, *args, **kwargs)
 		except RuntimeError as exc:
 			if "has been deleted" not in str(exc):
 				raise
 			log.debug("Ignoring refresh for destroyed NVDA auto settings panel.", exc_info=True)
 
-	def _voice_make_settings(self: Any, settingsSizer: wx.Sizer) -> None:
-		originalVoiceMakeSettings(self, settingsSizer)
+	def _voice_make_settings(self: Any, settingsSizer: wx.Sizer, *args: Any, **kwargs: Any) -> None:
+		originalVoiceMakeSettings(self, settingsSizer, *args, **kwargs)
 		_hide_google_tts_auto_profile_speech_controls(self)
 
 	_patchedAutoSettingsGetSettingMaker = _get_setting_maker
@@ -1004,7 +1027,9 @@ def _load_voice_dictionary_for_voice(synth: Any, voice: str) -> bool:
 	availableVoices = speakerVoiceInfos() if callable(speakerVoiceInfos) else getattr(synth, "availableVoices", {})
 	if not voice or voice not in availableVoices:
 		return False
-	loadVoiceDict = _originalSpeechDictLoadVoiceDict or speechDictHandler.loadVoiceDict
+	loadVoiceDict = _originalSpeechDictLoadVoiceDict or getattr(speechDictHandler, "loadVoiceDict", None)
+	if not callable(loadVoiceDict):
+		return False
 	loadVoiceDict(_VoiceDictionarySynthProxy(synth, voice))
 	return True
 
@@ -1017,10 +1042,14 @@ def _patch_google_tts_voice_dictionary_loading() -> None:
 	global _originalSpeechDictLoadVoiceDict, _patchedSpeechDictLoadVoiceDict
 	if _originalSpeechDictLoadVoiceDict is not None:
 		return
-	_originalSpeechDictLoadVoiceDict = speechDictHandler.loadVoiceDict
+	loadVoiceDict = getattr(speechDictHandler, "loadVoiceDict", None)
+	if loadVoiceDict is None:
+		log.debugWarning("NVDA speechDictHandler.loadVoiceDict is unavailable; Google TTS voice dictionary patch disabled.")
+		return
+	_originalSpeechDictLoadVoiceDict = loadVoiceDict
 	originalLoadVoiceDict = _originalSpeechDictLoadVoiceDict
 
-	def load_voice_dictionary_for_google_tts_variant(synth: Any) -> None:
+	def load_voice_dictionary_for_google_tts_variant(synth: Any, *args: Any, **kwargs: Any) -> None:
 		try:
 			if getattr(synth, "name", "") == SYNTH_NAME:
 				voice = _current_google_tts_speaker_id(synth)
@@ -1028,7 +1057,7 @@ def _patch_google_tts_voice_dictionary_loading() -> None:
 					return
 		except Exception:
 			log.debug("Could not load Google TTS voice dictionary for the selected variant.", exc_info=True)
-		originalLoadVoiceDict(synth)
+		originalLoadVoiceDict(synth, *args, **kwargs)
 
 	_patchedSpeechDictLoadVoiceDict = load_voice_dictionary_for_google_tts_variant
 	speechDictHandler.loadVoiceDict = load_voice_dictionary_for_google_tts_variant
@@ -1044,7 +1073,7 @@ def _unpatch_google_tts_voice_dictionary_loading() -> None:
 	_patchedSpeechDictLoadVoiceDict = None
 
 
-def _filter_auto_language_speech_sequence(speechSequence: list[Any]) -> list[Any]:
+def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any, **kwargs: Any) -> list[Any]:
 	try:
 		synth = synthDriverHandler.getSynth()
 		if getattr(synth, "name", "") != SYNTH_NAME or not synth._auto_language_detection_enabled():
@@ -1157,10 +1186,12 @@ def _patch_auto_language_voice_dictionary() -> None:
 		text: str,
 		locale: str | None = None,
 		useCharacterDescriptions: bool = False,
+		*args: Any,
+		**kwargs: Any,
 	) -> Any:
 		context = _auto_profile_character_context_for_text(locale, text)
 		if not context:
-			yield from originalGetSpellingSpeech(text, locale=locale, useCharacterDescriptions=useCharacterDescriptions)
+			yield from originalGetSpellingSpeech(text, locale, useCharacterDescriptions, *args, **kwargs)
 			return
 		settings, effectiveLocale = context
 		with _speechConfigOverlayLock:
@@ -1174,26 +1205,28 @@ def _patch_auto_language_voice_dictionary() -> None:
 				}
 			except Exception:
 				log.debug("Could not apply Google TTS auto-language spelling settings.", exc_info=True)
-				yield from originalGetSpellingSpeech(text, locale=locale, useCharacterDescriptions=useCharacterDescriptions)
+				yield from originalGetSpellingSpeech(text, locale, useCharacterDescriptions, *args, **kwargs)
 				return
 			for key, value in settings.items():
 				synthConfig[key] = value
 			try:
 				yield from originalGetSpellingSpeech(
 					text,
-					locale=effectiveLocale,
-					useCharacterDescriptions=useCharacterDescriptions,
+					effectiveLocale,
+					useCharacterDescriptions,
+					*args,
+					**kwargs,
 				)
 			finally:
 				for key, value in originalSettings.items():
 					synthConfig[key] = value
 
-	def should_use_spelling_functionality_with_auto_profile() -> bool:
+	def should_use_spelling_functionality_with_auto_profile(*args: Any, **kwargs: Any) -> bool:
 		settings = _single_auto_profile_character_settings()
 		if settings is not None:
 			return bool(settings.get("useSpellingFunctionality", True))
 		if originalShouldUseSpellingFunctionality is not None:
-			return bool(originalShouldUseSpellingFunctionality())
+			return bool(originalShouldUseSpellingFunctionality(*args, **kwargs))
 		return True
 
 	_patchedSpeechProcessText = process_text_with_auto_voice_dictionary
@@ -1252,6 +1285,7 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 	def __init__(self) -> None:
 		super().__init__()
 		self.voiceManagerMenuItem: wx.MenuItem | None = None
+		self._startupUpdateCheckRegistered = False
 		if not globalVars.appArgs.secure:
 			_patch_synth_selection()
 			_patch_read_only_text_setting()
@@ -1259,6 +1293,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			_patch_google_tts_voice_dictionary_loading()
 			_patch_auto_language_voice_dictionary()
 			_register_auto_language_speech_filter()
+			try:
+				updater.cleanup_update_files()
+			except Exception:
+				log.debug("Could not clean temporary Google TTS For NVDA update files.", exc_info=True)
+			try:
+				import core
+
+				core.postNvdaStartup.register(self._on_post_nvda_startup)
+				self._startupUpdateCheckRegistered = True
+			except Exception:
+				log.debug("Could not register Google TTS For NVDA automatic update check.", exc_info=True)
 			if GoogleTtsSettingsPanel not in gui.settingsDialogs.NVDASettingsDialog.categoryClasses:
 				gui.settingsDialogs.NVDASettingsDialog.categoryClasses.append(GoogleTtsSettingsPanel)
 			self.voiceManagerMenuItem = gui.mainFrame.sysTrayIcon.toolsMenu.Append(
@@ -1268,8 +1313,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 			)
 			gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self.on_open_voice_manager, self.voiceManagerMenuItem)
 
-	def terminate(self) -> None:
+	def _on_post_nvda_startup(self, *args: Any, **kwargs: Any) -> None:
+		try:
+			updateGui.start_automatic_update_check()
+		except Exception:
+			log.debug("Could not start Google TTS For NVDA automatic update check.", exc_info=True)
+
+	def terminate(self, *args: Any, **kwargs: Any) -> None:
 		_close_voice_manager()
+		if self._startupUpdateCheckRegistered:
+			try:
+				import core
+
+				core.postNvdaStartup.unregister(self._on_post_nvda_startup)
+			except Exception:
+				log.debug("Could not unregister Google TTS For NVDA automatic update check.", exc_info=True)
+			self._startupUpdateCheckRegistered = False
 		try:
 			gui.settingsDialogs.NVDASettingsDialog.categoryClasses.remove(GoogleTtsSettingsPanel)
 		except ValueError:
@@ -1289,17 +1348,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 		_unpatch_google_tts_voice_dictionary_loading()
 		_unregister_auto_language_speech_filter()
 		_unpatch_auto_language_voice_dictionary()
-		super().terminate()
+		super().terminate(*args, **kwargs)
 
-	def on_open_voice_manager(self, evt: Any) -> None:
+	def on_open_voice_manager(self, evt: Any, *args: Any, **kwargs: Any) -> None:
 		_open_voice_manager()
 
-	def script_openVoiceManager(self, gesture: Any) -> None:
+	def script_openVoiceManager(self, gesture: Any, *args: Any, **kwargs: Any) -> None:
 		_open_voice_manager()
 
 	script_openVoiceManager.__doc__ = _("Opens the Google TTS Voice Manager.")
 
-	def script_openSettings(self, gesture: Any) -> None:
+	def script_openSettings(self, gesture: Any, *args: Any, **kwargs: Any) -> None:
 		_open_google_tts_settings()
 
 	script_openSettings.__doc__ = _("Opens the Google TTS For NVDA settings.")

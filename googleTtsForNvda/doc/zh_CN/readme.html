@@ -19,6 +19,7 @@
 		<li><strong>Google TTS 语音管理器:</strong> 可在无障碍对话框中浏览、下载、移除并查看语音包。</li>
 		<li><strong>Chromium 浏览器运行环境选择:</strong> 可选择 Google Chrome、Microsoft Edge 或 Brave 作为受支持的后台浏览器运行环境。</li>
 		<li><strong>自动语言配置文件:</strong> 可选择按语言分别设置配置文件,让不同语言拥有各自的语音和语音参数。</li>
+		<li><strong>内置插件更新:</strong> 可在 NVDA 设置中检查插件更新,并可选择在每次启动时自动检查一次。</li>
 	</ul>
 
 	<h2>系统要求</h2>
@@ -70,8 +71,16 @@
 	<ul>
 		<li><strong>Chromium 浏览器运行环境:</strong> 选择 Google Chrome、Microsoft Edge 或 Brave 作为插件的后台 Chromium 浏览器运行环境。设置面板会显示各浏览器的可用状态。</li>
 		<li><strong>使用自动语言配置文件:</strong> 启用自动配置文件选择,并展开下文所述的配置文件控件。</li>
+		<li><strong>在 NVDA 启动时自动检查插件更新:</strong> 让 Google TTS For NVDA 在下一次 NVDA 启动后检查一次更新。此选项默认关闭。</li>
+		<li><strong>插件更新状态:</strong> 查看当前已安装的插件版本、自动启动检查是否开启,以及当前是否正在检查更新。</li>
+		<li><strong>检查更新...</strong>:手动检查最新的稳定版插件。</li>
 	</ul>
 	<p>Google TTS For NVDA 设置分类也可通过自定义的按键手势打开。默认未分配快捷键;可在<strong>NVDA 菜单 &rarr; 首选项 &rarr; 按键手势</strong>的 <strong>Google TTS For NVDA</strong> 分类下自行分配。</p>
+
+	<h3>插件更新</h3>
+	<p>打开<strong>NVDA 菜单 &rarr; 首选项 &rarr; 设置 &rarr; Google TTS For NVDA</strong>,然后按<strong>检查更新...</strong>以检查最新的稳定版本。手动检查时,如果插件已是最新版本、无法连接网络,或无法解析更新响应,都会显示一个"确定"对话框提示相应信息。</p>
+	<p>当有新版本可用时,Google TTS For NVDA 会显示一个更新信息对话框,列出下载大小、所需的最低 NVDA 版本、最后测试通过的 NVDA 版本以及更新日志。选择<strong>是</strong>即可在 NVDA 内下载 <code>.nvda-addon</code> 安装包。插件会依据更新清单中记录的文件大小和 SHA256 校验值验证下载的文件,然后打开 NVDA 常规的插件安装程序。</p>
+	<p>自动启动检查默认处于关闭状态。如果启用该选项,Google TTS For NVDA 会在下一次 NVDA 启动后检查一次更新,若没有新版本则不会有任何提示。无论自动检查是否启用,手动检查功能始终可用。如果在打开设置分类时后台启动检查仍在进行,"检查更新"按钮会保持禁用状态,直到该次检查完成为止。更改自动更新复选框只会影响之后的 NVDA 启动,不会中断正在进行的检查。</p>
 
 	<h3>自动语言配置文件</h3>
 	<p>启用<strong>使用自动语言配置文件</strong>后,检测到的句子将使用插件按语言划分的配置文件,而不是 NVDA 常规的语音设置。如果只启用了一种语言配置文件,则该配置文件会用于每一个句子。关闭自动语言配置文件后,您常规的 Google TTS 语言和变体设置会重新生效。</p>
@@ -148,6 +157,6 @@
 	<ul>
 		<li>首次发布。</li>
 	</ul>
-	<p>最后编辑于 2026-07-16</p>
+	<p>最后编辑于 2026-07-18</p>
 </body>
 </html>

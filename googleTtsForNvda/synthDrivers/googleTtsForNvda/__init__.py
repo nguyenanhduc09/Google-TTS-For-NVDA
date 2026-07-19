@@ -600,7 +600,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		except Exception:
 			log.exception("Could not show supported browser missing message.", exc_info=True)
 
-	def terminate(self) -> None:
+	def terminate(self, *args: Any, **kwargs: Any) -> None:
 		with suppress(Exception):
 			self._warmupCancelEvent.set()
 		self.cancel()
@@ -612,7 +612,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		with suppress(Exception):
 			self._player.close()
 
-	def speak(self, speechSequence: list[Any]) -> None:
+	def speak(self, speechSequence: list[Any], *args: Any, **kwargs: Any) -> None:
 		sequence = list(speechSequence)
 		cancelEvent = threading.Event()
 		voice = self._current_speaker_id()
@@ -628,7 +628,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			self._speechQueue.append((sequence, voice, rate, rateBoost, pitch, volume, cancelEvent))
 			self._speechCondition.notify()
 
-	def cancel(self) -> None:
+	def cancel(self, *args: Any, **kwargs: Any) -> None:
 		with self._speechCondition:
 			if self._activeCancelEvent is not None:
 				self._activeCancelEvent.set()
@@ -639,7 +639,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		with suppress(Exception):
 			self._player.stop()
 
-	def pause(self, switch: bool) -> None:
+	def pause(self, switch: bool, *args: Any, **kwargs: Any) -> None:
 		self._player.pause(switch)
 
 	def _current_output_device(self) -> str:
@@ -794,9 +794,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 		except Exception:
 			log.debug("Could not migrate Google TTS voice/variant settings.", exc_info=True)
 
-	def loadSettings(self, onlyChanged: bool = False) -> None:
+	def loadSettings(self, onlyChanged: bool = False, *args: Any, **kwargs: Any) -> None:
 		self._ensure_variant_config_compat()
-		super().loadSettings(onlyChanged)
+		super().loadSettings(onlyChanged, *args, **kwargs)
 
 	def _iter_speech_chunks(
 		self,

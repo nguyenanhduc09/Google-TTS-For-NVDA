@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import json
+import math
 
 import addonHandler
 import config
@@ -19,6 +20,7 @@ import wx
 from synthDrivers.googleTtsForNvda import bridge as browserBridge
 from synthDrivers.googleTtsForNvda.catalog import Speaker, VoiceCatalog
 from synthDrivers.googleTtsForNvda import voice_store
+from . import updateGui
 from .voiceManager import get_language_display_name, _visible_language_sort_key
 
 
@@ -75,22 +77,87 @@ def _nvda_label(message: str) -> str:
 	return message
 
 
-def bind_read_only_text_focus_announcement(control: wx.TextCtrl) -> None:
-	def announce_value() -> None:
+def _from_dip(window: wx.Window, value: int) -> int:
+	try:
+		return int(window.FromDIP(value))
+	except Exception:
+		return value
+
+
+def _estimate_wrapped_line_count(control: wx.TextCtrl, text: str, width: int) -> int:
+	try:
+		charWidth = max(1, int(control.GetTextExtent("M")[0]))
+	except Exception:
+		charWidth = _from_dip(control, 8)
+	availableChars = max(12, width // max(1, charWidth))
+	lines = 0
+	for line in (text or "").splitlines() or [""]:
+		lines += max(1, math.ceil(len(line) / availableChars))
+	return lines
+
+
+def _estimate_text_width(control: wx.TextCtrl, text: str) -> int:
+	widths: list[int] = []
+	for line in (text or "").splitlines() or [""]:
 		try:
-			if wx.Window.FindFocus() is not control:
-				return
-			message = control.GetValue().strip()
-			if message:
-				ui.message(message)
+			widths.append(int(control.GetTextExtent(line)[0]))
 		except Exception:
-			log.debug("Could not announce Google TTS read-only status text.", exc_info=True)
+			widths.append(len(line) * _from_dip(control, 8))
+	return max(widths or [0]) + _from_dip(control, 28)
 
-	def on_focus(evt: wx.FocusEvent) -> None:
-		evt.Skip()
-		wx.CallLater(300, announce_value)
 
-	control.Bind(wx.EVT_SET_FOCUS, on_focus)
+def _max_read_only_text_width(control: wx.TextCtrl) -> int:
+	defaultMaxWidth = _from_dip(control, 760)
+	try:
+		displayIndex = wx.Display.GetFromWindow(control)
+		if displayIndex < 0:
+			displayIndex = 0
+		displayWidth = wx.Display(displayIndex).GetClientArea().GetWidth()
+	except Exception:
+		return defaultMaxWidth
+	return min(defaultMaxWidth, max(_from_dip(control, 420), int(displayWidth * 0.75)))
+
+
+def _read_only_text_target_width(control: wx.TextCtrl, text: str, width: int | None) -> int:
+	if width is not None:
+		return _from_dip(control, width)
+	contentWidth = _estimate_text_width(control, text)
+	minWidth = _from_dip(control, 360)
+	maxWidth = _max_read_only_text_width(control)
+	targetWidth = max(contentWidth, minWidth)
+	return min(maxWidth, targetWidth)
+
+
+def resize_read_only_text_for_content(
+	control: wx.TextCtrl,
+	minLines: int = 2,
+	maxLines: int = 6,
+	width: int | None = None,
+) -> None:
+	text = control.GetValue()
+	targetWidth = _read_only_text_target_width(control, text, width)
+	lineCount = _estimate_wrapped_line_count(control, text, targetWidth)
+	lineCount = max(minLines, min(maxLines, lineCount))
+	try:
+		lineHeight = max(1, int(control.GetCharHeight()))
+	except Exception:
+		lineHeight = _from_dip(control, 16)
+	height = lineCount * lineHeight + _from_dip(control, 14)
+	control.SetMinSize((targetWidth, height))
+	try:
+		control.InvalidateBestSize()
+	except Exception:
+		pass
+
+
+def bind_read_only_text_focus_announcement(
+	control: wx.TextCtrl,
+	minLines: int = 2,
+	maxLines: int = 6,
+	width: int | None = None,
+) -> None:
+	# Kept for existing call sites; focus now uses the normal read-only edit behavior.
+	resize_read_only_text_for_content(control, minLines=minLines, maxLines=maxLines, width=width)
 
 
 def _bind_slider_page_keys(slider: wx.Slider) -> None:
@@ -197,7 +264,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._edgeWebView2Available = self._runtimeSnapshot["edgeWebView2Available"]
 		self._effectiveRuntime = self._runtimeSnapshot["effectiveRuntime"]
 
-	def makeSettings(self, settingsSizer: wx.Sizer) -> None:
+	def makeSettings(self, settingsSizer: wx.Sizer, *args: object, **kwargs: object) -> None:
 		self._settingsSizer = settingsSizer
 		self._runtimeValues = list(browserBridge.BROWSER_RUNTIMES)
 		self._refresh_runtime_snapshot()
@@ -243,7 +310,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
 		)
 		self.effectiveRuntimeText.SetName(_("Chromium browser runtime status"))
-		bind_read_only_text_focus_announcement(self.effectiveRuntimeText)
+		bind_read_only_text_focus_announcement(self.effectiveRuntimeText, minLines=2, maxLines=5)
 
 		self.autoLanguageCheck = helper.addItem(
 			wx.CheckBox(self, label=_("&Use automatic language profiles")),
@@ -357,14 +424,41 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
 		)
 		self.autoLanguageStatusText.SetName(_("Automatic language profiles status"))
-		bind_read_only_text_focus_announcement(self.autoLanguageStatusText)
+		bind_read_only_text_focus_announcement(self.autoLanguageStatusText, minLines=2, maxLines=5)
+
+		self._unregisterUpdateStatusListener = None
+		updatesSizer = wx.StaticBoxSizer(wx.VERTICAL, self, label=_("Updates"))
+		updatesHelper = guiHelper.BoxSizerHelper(self, sizer=updatesSizer)
+		self.autoUpdateCheck = updatesHelper.addItem(
+			wx.CheckBox(self, label=_("&Automatically check for add-on updates when NVDA starts")),
+		)
+		self.autoUpdateCheck.SetName(_("Automatically check for add-on updates when NVDA starts"))
+		self.autoUpdateCheck.SetValue(updateGui.automatic_update_check_enabled())
+		self.autoUpdateCheck.Bind(wx.EVT_CHECKBOX, self.on_auto_update_check_changed)
+		self.updateFeatureStatusText = updatesHelper.addLabeledControl(
+			_("Add-on update status") + ":",
+			wx.TextCtrl,
+			value=updateGui.update_status_message(self.autoUpdateCheck.GetValue()),
+			style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
+		)
+		self.updateFeatureStatusText.SetName(_("Add-on update status"))
+		bind_read_only_text_focus_announcement(self.updateFeatureStatusText, minLines=2, maxLines=5)
+		self.checkUpdatesButton = updatesHelper.addItem(
+			wx.Button(self, label=_("&Check for updates...")),
+		)
+		self.checkUpdatesButton.Bind(wx.EVT_BUTTON, self.on_check_for_updates)
+		helper.addItem(updatesHelper)
+		self._unregisterUpdateStatusListener = updateGui.register_update_status_listener(self._refresh_update_controls)
+		self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
+		self._refresh_update_controls()
+
 		self._refresh_auto_language_controls()
 		settingsSizer.Fit(self)
 
 	def postInit(self) -> None:
 		self.runtimeChoice.SetFocus()
 
-	def onSave(self) -> None:
+	def onSave(self, *args: object, **kwargs: object) -> None:
 		selection = self.runtimeChoice.GetSelection()
 		if selection < 0:
 			selectedRuntime = self._savedRuntime
@@ -372,6 +466,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			selectedRuntime = self._runtimeValues[selection]
 		self._store_selected_auto_language_profile(self._selectedAutoLanguageProfileIndex)
 		self._save_auto_language_settings()
+		updateGui.set_automatic_update_check_enabled(self.autoUpdateCheck.GetValue())
 		self._refresh_runtime_snapshot(self._savedRuntime)
 		if selectedRuntime == self._savedRuntime:
 			return
@@ -419,6 +514,33 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._savedRuntime = selectedRuntime
 		self._refresh_runtime_snapshot(self._savedRuntime)
 		self.effectiveRuntimeText.SetValue(self._effective_runtime_message())
+		resize_read_only_text_for_content(self.effectiveRuntimeText, minLines=2, maxLines=5)
+		self.Layout()
+		self._settingsSizer.Layout()
+
+	def on_check_for_updates(self, evt: wx.CommandEvent) -> None:
+		if updateGui.start_manual_update_check(self):
+			self._refresh_update_controls()
+
+	def on_auto_update_check_changed(self, evt: wx.CommandEvent) -> None:
+		self._refresh_update_controls()
+
+	def _refresh_update_controls(self) -> None:
+		try:
+			autoCheckEnabled = self.autoUpdateCheck.GetValue()
+			self.updateFeatureStatusText.SetValue(updateGui.update_status_message(autoCheckEnabled))
+			resize_read_only_text_for_content(self.updateFeatureStatusText, minLines=2, maxLines=5)
+			self.checkUpdatesButton.Enable(not updateGui.update_check_in_progress())
+			self.Layout()
+			self._settingsSizer.Layout()
+		except (AttributeError, RuntimeError):
+			return
+
+	def _on_destroy(self, evt: wx.WindowDestroyEvent) -> None:
+		if evt.GetEventObject() is self and self._unregisterUpdateStatusListener is not None:
+			self._unregisterUpdateStatusListener()
+			self._unregisterUpdateStatusListener = None
+		evt.Skip()
 
 	def _format_runtime_choice(self, runtime: str) -> str:
 		if runtime == browserBridge.BROWSER_RUNTIME_EDGE and self._browserExecutableAvailability.get(runtime, False):
@@ -779,6 +901,9 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self.autoProfileSpellingCheck.Enable(profileEnabled)
 		self._refresh_auto_language_profile_value_controls()
 		self.autoLanguageStatusText.SetValue(self._auto_language_status_message())
+		resize_read_only_text_for_content(self.autoLanguageStatusText, minLines=2, maxLines=5)
+		self.Layout()
+		self._settingsSizer.Layout()
 		if not available:
 			self.autoLanguageCheck.SetValue(False)
 

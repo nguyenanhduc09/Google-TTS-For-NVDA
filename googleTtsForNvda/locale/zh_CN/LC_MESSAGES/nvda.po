@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Google TTS Cho NVDA 0.4\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-07-10 00:00+0700\n"
-"PO-Revision-Date: 2026-07-17 00:00+0700\n"
+"PO-Revision-Date: 2026-07-19 00:22+0700\n"
 "Last-Translator: Nguyễn Anh Đức, Đào Đức Trung và Phạm Hùng Vương\n"
 "Language-Team: Chinese (Simplified)\n"
 "Language: zh_CN\n"
@@ -839,9 +839,116 @@ msgstr "{message} 同时已下载所需的语音包:{packages}"
 msgid "{message} Skipped packages not supported by this engine: {packages}"
 msgstr "{message} 已跳过此引擎不支持的语音包:{packages}"
 
-#: manifest.ini:changelog
 msgid "{language} ({count} voices)"
 msgstr "{language}({count} 个语音)"
+
+msgid "&Automatically check for add-on updates when NVDA starts"
+msgstr "在 NVDA 启动时自动检查插件更新(&A)"
+
+msgid "&Check for updates..."
+msgstr "检查更新(&C)..."
+
+msgid "Add-on update status"
+msgstr "插件更新状态"
+
+msgid "Automatically check for add-on updates when NVDA starts"
+msgstr "在 NVDA 启动时自动检查插件更新"
+
+msgid "Cancelling Google TTS For NVDA update download..."
+msgstr "正在取消 Google TTS For NVDA 更新下载..."
+
+msgid "Checking for Google TTS For NVDA updates..."
+msgstr "正在检查 Google TTS For NVDA 更新..."
+
+msgid "Could not check for Google TTS For NVDA updates. Check your internet connection and try again."
+msgstr "无法检查 Google TTS For NVDA 更新。请检查网络连接后重试。"
+
+msgid "Could not check for Google TTS For NVDA updates. The update response was not understood."
+msgstr "无法检查 Google TTS For NVDA 更新。无法解析更新响应。"
+
+msgid "Could not download the Google TTS For NVDA update. Check your internet connection and try again."
+msgstr "无法下载 Google TTS For NVDA 更新。请检查网络连接后重试。"
+
+msgid "Could not download the Google TTS For NVDA update. The download result was not understood."
+msgstr "无法下载 Google TTS For NVDA 更新。无法解析下载结果。"
+
+msgid "Current Google TTS For NVDA version: {version}. An automatic update check is running in the background. Manual checking will be available when it finishes."
+msgstr "当前 Google TTS For NVDA 版本:{version}。后台正在进行自动更新检查,完成后即可使用手动检查。"
+
+msgid "Current Google TTS For NVDA version: {version}. Automatic update checks are off. Google TTS For NVDA will not check the next time NVDA starts. You can still check manually."
+msgstr "当前 Google TTS For NVDA 版本:{version}。自动更新检查已关闭,下次 NVDA 启动时不会自动检查。您仍可手动检查。"
+
+msgid "Current Google TTS For NVDA version: {version}. Automatic update checks are on. Google TTS For NVDA will check once the next time NVDA starts. You can also check manually."
+msgstr "当前 Google TTS For NVDA 版本:{version}。自动更新检查已开启,下次 NVDA 启动时将检查一次。您也可以手动检查。"
+
+msgid "Current Google TTS For NVDA version: {version}. Checking for updates now."
+msgstr "当前 Google TTS For NVDA 版本:{version}。正在检查更新。"
+
+msgid ""
+"Download size: {size}. Minimum NVDA version: {minimumVersion}. Last tested NVDA version: {lastTestedVersion}.\n"
+"\n"
+"Changes in this version:\n"
+"{changes}"
+msgstr ""
+"下载大小:{size}。所需最低 NVDA 版本:{minimumVersion}。最后测试通过的 NVDA 版本:{lastTestedVersion}。\n"
+"\n"
+"此版本的更改内容:\n"
+"{changes}"
+
+msgid "Download status"
+msgstr "下载状态"
+
+msgid "Downloading Google TTS For NVDA update"
+msgstr "正在下载 Google TTS For NVDA 更新"
+
+msgid "Downloading Google TTS For NVDA {version}."
+msgstr "正在下载 Google TTS For NVDA {version}。"
+
+msgid "Downloading Google TTS For NVDA {version}: {percent}% ({received} of {total})."
+msgstr "正在下载 Google TTS For NVDA {version}:{percent}%({received}/{total})。"
+
+msgid "Google TTS For NVDA is already checking for updates."
+msgstr "Google TTS For NVDA 正在检查更新。"
+
+msgid "Google TTS For NVDA is up to date. Current version: {version}."
+msgstr "Google TTS For NVDA 已是最新版本。当前版本:{version}。"
+
+msgid "Google TTS For NVDA update"
+msgstr "Google TTS For NVDA 更新"
+
+msgid "Google TTS For NVDA update available"
+msgstr "有可用的 Google TTS For NVDA 更新"
+
+msgid "Google TTS For NVDA update installation was cancelled or did not complete."
+msgstr "Google TTS For NVDA 更新安装已取消或未完成。"
+
+msgid "Google TTS For NVDA updates cannot be installed in the Windows Store version of NVDA."
+msgstr "无法在 Windows 应用商店版本的 NVDA 中安装 Google TTS For NVDA 更新。"
+
+msgid ""
+"Google TTS For NVDA {version} is available. You are using {currentVersion}.\n"
+"\n"
+"Choose Yes to download and install this update."
+msgstr ""
+"已有 Google TTS For NVDA {version} 可用。您当前使用的是 {currentVersion}。\n"
+"\n"
+"选择“是”以下载并安装此更新。"
+
+msgid "No change log is available for this update."
+msgstr "此更新没有可用的更新日志。"
+
+msgid "Preparing the update download..."
+msgstr "正在准备下载更新..."
+
+msgid "The update was downloaded, but NVDA could not start the add-on installer."
+msgstr "更新已下载,但 NVDA 无法启动插件安装程序。"
+
+msgid "Update information"
+msgstr "更新信息"
+
+#: manifest.ini:changelog
+msgid "Updates"
+msgstr "更新"
 
 msgid ""
 "Version 0.4:\n"
@@ -852,6 +959,34 @@ msgid ""
 "- Clarified Edge WebView2 troubleshooting and documented custom Chrome, Edge, and Brave paths in the GitHub README.\n"
 "- Added an assignable gesture for opening Google TTS For NVDA settings and improved the synth settings ring notice while automatic language profiles are enabled; voice parameters are managed from profiles in this mode for NVDA Speech Settings compatibility.\n"
 "- Improved Voice and Variant selection, voice warm-up, Voice Manager safety, and speech cancellation."
+msgstr ""
+"版本 0.4:\n"
+"- 新增可在 Google TTS For NVDA 设置中配置的自动语言配置文件,支持按语言分别设置语音、变体、语速、音调、音量、大写字母提示及拼读方式。\n"
+"- 改进了与 NVDA 2024.1 至 2026 版本的兼容性,并使切换语音合成器更加安全。\n"
+"- 改进了多语言长文本朗读,支持更广泛的 Unicode 标点符号及无空格文字的处理。\n"
+"- 新增 Brave 作为受支持的 Chromium 浏览器运行环境,并改进了 Chrome、Edge 与 Brave 之间的回退行为。\n"
+"- 明确了 Edge WebView2 的故障排除说明,并在 GitHub README 中记录了自定义 Chrome、Edge 与 Brave 路径的方法。\n"
+"- 新增可自行指定的手势用于打开 Google TTS For NVDA 设置,并改进了启用自动语言配置文件时的语音设置环设置提示;此模式下语音参数由配置文件管理,以保持与 NVDA 语音设置的兼容性。\n"
+"- 改进了语音与变体选择、语音预热、语音管理器安全性以及语音中断处理。"
+
+#: manifest.ini:summary
+msgid "Google TTS Cho NVDA"
+msgstr "Google TTS For NVDA"
+
+#: manifest.ini:description
+msgid "Sử dụng cục bộ các giọng chuyển văn bản thành giọng nói WASM của Google thông qua runtime trình duyệt nhân Chromium được hỗ trợ như Google Chrome, Microsoft Edge hoặc Brave làm bộ đọc cho NVDA."
+msgstr "通过受支持的 Chromium 浏览器运行环境(如 Google Chrome、Microsoft Edge 或 Brave)在本地使用 Google 的 WASM 语音合成技术,作为 NVDA 的语音合成器。"
+
+#: manifest.ini:changelog
+msgid ""
+"Phiên bản 0.4:\n"
+"- Thêm hồ sơ ngôn ngữ tự động cấu hình từ Google TTS Cho NVDA, với giọng, tên giọng, tốc độ, cao độ, âm lượng, chữ hoa và đánh vần riêng cho từng ngôn ngữ.\n"
+"- Cải thiện tương thích với NVDA 2024.1 đến 2026 và đổi bộ đọc an toàn hơn.\n"
+"- Cải thiện đọc văn bản dài đa ngôn ngữ với nhiều dấu câu Unicode và hệ chữ ít dùng khoảng trắng hơn.\n"
+"- Thêm Brave làm runtime trình duyệt nhân Chromium được hỗ trợ và cải thiện dự phòng giữa Chrome, Edge và Brave.\n"
+"- Làm rõ xử lý lỗi Edge WebView2 và ghi hướng dẫn đặt đường dẫn tùy chỉnh cho Chrome, Edge và Brave trong README trên GitHub.\n"
+"- Thêm cử chỉ có thể tự gán để mở cấu hình Google TTS Cho NVDA và cải thiện thông báo trong vòng thiết lập tham số cho giọng đọc khi bật hồ sơ ngôn ngữ tự động; trong chế độ này, tham số giọng đọc được quản lý bằng hồ sơ để tương thích với cấu hình giọng đọc của NVDA.\n"
+"- Cải thiện chọn Giọng và Tên giọng, làm ấm giọng, độ an toàn của Trình quản lý giọng và ngắt đọc."
 msgstr ""
 "版本 0.4:\n"
 "- 新增可在 Google TTS For NVDA 设置中配置的自动语言配置文件,支持按语言分别设置语音、变体、语速、音调、音量、大写字母提示及拼读方式。\n"

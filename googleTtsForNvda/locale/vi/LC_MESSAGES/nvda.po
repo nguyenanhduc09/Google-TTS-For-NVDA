@@ -6,7 +6,7 @@ msgstr ""
 "Project-Id-Version: Google TTS Cho NVDA 0.4\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: 2026-07-10 00:00+0700\n"
-"PO-Revision-Date: 2026-07-15 22:27+0700\n"
+"PO-Revision-Date: 2026-07-19 00:22+0700\n"
 "Last-Translator: Nguyễn Anh Đức, Đào Đức Trung và Phạm Hùng Vương\n"
 "Language-Team: Vietnamese\n"
 "Language: vi\n"
@@ -31,7 +31,7 @@ msgid "&Remove checked voice packages"
 msgstr "Xóa &bỏ các gói giọng đã chọn"
 
 msgid "A file system error occurred while managing voice packages. Check the voice packages folder and try again."
-msgstr "Đã xảy ra lỗi hệ thống tập tin khi quản lý các gói giọng. Hãy kiểm tra thư mục các gói giọng rồi thử lại."
+msgstr "Đã xảy ra lỗi hệ thống tập tin khi quản lý các gói giọng. Hãy kiểm tra thư mục gói giọng rồi thử lại."
 
 msgid "A voice package operation is still running."
 msgstr "Một thao tác với gói giọng vẫn đang chạy."
@@ -70,7 +70,7 @@ msgid "Automatic language profiles were disabled because no languages are select
 msgstr "Hồ sơ ngôn ngữ tự động đã bị tắt vì không có ngôn ngữ nào được chọn."
 
 msgid "Automatic language profiles use the selected installed language profiles. If only one language is selected, that profile is used for every sentence."
-msgstr "Hồ sơ ngôn ngữ tự động sử dụng các hồ sơ ngôn ngữ đã cài đặt được chọn. Nếu chỉ chọn một ngôn ngữ, hồ sơ đó sẽ được dùng cho mọi câu."
+msgstr "Hồ sơ ngôn ngữ tự động sử dụng các hồ sơ ngôn ngữ đã cài đặt mà bạn đã chọn. Nếu chỉ chọn một ngôn ngữ, hồ sơ đó sẽ được dùng cho mọi câu."
 
 msgid "Available"
 msgstr "Có sẵn"
@@ -239,7 +239,7 @@ msgstr ""
 "Hãy cài đặt lại Google TTS Cho NVDA với thư viện WASM TTS Engine được hỗ trợ."
 
 msgid "Google TTS For NVDA could not find its speech page in the Chromium browser runtime."
-msgstr "Google TTS Cho NVDA không tìm thấy trang giọng nói của nó trong runtime trình duyệt nhân Chromium."
+msgstr "Google TTS Cho NVDA không tìm thấy trang giọng nói trong runtime trình duyệt nhân Chromium."
 
 msgid "Google TTS For NVDA could not finish loading the browser speech engine."
 msgstr "Google TTS Cho NVDA không thể hoàn thành việc tải công cụ giọng nói của trình duyệt."
@@ -287,7 +287,7 @@ msgid "Installed voice packages"
 msgstr "Gói giọng đã cài đặt"
 
 msgid "Install at least one language voice package to use automatic language profiles."
-msgstr "Cài đặt ít nhất một gói giọng ngôn ngữ để sử dụng hồ sơ ngôn ngữ tự động."
+msgstr "Cài đặt ít nhất một gói giọng cho một ngôn ngữ để sử dụng hồ sơ ngôn ngữ tự động."
 
 msgid "Installed {package}."
 msgstr "Đã cài đặt {package}."
@@ -401,7 +401,7 @@ msgid "Remove voice package {package}?"
 msgstr "Xóa bỏ gói giọng {package}?"
 
 msgid "Removed {count} voice packages."
-msgstr "Đã xóa bỏ {count}  gói giọng."
+msgstr "Đã xóa bỏ {count} gói giọng."
 
 msgid "Removed {package}."
 msgstr "Đã xóa bỏ {package}."
@@ -473,7 +473,7 @@ msgid "Thai"
 msgstr "Tiếng Thái"
 
 msgid "The browser profile used by Google TTS For NVDA is already in use. Restart NVDA, or close any leftover supported Chromium browser helper processes."
-msgstr "Hồ sơ trình duyệt mà Google TTS Cho NVDA đang sử dụng đã được dùng. Hãy khởi động lại NVDA hoặc đóng mọi tiến trình trợ giúp của trình duyệt nhân Chromium được hỗ trợ còn sót lại."
+msgstr "Hồ sơ trình duyệt mà Google TTS Cho NVDA sử dụng đang được dùng. Hãy khởi động lại NVDA hoặc đóng mọi tiến trình trợ giúp của trình duyệt nhân Chromium được hỗ trợ còn sót lại."
 
 msgid "The Chromium browser runtime closed before Google TTS For NVDA was ready."
 msgstr "Runtime trình duyệt nhân Chromium đã đóng trước khi Google TTS Cho NVDA sẵn sàng."
@@ -564,7 +564,7 @@ msgid "Selected Chromium browser runtime: {runtime}. {browser}: {browserStatus}.
 msgstr "Runtime trình duyệt nhân Chromium đã chọn: {runtime}. {browser}: {browserStatus}."
 
 msgid "The download page could not be opened. Please visit this address manually:"
-msgstr "Không thể mở được trang tải xuống. Vui lòng truy cập địa chỉ này theo cách thủ công:"
+msgstr "Không mở được trang tải xuống. Vui lòng truy cập địa chỉ này theo cách thủ công:"
 
 msgid "The link could not be copied to the clipboard."
 msgstr "Không thể sao chép liên kết vào bộ nhớ tạm."
@@ -591,7 +591,7 @@ msgid "{selectedStatus} No supported Chromium browser runtime was found."
 msgstr "{selectedStatus} Không tìm thấy runtime trình duyệt nhân Chromium được hỗ trợ."
 
 msgid "Voice settings are managed by automatic language profiles. Open the Google TTS for NVDA category in NVDA Settings to configure them."
-msgstr "Các cấu hình giọng đọc hiện được quản lý bởi hồ sơ ngôn ngữ tự động. Hãy mở danh mục Google TTS Cho NVDA trong cấu hình NVDA để thiết lập."
+msgstr "Các cấu hình giọng đọc đang được quản lý bằng hồ sơ ngôn ngữ tự động. Hãy mở danh mục Google TTS Cho NVDA trong cấu hình NVDA để thiết lập."
 
 msgid "Voice package operation failed: {message}"
 msgstr "Thao tác với gói giọng thất bại: {message}"
@@ -713,14 +713,14 @@ msgid ""
 "\n"
 "Choose Yes to open Select Synthesizer and switch first. Choose No to keep this package installed."
 msgstr ""
-"Bạn sắp xóa bỏ gói giọng còn sử dụng được cuối cùng. Google TTS Cho NVDA hiện đang được chọn làm bộ đọc của bạn, vì vậy nó cần ít nhất một giọng để tiếp tục nói.\n"
+"Bạn sắp xóa bỏ gói giọng còn sử dụng được cuối cùng. Google TTS Cho NVDA hiện đang được chọn làm bộ đọc của bạn, vì vậy nên cần ít nhất một giọng để tiếp tục nói.\n"
 "\n"
 "Các gói cần xóa, bao gồm các gói phụ thuộc: {packages}\n"
 "\n"
 "Chọn Có để mở hộp thoại Chọn bộ đọc và chuyển trước. Chọn Không để giữ gói này được cài đặt."
 
 msgid "Downloaded {succeeded} of {total} packages. Could not download: {failList}. First error: {reason}"
-msgstr "Đã tải xuống {succeeded} trên {total} gói. Không thể tải xuống: {failList}. Lỗi đầu tiên: {reason}"
+msgstr "Đã tải xuống {succeeded}  {total} gói. Không thể tải xuống: {failList}. Lỗi đầu tiên: {reason}"
 
 msgid "Google TTS For NVDA could not speak this text."
 msgstr "Google TTS Cho NVDA không thể đọc văn bản này."
@@ -803,7 +803,7 @@ msgid "The installed Google TTS For NVDA voice packages do not include any voice
 msgstr "Các gói giọng Google TTS Cho NVDA đã cài đặt không bao gồm giọng nói nào mà công cụ này có thể sử dụng. Mở Trình quản lý giọng Google TTS để cài đặt gói giọng khác."
 
 msgid "This voice package is not installed. Open Google TTS Voice Manager to install it."
-msgstr "Gói giọng này chưa được cài đặt. Mở Trình quản lý giọng Google TTS để cài đặt nó."
+msgstr "Gói giọng này chưa được cài đặt. Mở Trình quản lý giọng Google TTS để cài đặt gói này."
 
 msgid "This voice package is not supported by the bundled Google TTS engine."
 msgstr "Gói giọng này không được công cụ Google TTS đi kèm hỗ trợ."
@@ -841,6 +841,113 @@ msgstr "{message} Đã bỏ qua các gói không được công cụ này hỗ t
 
 msgid "{language} ({count} voices)"
 msgstr "{language} ({count} giọng)"
+
+msgid "&Automatically check for add-on updates when NVDA starts"
+msgstr "Tự động &kiểm tra cập nhật add-on khi NVDA khởi động"
+
+msgid "&Check for updates..."
+msgstr "&Kiểm tra cập nhật..."
+
+msgid "Add-on update status"
+msgstr "Trạng thái cập nhật add-on"
+
+msgid "Automatically check for add-on updates when NVDA starts"
+msgstr "Tự động kiểm tra cập nhật add-on khi NVDA khởi động"
+
+msgid "Cancelling Google TTS For NVDA update download..."
+msgstr "Đang hủy tải xuống cập nhật Google TTS Cho NVDA..."
+
+msgid "Checking for Google TTS For NVDA updates..."
+msgstr "Đang kiểm tra cập nhật Google TTS Cho NVDA..."
+
+msgid "Could not check for Google TTS For NVDA updates. Check your internet connection and try again."
+msgstr "Không thể kiểm tra cập nhật Google TTS Cho NVDA. Hãy kiểm tra kết nối internet của bạn rồi thử lại."
+
+msgid "Could not check for Google TTS For NVDA updates. The update response was not understood."
+msgstr "Không thể kiểm tra cập nhật Google TTS Cho NVDA. Không hiểu được phản hồi cập nhật."
+
+msgid "Could not download the Google TTS For NVDA update. Check your internet connection and try again."
+msgstr "Không thể tải cập nhật Google TTS Cho NVDA. Hãy kiểm tra kết nối internet rồi thử lại."
+
+msgid "Could not download the Google TTS For NVDA update. The download result was not understood."
+msgstr "Không thể tải cập nhật Google TTS Cho NVDA. Không hiểu được kết quả tải xuống."
+
+msgid "Current Google TTS For NVDA version: {version}. An automatic update check is running in the background. Manual checking will be available when it finishes."
+msgstr "Phiên bản Google TTS Cho NVDA hiện tại: {version}. Một lần kiểm tra cập nhật tự động đang chạy trong nền. Kiểm tra thủ công sẽ có sẵn khi quá trình này hoàn tất."
+
+msgid "Current Google TTS For NVDA version: {version}. Automatic update checks are off. Google TTS For NVDA will not check the next time NVDA starts. You can still check manually."
+msgstr "Phiên bản Google TTS Cho NVDA hiện tại: {version}. Kiểm tra cập nhật tự động đang tắt. Google TTS Cho NVDA sẽ không kiểm tra vào lần khởi động NVDA tiếp theo. Bạn vẫn có thể kiểm tra thủ công."
+
+msgid "Current Google TTS For NVDA version: {version}. Automatic update checks are on. Google TTS For NVDA will check once the next time NVDA starts. You can also check manually."
+msgstr "Phiên bản Google TTS Cho NVDA hiện tại: {version}. Kiểm tra cập nhật tự động đang bật. Google TTS Cho NVDA sẽ kiểm tra một lần vào lần khởi động NVDA tiếp theo. Bạn cũng có thể kiểm tra thủ công."
+
+msgid "Current Google TTS For NVDA version: {version}. Checking for updates now."
+msgstr "Phiên bản Google TTS Cho NVDA hiện tại: {version}. Đang kiểm tra cập nhật ngay bây giờ."
+
+msgid ""
+"Download size: {size}. Minimum NVDA version: {minimumVersion}. Last tested NVDA version: {lastTestedVersion}.\n"
+"\n"
+"Changes in this version:\n"
+"{changes}"
+msgstr ""
+"Kích thước tải xuống: {size}. Phiên bản NVDA tối thiểu: {minimumVersion}. Phiên bản NVDA đã kiểm tra mới nhất: {lastTestedVersion}.\n"
+"\n"
+"Những thay đổi trong phiên bản này:\n"
+"{changes}"
+
+msgid "Download status"
+msgstr "Trạng thái tải xuống"
+
+msgid "Downloading Google TTS For NVDA update"
+msgstr "Đang tải xuống cập nhật Google TTS Cho NVDA"
+
+msgid "Downloading Google TTS For NVDA {version}."
+msgstr "Đang tải xuống Google TTS Cho NVDA {version}."
+
+msgid "Downloading Google TTS For NVDA {version}: {percent}% ({received} of {total})."
+msgstr "Đang tải xuống Google TTS Cho NVDA {version}: {percent}% ({received} trong tổng số {total})."
+
+msgid "Google TTS For NVDA is already checking for updates."
+msgstr "Google TTS Cho NVDA hiện đang kiểm tra cập nhật."
+
+msgid "Google TTS For NVDA is up to date. Current version: {version}."
+msgstr "Google TTS Cho NVDA đã được cập nhật. Phiên bản hiện tại: {version}."
+
+msgid "Google TTS For NVDA update"
+msgstr "Cập nhật Google TTS Cho NVDA"
+
+msgid "Google TTS For NVDA update available"
+msgstr "Đã có bản cập nhật Google TTS Cho NVDA"
+
+msgid "Google TTS For NVDA update installation was cancelled or did not complete."
+msgstr "Quá trình cài đặt cập nhật Google TTS Cho NVDA đã bị hủy hoặc chưa hoàn tất."
+
+msgid "Google TTS For NVDA updates cannot be installed in the Windows Store version of NVDA."
+msgstr "Không thể cài đặt cập nhật Google TTS Cho NVDA trong phiên bản Windows Store của NVDA."
+
+msgid ""
+"Google TTS For NVDA {version} is available. You are using {currentVersion}.\n"
+"\n"
+"Choose Yes to download and install this update."
+msgstr ""
+"Đã có sẵn Google TTS Cho NVDA {version}. Bạn đang sử dụng {currentVersion}.\n"
+"\n"
+"Chọn Có để tải xuống và cài đặt cập nhật này."
+
+msgid "No change log is available for this update."
+msgstr "Không có nhật kí thay đổi nào cho bản cập nhật này."
+
+msgid "Preparing the update download..."
+msgstr "Đang chuẩn bị tải xuống cập nhật..."
+
+msgid "The update was downloaded, but NVDA could not start the add-on installer."
+msgstr "Đã tải xuống cập nhật nhưng NVDA không thể khởi động trình cài đặt add-on."
+
+msgid "Update information"
+msgstr "Thông tin cập nhật"
+
+msgid "Updates"
+msgstr "Cập nhật"
 
 #: manifest.ini:changelog
 msgid ""

@@ -19,6 +19,7 @@
 		<li><strong>Google TTS Voice Manager:</strong> Browse, download, remove, and inspect voice packages from an accessible dialog.</li>
 		<li><strong>Chromium Browser Runtime Selection:</strong> Choose Google Chrome, Microsoft Edge, or Brave as the supported background browser runtime.</li>
 		<li><strong>Automatic language profiles:</strong> Optionally use per-language profiles so different languages can have their own voice and speech values.</li>
+		<li><strong>Built-in add-on updates:</strong> Check for add-on updates from NVDA Settings, with an optional once-per-startup automatic check.</li>
 	</ul>
 
 	<h2>System Requirements</h2>
@@ -70,8 +71,16 @@
 	<ul>
 		<li><strong>Chromium browser runtime:</strong> Choose Google Chrome, Microsoft Edge, or Brave as the background Chromium browser runtime for the add-on. The settings panel displays browser availability.</li>
 		<li><strong>Use automatic language profiles:</strong> Enable automatic profile selection and open the profile controls described below.</li>
+		<li><strong>Automatically check for add-on updates when NVDA starts:</strong> Let Google TTS For NVDA check once after the next NVDA startup. This is off by default.</li>
+		<li><strong>Add-on update status:</strong> Review the installed add-on version, whether automatic startup checks are on or off, and whether a check is currently running.</li>
+		<li><strong>Check for updates...</strong>: Manually check for the latest stable add-on release.</li>
 	</ul>
 	<p>The Google TTS For NVDA settings category can also be opened with a custom input gesture. It has no shortcut assigned by default; assign one from <strong>NVDA Menu &rarr; Preferences &rarr; Input Gestures</strong> under the <strong>Google TTS For NVDA</strong> category.</p>
+
+	<h3>Add-on Updates</h3>
+	<p>Open <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong> and press <strong>Check for updates...</strong> to check the latest stable release. Manual checks show an OK dialog when the add-on is already up to date, when the internet connection cannot be reached, or when the update response cannot be understood.</p>
+	<p>When a newer version is available, Google TTS For NVDA shows an update information dialog with the download size, minimum NVDA version, last tested NVDA version, and the change log. Choose <strong>Yes</strong> to download the <code>.nvda-addon</code> package inside NVDA. The add-on verifies the downloaded file against the update manifest's size and SHA256 checksum, then opens NVDA's normal add-on installer.</p>
+	<p>Automatic startup checks are off by default. If you turn them on, Google TTS For NVDA checks once after the next NVDA startup and stays silent unless a newer version is available. Manual checking remains available whether automatic checks are on or off. If a background startup check is already running while the settings category is open, the manual check button is disabled until that check finishes. Changing the automatic update checkbox affects future NVDA startups and does not interrupt a check that is already running.</p>
 
 	<h3>Automatic Language Profiles</h3>
 	<p>When <strong>Use automatic language profiles</strong> is enabled, detected sentences use the add-on's per-language profiles instead of the normal NVDA Speech settings. If only one language profile is enabled, that profile is used for every sentence. Your regular Google TTS language and variant settings remain available again when automatic language profiles are turned off.</p>
@@ -148,6 +157,6 @@
 	<ul>
 		<li>Initial release.</li>
 	</ul>
-	<p>Last edited on 2026-07-16</p>
+	<p>Last edited on 2026-07-18</p>
 </body>
 </html>
