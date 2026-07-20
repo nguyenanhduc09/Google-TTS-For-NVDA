@@ -8,15 +8,15 @@ This file is the operating manual for coding agents. Follow it before making or 
 
 ---
 
-## Version 0.3 Product Wording
+## Product Wording
 
-When writing documentation, release notes, commit messages, or user-facing summaries for version 0.3:
+When writing documentation, release notes, commit messages, or user-facing summaries:
 
 - Describe voice package startup work as an improvement, not as a complete fix. The add-on prepares the currently selected voice package sooner, but Chromium browser runtime and WASM startup still affect timing.
 - Describe audio balance, clipping, harshness, or distortion work as an improvement, not as a complete fix. The processing is generic across voice packages and languages; Vietnamese may be mentioned only as a testing example, not as the only affected language.
 - Describe long-text and UI-text latency/segmentation work as an improvement, not as a complete fix. Background segmentation can make speech begin sooner and sound more natural, but cache misses and engine behavior can still affect long utterances.
 - SeaNet high-rate handling can be described as successful for quality preservation, with the explicit trade-off that high-speed SeaNet speech uses more CPU because generated audio is processed after synthesis.
-- Use "voice package" when referring to startup/warm-up behavior. Do not imply that version 0.3 warms or fixes every individual speaker voice independently.
+- Use "voice package" when referring to startup/warm-up behavior. Do not imply that the add-on warms or fixes every individual speaker voice independently.
 
 ---
 
@@ -93,7 +93,7 @@ Google-TTS-For-NVDA/
 │  │  │  └─ bridgeHarness.js
 │  │  │     Shims chrome.* APIs, calls WASM engine, captures AudioWorklet PCM,
 │  │  │     sends base64 chunks through the CDP binding
-│  │  ├─ WasmTtsEngine/20260625.1/
+│  │  ├─ WasmTtsEngine/<ENGINE_VERSION>/
 │  │  │  ├─ bindings_main.js / .wasm
 │  │  │  ├─ offscreen_compiled.js
 │  │  │  ├─ voices.json
@@ -107,9 +107,9 @@ Google-TTS-For-NVDA/
 │  │  └─ voiceManager.py    wx Voice Manager dialog
 │  ├─ doc/
 │  │  ├─ en/readme.html
-│  │  └─ vi/readme.html
+│  │  └─ <locale>/readme.html
 │  └─ locale/
-│     └─ vi/
+│     └─ <locale>/
 ├─ build.bat
 ├─ build_i18n.py
 ├─ generate_voices_json.py
@@ -121,7 +121,7 @@ Google-TTS-For-NVDA/
 1. NVDA calls `SynthDriver.speak()` with a speech sequence.
 2. The driver segments text, builds options for voice/rate/pitch/volume, and queues synthesis on a background thread.
 3. `ChromeTtsBridge.speak()` verifies the required voice package is installed, ensures the Chromium browser runtime and CDP are connected, then evaluates `window.googleTtsForNvdaSpeak(...)` via `Runtime.evaluate`.
-4. `bridgeHarness.js` calls the Google WASM TTS engine through `window.Uh.onSpeak`, intercepts `AudioWorkletNode` buffers, converts float32 audio to int16 PCM, and sends base64 audio chunks through the `googleTtsForNvdaBridge` CDP binding.
+4. `bridgeHarness.js` calls the Google WASM TTS engine through the dynamically resolved engine object's `onSpeak`, intercepts `AudioWorkletNode` buffers, converts float32 audio to int16 PCM, and sends base64 audio chunks through the `googleTtsForNvdaBridge` CDP binding.
 5. Python receives `Runtime.bindingCalled`, decodes PCM, and feeds it to `nvwave.WavePlayer`.
 
 ---
@@ -293,7 +293,7 @@ Automatic language profiles deliberately have their own profile system and must 
   - Profile-aware warm-up ordering lives in the Voice preloading code map: `_warmup_voice_ids()`, `_auto_language_candidates_in_warmup_order()`, `_warmup_options_for_voice_ids()`, `_warmup_voice_ids_for_voice()`, and `_voice_id_for_package()`.
   - NVDA speech pipeline integration lives in `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_filter_auto_language_speech_sequence()`, `_register_auto_language_speech_filter()`, `_unregister_auto_language_speech_filter()`, `_google_lang_change_command()`, `_google_lang_change_language()`, `_nvda_locale_for_language()`, `_auto_language_for_process_text()`, `_patch_auto_language_voice_dictionary()`, and `_unpatch_auto_language_voice_dictionary()`. `_filter_auto_language_speech_sequence()` is registered with `speech.extensions.filter_speechSequence`, moved to the start of that filter chain when NVDA supports `moveToEnd(..., last=False)`, filters unmarked external `LangChangeCommand` values for Google TTS while automatic language profiles are enabled, preserves unmarked NVDA/app language-change commands when profiles are off so NVDA language reporting and character/symbol processing can use them, and must keep `*args, **kwargs` so future NVDA filter arguments do not break the add-on.
   - `_auto_language_for_process_text()` must ignore the incoming NVDA/app locale when automatic language profiles are enabled. Use Google TTS detection over enabled profile candidates, then the preferred profile fallback; do not reintroduce locale-derived profile selection from NVDA `LangChangeCommand`.
-  - Character, spelling, and symbol-related profile behavior is handled by `_auto_profile_character_settings_for_language()`, `_auto_profile_character_context_for_text()`, `_single_auto_profile_character_settings()`, the patched `speech.processText`, the patched `speech.getSpellingSpeech`, and the patched `shortcutKeys.shouldUseSpellingFunctionality`. The local wrapper functions inside `_patch_auto_language_voice_dictionary()` must keep `*args, **kwargs` and forward unknown arguments to NVDA; this is required for both older NVDA 2024.1 signatures and newer signatures such as `getSpellingSpeech(..., endsUtterance=..., useCharMode=...)`. Preserve temporary config overlays and always restore NVDA speech config values.
+  - Character, spelling, and symbol-related profile behavior is handled by `_auto_profile_character_settings_for_language()`, `_auto_profile_character_context_for_text()`, `_single_auto_profile_character_settings()`, the patched `speech.processText`, the patched `speech.getSpellingSpeech`, and the patched `shortcutKeys.shouldUseSpellingFunctionality`. The local wrapper functions inside `_patch_auto_language_voice_dictionary()` must keep `*args, **kwargs` and forward unknown arguments to NVDA; this is required for both older supported NVDA signatures and newer signatures such as `getSpellingSpeech(..., endsUtterance=..., useCharMode=...)`. Preserve temporary config overlays and always restore NVDA speech config values.
   - Automatic-language settings ring notice behavior lives in `SynthDriver.supportedSettings`, `ReadOnlyTextDriverSetting`, `_get_availableNotices()`, `_auto_language_notice_message()`, `_get_notice()`, and `_set_notice()`. Keep `_get_availableNotices()` keyed by the notice message, not the static notice setting ID, so the settings ring can announce the notice when automatic language profiles are enabled.
   - Settings UI storage and validation live in `settings.py`: `_installed_speakers_by_language()`, `_current_speech_defaults()`, `_configured_auto_language_detection()`, `_configured_auto_language_preferred()`, `_configured_auto_language_candidates()`, `_configured_auto_language_profiles()`, `_select_preferred_auto_language()`, `_refresh_preferred_language_choices()`, `_ensure_auto_language_profiles()`, `_default_voice_for_language()`, `_valid_profile_variant()`, `_load_selected_auto_language_profile()`, `_store_selected_auto_language_profile()`, `_enabled_auto_language_candidates()`, `_auto_language_status_message()`, `_refresh_auto_language_controls()`, `_refresh_auto_language_profile_value_controls()`, `_save_auto_language_settings()`, and `_refresh_synth_settings_ring(reloadSpeechSettings=False)`.
   - In Settings, profile `voice` values are speaker/variant IDs. `_current_speech_defaults()` should use the current synth `variant` before `voice`, and `_valid_profile_variant()` must validate the saved speaker ID against installed speakers for that Google language.
@@ -322,16 +322,16 @@ Automatic language profiles deliberately have their own profile system and must 
 - Use `synthDriverHandler.SynthDriver` patterns.
 - Use NVDA-style property methods: `_get_propertyName()` and `_set_propertyName()`.
 - Keep `cachePropertiesByDefault = False`.
-- Preserve compatibility with NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) builds. When hooking NVDA APIs whose signatures changed across these versions, use compatibility wrappers like the `setSynth` hook rather than assuming only one signature.
+- Preserve compatibility across the NVDA version range declared in `googleTtsForNvda/manifest.ini` on both 32-bit (x86) and 64-bit (x64) builds. When hooking NVDA APIs whose signatures changed across supported versions, use compatibility wrappers like the `setSynth` hook rather than assuming only one signature.
 - When a task provides or names a local NVDA source-code directory, inspect the relevant NVDA versions available there and prefer an implementation compatible across those versions, especially for scripts, input gestures, settings dialogs, speech processing hooks, and other NVDA internals used by this add-on.
 - Any add-on callable that replaces, wraps, or is called directly by an NVDA API should accept and forward `*args, **kwargs` unless NVDA's API contract requires an exact signature. This is intentional compatibility hardening for both old and new NVDA releases; do not simplify wrappers back to a fixed signature just because one inspected NVDA version currently works.
-- When adding a new persisted NVDA synth setting such as `VariantSetting()`, protect existing user configs before NVDA's `SynthDriver.loadSettings()` reads the new key. Google TTS does this through `SynthDriver._ensure_variant_config_compat()` and the `loadSettings()` override: create a valid `variant` key when old configs lack it, and migrate old `voice` speaker IDs to the new model where `voice` is the Google language and `variant` is the speaker/voice ID. Without this, NVDA 2024-2026 can raise `KeyError` for the new setting and report a generic "could not load synthesizer" error.
+- When adding a new persisted NVDA synth setting such as `VariantSetting()`, protect existing user configs before NVDA's `SynthDriver.loadSettings()` reads the new key. Google TTS does this through `SynthDriver._ensure_variant_config_compat()` and the `loadSettings()` override: create a valid `variant` key when old configs lack it, and migrate old `voice` speaker IDs to the new model where `voice` is the Google language and `variant` is the speaker/voice ID. Without this, supported NVDA builds can raise `KeyError` for the new setting and report a generic "could not load synthesizer" error.
 - Follow NVDA's `VariantSetting()` pattern from eSpeak: implement `_get_variant()`, `_set_variant()`, and `_getAvailableVariants()`, and keep dynamic variant lists in the `_availableVariants` cache when needed. Do not assign to `self.availableVariants` directly, because that can shadow NVDA's auto-property and break settings loading/caching.
 - NVDA compatibility code map:
   - Synth switching compatibility lives in `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_normalize_set_synth_args()`, `_call_set_synth_compat()`, `_set_synth_with_google_tts_voice_prompt()`, `_patch_synth_selection()`, and `_unpatch_synth_selection()`. These wrappers preserve compatibility with `setSynth` signatures across NVDA versions; do not replace them with a single assumed signature.
   - Voice dictionary/settings dialog hooks live in `_patch_voice_dictionary_dialog()`, `_unpatch_voice_dictionary_dialog()`, `_patch_read_only_text_setting()`, and `_unpatch_read_only_text_setting()`. The local wrappers for `AutoSettingsMixin._getSettingMaker`, `AutoSettingsMixin._updateValueForControl`, `AutoSettingsMixin.onDiscard`, `AutoSettingsMixin.refreshGui`, `VoiceSettingsPanel.makeSettings`, and `gui.mainFrame.popupSettingsDialog` must keep `*args, **kwargs` and forward unknown arguments. This includes the destroyed-panel `AutoSettingsMixin.refreshGui` guard used when stale weakref callbacks run after synth switching. Always unpatch only if the current callable is the one installed by this add-on.
   - Voice dictionary loading compatibility lives in `_VoiceDictionarySynthProxy`, `_load_voice_dictionary_for_voice()`, `_current_google_tts_speaker_id()`, `_patch_google_tts_voice_dictionary_loading()`, and `_unpatch_google_tts_voice_dictionary_loading()`. The patch wraps `speechDictHandler.loadVoiceDict` only when that attribute exists, and the wrapper must keep `*args, **kwargs` so NVDA voice dictionary loading remains compatible if NVDA adds parameters or re-exports the function differently.
-  - Speech-processing compatibility lives in `_filter_auto_language_speech_sequence()` and the local wrappers created by `_patch_auto_language_voice_dictionary()`: `process_text_with_auto_voice_dictionary()`, `get_spelling_speech_with_auto_profile()`, and `should_use_spelling_functionality_with_auto_profile()`. These wrappers must keep and forward `*args, **kwargs`; this preserves both NVDA 2024.1's smaller `speech.processText` / `speech.getSpellingSpeech` signatures and newer signatures with extra spelling arguments.
+  - Speech-processing compatibility lives in `_filter_auto_language_speech_sequence()` and the local wrappers created by `_patch_auto_language_voice_dictionary()`: `process_text_with_auto_voice_dictionary()`, `get_spelling_speech_with_auto_profile()`, and `should_use_spelling_functionality_with_auto_profile()`. These wrappers must keep and forward `*args, **kwargs`; this preserves both older supported `speech.processText` / `speech.getSpellingSpeech` signatures and newer signatures with extra spelling arguments.
   - Synth driver NVDA entry points live in `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py`: `SynthDriver.terminate()`, `SynthDriver.speak()`, `SynthDriver.cancel()`, `SynthDriver.pause()`, and `SynthDriver.loadSettings()`. Keep their compatibility `*args, **kwargs` wrappers; do not make them fixed to one NVDA release's current signature.
   - Google TTS settings panel NVDA entry points live in `googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py`: `GoogleTtsSettingsPanel.makeSettings()` and `GoogleTtsSettingsPanel.onSave()`. Keep their compatibility `*args, **kwargs` wrappers while preserving normal NVDA `SettingsPanel` behavior.
   - Global plugin entry points live in `GlobalPlugin.terminate()`, `GlobalPlugin.on_open_voice_manager()`, `GlobalPlugin.script_openVoiceManager()`, and `GlobalPlugin.script_openSettings()`. Keep their compatibility `*args, **kwargs` wrappers, especially for wx events and future script handler changes.
@@ -384,8 +384,13 @@ They are required for `SharedArrayBuffer` support. Do not remove or weaken them.
 - `offscreen_compiled.js` expects installed packages at root URLs like `/{packageId}.zvoice`.
 - The bridge HTTP server must route root `.zvoice` requests to `voice_store.voice_dir()`.
 - The runtime `voices.json` written at bridge startup must mark installed packages as `"remote": false` in the generated JSON model so the engine loads local packages.
-- The engine init entry point is called via dynamically resolving the engine object (e.g. `window.Vh.init(extensionId)` in `20260625.1` or `window.Uh.init(...)` in earlier versions).
-- The engine global symbol (`window.Vh`, `window.Uh`, etc.) is an obfuscated name from compiled browser extension code that changes across versions. `bridgeHarness.js` resolves this dynamically using `getTtsEngine()`. Do not assume any fixed global name will remain stable across future engine updates.
+- The engine init entry point is called via dynamically resolving the engine object (for example, minified globals such as `window.Xh`, `window.Vh`, or `window.Uh` seen across different engine builds).
+- The engine global symbol (`window.Xh`, `window.Vh`, `window.Uh`, etc.) is an obfuscated name from compiled browser extension code that changes across versions. `bridgeHarness.js` resolves this dynamically using `getTtsEngine()`. Do not assume any fixed global name will remain stable across future engine updates.
+- Some engine builds need language/package readiness before preload or speech. Keep `ensureLanguageReady(engine, lang)` before `engine.onSpeak(...)` in both `googleTtsForNvdaPreload()` and `googleTtsForNvdaSpeak()`, even if another bundled engine appears to work without this extra step.
+- Voice support must be verified from a loadable `.zvoice` package and browser/WASM runtime behavior, not from `voices.json` alone.
+- Current engine package compatibility deliberately excludes package IDs containing `locomel` or `lemonbalm` because the bundled engine reports those package families as unavailable even when their `.zvoice` files verify.
+- WASM engine version, file checks, and catalog selection live in `catalog.py`: `ENGINE_VERSION`, `ENGINE_ROOT`, `ENGINE_DIR`, `CATALOG_PATH`, `REQUIRED_ENGINE_FILES`, `UNSUPPORTED_ENGINE_PACKAGE_ID_PARTS`, `inspect_engine_library()`, and `is_package_supported_by_engine()`.
+- Browser-side engine startup and package readiness live in `googleTtsForNvda/synthDrivers/googleTtsForNvda/web/bridgeHarness.js`: `isTtsEngineInstance()`, `getTtsEngine()`, `ensureEngineInitialized()`, `ensureLanguageReady()`, `googleTtsForNvdaPreload()`, and `googleTtsForNvdaSpeak()`.
 - `bridgeHarness.js` should remain strict-mode and IIFE-wrapped.
 - Avoid changing PCM conversion semantics unless fixing a documented audio bug.
 
@@ -424,7 +429,7 @@ They are required for `SharedArrayBuffer` support. Do not remove or weaken them.
 | Runtime voices.json | `{configPath}/googleTtsForNvda/runtime/voices.json` |
 | Browser profiles | `%LOCALAPPDATA%/googleTtsForNvda/{chromeProfiles,edgeProfiles,braveProfiles}/persistentSession` |
 | Temporary browser profiles | `%LOCALAPPDATA%/googleTtsForNvda/{chromeProfiles,edgeProfiles,braveProfiles}/session-<pid>-<timestamp>` |
-| Master catalog | `WasmTtsEngine/20260625.1/voices.json` |
+| Master catalog | `WasmTtsEngine/<ENGINE_VERSION>/voices.json` |
 
 ### `voice_store` contract
 
@@ -619,9 +624,8 @@ $zip.Dispose()
 ### Version management
 
 - Version is in `googleTtsForNvda/manifest.ini`, field `version`.
-- Current version: `0.5`.
 - Current authors: Nguyen Anh Duc, Dao Duc Trung and Pham Hung Vuong.
-- NVDA compatibility: `minimumNVDAVersion = 2024.1.0`, `lastTestedNVDAVersion = 2026.1.0`. Code and packaging should preserve support for NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) builds.
+- NVDA compatibility is declared in `googleTtsForNvda/manifest.ini` through `minimumNVDAVersion` and `lastTestedNVDAVersion`. Code and packaging should preserve the declared supported range on both 32-bit (x86) and 64-bit (x64) builds.
 - Increment `googleTtsForNvda/manifest.ini` before producing a release build.
 - Do not increment version for internal experiments unless the user asks for a build/release.
 
