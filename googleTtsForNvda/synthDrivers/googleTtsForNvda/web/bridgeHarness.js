@@ -741,17 +741,26 @@
 		throw new Error("Timed out waiting for browser speech audio.");
 	}
 
+	function isTtsEngineInstance(val) {
+		return val && typeof val === "object"
+			&& typeof val.onSpeak === "function"
+			&& typeof val.init === "function"
+			&& typeof val.onStop === "function"
+			&& val.i
+			&& val.i.audioWorklet;
+	}
+
 	function getTtsEngine() {
-		if (window.Vh && typeof window.Vh.onSpeak === "function") {
-			return window.Vh;
-		}
-		if (window.Uh && typeof window.Uh.onSpeak === "function") {
-			return window.Uh;
+		// Engine globals are minified and have changed between bundled engine versions.
+		for (const key of ["Xh", "Vh", "Uh"]) {
+			if (isTtsEngineInstance(window[key])) {
+				return window[key];
+			}
 		}
 		for (const key of Object.getOwnPropertyNames(window)) {
 			try {
 				const val = window[key];
-				if (val && typeof val === "object" && typeof val.onSpeak === "function" && typeof val.init === "function" && typeof val.onStop === "function") {
+				if (isTtsEngineInstance(val)) {
 					return val;
 				}
 			} catch (_) {}
