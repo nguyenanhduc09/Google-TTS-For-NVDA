@@ -57,7 +57,7 @@
 
 	<h2>配置</h2>
 	<h3>语音设置</h3>
-	<p>当自动语言配置文件关闭时,NVDA 的语音设置对话框(<kbd>NVDA+Ctrl+V</kbd>)提供以下选项:</p>
+	<p>无论自动语言配置文件是否启用,NVDA 的语音设置对话框(<kbd>NVDA+Ctrl+V</kbd>)都会为 Google TTS For NVDA 提供<strong>停顿</strong>选项。当自动语言配置文件关闭时,该对话框还会提供以下选项:</p>
 	<ul>
 		<li><strong>语音:</strong> 选择已安装的 Google TTS 语言。</li>
 		<li><strong>变体:</strong> 选择该语言下的具体语音名称,包括已安装的 Chrome OS 语音和 Google Natural 语音。</li>
@@ -66,6 +66,7 @@
 		<li><strong>音调:</strong> 调整语音的音高。</li>
 		<li><strong>音量:</strong> 调整朗读音量。</li>
 	</ul>
+	<p><strong>停顿:</strong> 选择停顿时长保持不变、仅在文本末尾缩短,还是在整段朗读过程中都缩短以加快阅读速度。此设置适用于所有 Google TTS 语音。</p>
 
 	<h3>插件设置</h3>
 	<p>在<strong>NVDA 菜单 &rarr; 首选项 &rarr; 设置 &rarr; Google TTS For NVDA</strong>中,您可以配置:</p>
@@ -106,7 +107,8 @@
 	<p>诸如标点符号与特殊符号朗读级别、自动方言切换、语言切换播报、Unicode 规范化、包含表情符号在内的 Unicode 联盟数据、额外符号词典、延迟字符描述,以及语音模式选择等 NVDA 全局设置,仍保留在 NVDA 的语音设置中。</p>
 	<p>自动语言配置文件会在 NVDA 处理文本之前设置语言语境,因此 NVDA 的符号发音和语音词典处理仍会在所选语言语境下按常规语音流程进行。</p>
 	<p>当自动语言配置文件关闭时,NVDA 语音词典会针对当前所选的 Google TTS 变体正常工作。当自动语言配置文件启用时,插件会在处理相应文本段落期间,临时使用该语言配置文件所选变体对应的语音词典。NVDA 的默认词典与临时词典仍会按 NVDA 的常规行为运作。</p>
-	<p>启用自动语言配置文件期间,NVDA 的语音设置对话框将不再为本合成器提供常规的语音、变体、语速、加速朗读、音调和音量控件,而是显示一条可聚焦的提示,引导您前往 Google TTS For NVDA 设置分类进行配置。此模式下,常规的语音设置环命令(桌面键盘为 <kbd>NVDA+Ctrl+方向键</kbd>,笔记本键盘为 <kbd>NVDA+Shift+Ctrl+方向键</kbd>)只会播报该提示,而不会更改 Google TTS 的语音或语音参数。启用自动语言配置文件期间,Google TTS 同样会使用各已启用配置文件中的大写字母及拼读选项;关闭自动语言配置文件后,常规语音设置中的数值将重新生效。Google TTS For NVDA 设置分类中的状态信息同样可通过 Tab 键访问,便于读屏软件播报。</p>
+	<p>本合成器会忽略 NVDA 自身的自动语言与方言切换命令,因此这些全局选项不会强制 Google TTS 更改语音。如果您希望在本插件中实现自动语音/配置文件选择,请使用 Google TTS 的自动语言配置文件功能。若启用了 NVDA 的<strong>朗读时播报语言变化</strong>选项,在配置文件启用期间,播报的语言名称将遵循 Google TTS 自动语言配置文件的检测结果。当配置文件关闭时,NVDA 仍可使用应用程序提供的语言变化信息进行语言播报以及字符/符号处理(包括标点符号和符号词典),但这些命令不会使 Google TTS 更改语音。</p>
+	<p>启用自动语言配置文件期间,NVDA 的语音设置对话框将不再为本合成器提供常规的语音、变体、语速、加速朗读、音调和音量控件,而是显示一条可聚焦的提示,引导您前往 Google TTS For NVDA 设置分类进行配置。<strong>停顿</strong>选项在语音设置中仍然可用,并适用于所有 Google TTS 语音。此模式下,常规的语音设置环命令(桌面键盘为 <kbd>NVDA+Ctrl+方向键</kbd>,笔记本键盘为 <kbd>NVDA+Shift+Ctrl+方向键</kbd>)只会播报该提示,而不会更改 Google TTS 的语音或语音参数。启用自动语言配置文件期间,Google TTS 同样会使用各已启用配置文件中的大写字母及拼读选项;关闭自动语言配置文件后,常规语音设置中的数值将重新生效。Google TTS For NVDA 设置分类中的状态信息同样可通过 Tab 键访问,便于读屏软件播报。</p>
 
 	<h2>排查 Edge 运行环境无声问题</h2>
 	<p>如果您选择 <strong>Microsoft Edge</strong> 作为 Chromium 浏览器运行环境,Google TTS For NVDA 还会检查 Microsoft Edge WebView2 运行时是否可用。有可能已安装 Edge,但 WebView2 缺失或已损坏,此时插件将无法使用 Edge 进行语音合成。Google Chrome 和 Brave 不依赖 WebView2。</p>
@@ -138,9 +140,9 @@
 	<ul>
 		<li><strong>插件更新:</strong> 新增可在 Google TTS For NVDA 设置分类中进行的内置更新检查,支持可选的启动时检查、本地化的更新信息、在 NVDA 内下载安装包,并可转交给 NVDA 标准的插件安装程序处理。</li>
 		<li><strong>Chromium 运行环境回退:</strong> 改进了 Chrome、Edge 与 Brave 之间的回退逻辑,当所选运行环境无法启动或尚未就绪时,Google TTS For NVDA 现在可以尝试其他受支持的浏览器运行环境。当 WebView2 缺失且有其他受支持的运行环境可用时,现在可以跳过 Edge。</li>
-		<li><strong>NVDA 兼容性:</strong> 改进了与新旧版本 NVDA 在语音、拼读、语音词典、设置、语音合成器切换、全局插件以及语音合成驱动等方面的兼容性。</li>
+		<li><strong>NVDA 兼容性:</strong> 改进了与新旧版本 NVDA 在语音、拼读、语音词典、设置、语音合成器切换、全局插件以及语音合成驱动等方面的兼容性。Google TTS 现在会阻止 NVDA/应用程序的语言切换命令更改 Google 语音,同时在自动语言配置文件关闭时仍保留这些命令用于语言播报和字符/符号处理。</li>
 		<li><strong>简体中文与俄语本地化:</strong> 新增了简体中文和俄语的界面翻译及用户文档。简体中文还包含本地化的元数据和语言排序。</li>
-		<li><strong>语音可靠性:</strong> 修复了在极少数情况下语音被中断后可能不完整重播的问题,恢复了 SeaNet 语音的音调控制功能,并避免了从 Google TTS 切换到其他语音合成器后偶发的语音设置错误。</li>
+		<li><strong>语音可靠性:</strong> 修复了在极少数情况下语音被中断后可能不完整重播的问题,恢复了 SeaNet 语音的音调控制功能,并避免了从 Google TTS 切换到其他语音合成器后偶发的语音设置错误。新增<strong>停顿</strong>设置,可选择缩短停顿时长;可在 NVDA 的语音设置对话框(<kbd>NVDA+Ctrl+V</kbd>)中启用,详情见"配置"部分。</li>
 		<li><strong>状态字段无障碍性:</strong> 改进了运行环境、自动语言配置文件、更新、语音设置提示以及手动网址回退等状态字段,使其更易于聚焦和查看,不会出现延迟的重复播报。</li>
 	</ul>
 
