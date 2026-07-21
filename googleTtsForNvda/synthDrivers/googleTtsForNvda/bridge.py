@@ -1102,6 +1102,22 @@ class BrowserProcessManager:
 			log.debug("Could not remove Google TTS browser session profile.", exc_info=True)
 
 	def _read_devtools_port(self, devToolsFile: Path, cancelEvent: threading.Event | None = None) -> int:
+		lastReadError: Exception | None = None
+		loggedReadError = False
+
+		def record_transient_read_error(error: Exception) -> None:
+			nonlocal lastReadError, loggedReadError
+			lastReadError = error
+			if loggedReadError:
+				return
+			log.debug(
+				"Google TTS browser DevTools port file is not readable yet: %s (%r)",
+				devToolsFile,
+				error,
+				exc_info=error.__traceback__ is not None,
+			)
+			loggedReadError = True
+
 		for attempt in range(400):
 			_raise_if_cancelled(cancelEvent)
 			if self._chromeProcess is not None:
@@ -1115,14 +1131,30 @@ class BrowserProcessManager:
 					_("The Chromium browser runtime closed before Google TTS For NVDA was ready."),
 					f"Chromium browser runtime exited before DevTools became available: {exitCode}",
 				)
-			if devToolsFile.is_file():
-				lines = devToolsFile.read_text(encoding="utf-8").splitlines()
-				if lines:
-					return int(lines[0])
+			try:
+				devToolsReady = devToolsFile.is_file()
+				if devToolsReady:
+					# Chromium may create DevToolsActivePort before Windows lets us read
+					# it, especially when Edge is initializing a reused profile.
+					lines = devToolsFile.read_text(encoding="utf-8").splitlines()
+					if lines:
+						try:
+							port = int(lines[0].strip())
+						except ValueError as exc:
+							record_transient_read_error(exc)
+						else:
+							if 0 < port <= 65535:
+								return port
+							record_transient_read_error(ValueError(f"Invalid DevTools port: {port}"))
+			except (OSError, UnicodeError) as exc:
+				record_transient_read_error(exc)
 			time.sleep(STARTUP_POLL_INTERVAL)
+		detail = "Timed out waiting for browser DevTools."
+		if lastReadError is not None:
+			detail = f"{detail} Last DevToolsActivePort read error: {lastReadError!r}"
 		raise _friendly_cdp_error(
 			_("The Chromium browser runtime did not start in time."),
-			"Timed out waiting for browser DevTools.",
+			detail,
 		)
 
 	def _page_url(self) -> str:
@@ -1212,8 +1244,14 @@ class CdpClient:
 		msgId = self.next_msg_id()
 		command = {"id": msgId, "method": method, "params": params or {}}
 		event = dispatcher.register_request(msgId, eventHandler=eventHandler)
+		response: dict[str, Any] | None = None
 		try:
-			dispatcher.send(command)
+			try:
+				dispatcher.send(command)
+			except Exception:
+				if cancelEvent is not None and cancelEvent.is_set():
+					raise CdpCancelled()
+				raise
 			deadline = time.monotonic() + timeout
 			while time.monotonic() < deadline:
 				if cancelEvent is not None and cancelEvent.is_set():
@@ -1232,6 +1270,8 @@ class CdpClient:
 			response = dispatcher.unregister_request(msgId)
 
 		if response is None:
+			if cancelEvent is not None and cancelEvent.is_set():
+				raise CdpCancelled()
 			raise _friendly_cdp_error(
 				_("The Chromium browser runtime connection closed unexpectedly."),
 				"Browser DevTools websocket closed.",
