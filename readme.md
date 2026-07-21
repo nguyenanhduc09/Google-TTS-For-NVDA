@@ -216,7 +216,15 @@ To package the add-on yourself:
 build.bat
 ```
 
-The build script reads the version from `googleTtsForNvda/manifest.ini`, builds all add-on locales non-interactively, checks Python and JavaScript syntax, verifies that no `.zvoice` voice packages are inside the source tree, removes generated `__pycache__` folders, and packages the add-on.
+On WSL or Linux, run the equivalent shell script instead:
+
+```bash
+bash build.sh
+```
+
+Both scripts read the version from `googleTtsForNvda/manifest.ini`, build all add-on locales non-interactively, check Python and JavaScript syntax, verify that no `.zvoice` voice packages are inside the source tree, remove generated `__pycache__` folders, and package the add-on. `build.sh` needs Python 3, Node.js, and `zip` on the WSL/Linux side.
+
+WSL/Linux can build, check, and package the add-on, but it cannot run or test it: NVDA and the Chromium browser runtime this add-on depends on are Windows-only, so install and runtime testing must still happen on Windows. WSL's Python is usually newer than the one bundled with NVDA, so its syntax check catches outright syntax errors but cannot catch new syntax that NVDA's own Python does not accept yet.
 
 The verified `.nvda-addon` package will be created in the `dist/` directory, with a name like:
 

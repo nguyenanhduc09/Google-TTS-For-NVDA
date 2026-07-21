@@ -592,8 +592,9 @@ Compress-Archive -Path googleTtsForNvda\* -DestinationPath dist\googleTtsForNvda
 ### Build script code map
 
 - `build.bat` is the release packaging entry point. It reads `version` from `googleTtsForNvda\manifest.ini`, cleans stale build artifacts and `__pycache__`, checks unresolved merge conflict markers, runs `python build_i18n.py --all-languages`, runs Python and JavaScript syntax checks, rejects `.zvoice` files in the source tree, packages `googleTtsForNvda\*` into `dist\googleTtsForNvda-<version>.nvda-addon`, and cleans `__pycache__` again before exit.
+- `build.sh` is the WSL/Linux equivalent entry point, kept in the repo root next to `build.bat`. It runs the same 8 steps in the same order and prints the same `[n/8]`/`[ERROR]` markers. When changing build steps, update both scripts together; `build.sh` cannot run or test NVDA/Chromium runtime behavior, only build/check/package.
 - Keep the build steps ordered so generated translations are present before syntax/package checks, and so `__pycache__` created by `compileall` is removed before packaging.
-- If adding a new source file type that can contain merge conflict markers or translatable/release content, update the `build.bat` conflict-marker scan patterns and the packaging/check instructions together.
+- If adding a new source file type that can contain merge conflict markers or translatable/release content, update the `build.bat` conflict-marker scan patterns and the packaging/check instructions together, and mirror the same file-type list in `build.sh`.
 
 ### Required checks by change type
 
@@ -603,10 +604,22 @@ For Python changes:
 python -m compileall googleTtsForNvda
 ```
 
+WSL/Linux equivalent:
+
+```bash
+python3 -m compileall googleTtsForNvda
+```
+
 For JavaScript changes:
 
 ```powershell
 node --check googleTtsForNvda\synthDrivers\googleTtsForNvda\web\bridgeHarness.js
+```
+
+WSL/Linux equivalent:
+
+```bash
+node --check googleTtsForNvda/synthDrivers/googleTtsForNvda/web/bridgeHarness.js
 ```
 
 For voice/package changes:
@@ -615,7 +628,11 @@ For voice/package changes:
 rg --files googleTtsForNvda -g "*.zvoice"
 ```
 
-Expected result: no files.
+Expected result: no files. WSL/Linux equivalent, since `rg` (ripgrep) is not guaranteed to be installed:
+
+```bash
+find googleTtsForNvda -name "*.zvoice"
+```
 
 For package inspection:
 
@@ -624,6 +641,12 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path dist\googleTtsForNvda-*.nvda-addon))
 $zip.Entries | Select-Object -First 30 -ExpandProperty FullName
 $zip.Dispose()
+```
+
+WSL/Linux equivalent:
+
+```bash
+unzip -l dist/googleTtsForNvda-*.nvda-addon | head -30
 ```
 
 ### Version management
