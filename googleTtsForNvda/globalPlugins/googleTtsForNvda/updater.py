@@ -15,6 +15,7 @@ import urllib.request
 
 
 ADDON_ID = "googleTtsForNvda"
+BUILD_INFO_FILE_NAME = "buildInfo.json"
 UPDATE_CHANNEL = "stable"
 UPDATE_MANIFEST_URL = (
 	"https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/latest/download/stable.json"
@@ -41,6 +42,9 @@ class UpdateInfo:
 	minimumNVDAVersion: str
 	lastTestedNVDAVersion: str
 	releaseNotes: str
+	baseVersion: str = ""
+	updateBuild: int = 0
+	fileName: str = ""
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,7 @@ class UpdateCheckResult:
 	update: UpdateInfo
 	available: bool
 	manifestPath: Path
+	currentUpdateBuild: int = 0
 
 
 @dataclass(frozen=True)
@@ -58,7 +63,15 @@ class DownloadedUpdate:
 
 
 def _addon_manifest_path() -> Path:
-	return Path(__file__).resolve().parents[2] / "manifest.ini"
+	return _addon_root_path() / "manifest.ini"
+
+
+def _addon_root_path() -> Path:
+	return Path(__file__).resolve().parents[2]
+
+
+def _build_info_path() -> Path:
+	return _addon_root_path() / BUILD_INFO_FILE_NAME
 
 
 def _strip_manifest_value(value: str) -> str:
@@ -79,6 +92,50 @@ def current_version() -> str:
 	return _strip_manifest_value(match.group(1))
 
 
+def _non_negative_int(value: Any, key: str, source: str) -> int:
+	if isinstance(value, bool):
+		raise UpdateError(f"The {source} has an invalid {key}.")
+	try:
+		number = int(value)
+	except (TypeError, ValueError) as exc:
+		raise UpdateError(f"The {source} has an invalid {key}.") from exc
+	if number < 0:
+		raise UpdateError(f"The {source} has an invalid {key}.")
+	return number
+
+
+def _read_build_info_json() -> dict[str, Any]:
+	try:
+		text = _build_info_path().read_text(encoding="utf-8-sig")
+	except FileNotFoundError:
+		return {}
+	except OSError as exc:
+		raise UpdateError("Could not read the installed add-on build information.") from exc
+	try:
+		data = json.loads(text)
+	except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+		raise UpdateError("The installed add-on build information is not valid JSON.") from exc
+	if not isinstance(data, dict):
+		raise UpdateError("The installed add-on build information is not a JSON object.")
+	return data
+
+
+def current_update_build(currentVersion: str | None = None) -> int:
+	if currentVersion is None:
+		currentVersion = current_version()
+	data = _read_build_info_json()
+	if not data:
+		return 0
+	baseVersion = data.get("baseVersion")
+	if baseVersion is not None:
+		if not isinstance(baseVersion, str) or not baseVersion.strip():
+			raise UpdateError("The installed add-on build information has an invalid baseVersion.")
+		if baseVersion.strip() != currentVersion:
+			return 0
+	value = data.get("updateBuild", 0)
+	return _non_negative_int(value, "updateBuild", "installed add-on build information")
+
+
 def _version_parts(version: str) -> tuple[int, ...]:
 	parts = tuple(int(part) for part in re.findall(r"\d+", version))
 	if not parts:
@@ -95,10 +152,28 @@ def _is_newer_version(latestVersion: str, currentVersion: str) -> bool:
 	return latestParts > currentParts
 
 
+def _is_update_available(update: UpdateInfo, currentVersion: str, currentUpdateBuild: int) -> bool:
+	baseVersion = update.baseVersion or update.version
+	if _is_newer_version(baseVersion, currentVersion):
+		return True
+	if _is_newer_version(currentVersion, baseVersion):
+		return False
+	return update.updateBuild > currentUpdateBuild
+
+
 def _required_string(data: dict[str, Any], key: str) -> str:
 	value = data.get(key)
 	if not isinstance(value, str) or not value.strip():
 		raise UpdateError(f"The update manifest is missing {key}.")
+	return value.strip()
+
+
+def _optional_string(data: dict[str, Any], key: str) -> str:
+	value = data.get(key)
+	if value is None:
+		return ""
+	if not isinstance(value, str) or not value.strip():
+		raise UpdateError(f"The update manifest has an invalid {key}.")
 	return value.strip()
 
 
@@ -124,6 +199,22 @@ def _sha256(data: dict[str, Any]) -> str:
 	return value
 
 
+def _safe_update_file_name(fileName: str) -> str:
+	fileName = fileName.strip()
+	if not fileName or "/" in fileName or "\\" in fileName or fileName in (".", ".."):
+		raise UpdateError("The update manifest has an invalid fileName.")
+	if not fileName.lower().endswith(".nvda-addon"):
+		raise UpdateError("The update manifest has an invalid fileName.")
+	return fileName
+
+
+def _update_file_name(data: dict[str, Any], version: str) -> str:
+	fileName = _optional_string(data, "fileName")
+	if not fileName:
+		fileName = f"{ADDON_ID}-{_safe_version_for_file_name(version)}.nvda-addon"
+	return _safe_update_file_name(fileName)
+
+
 def _locale_key(locale: str | None) -> str:
 	return str(locale or "").strip().replace("-", "_")
 
@@ -147,14 +238,19 @@ def _parse_update_info(data: dict[str, Any], locale: str | None) -> UpdateInfo:
 	if isinstance(channel, str) and channel and channel != UPDATE_CHANNEL:
 		raise UpdateError("The update manifest is not for the stable channel.")
 	version = _required_string(data, "version")
+	baseVersion = _optional_string(data, "baseVersion") or version
+	displayVersion = _optional_string(data, "displayVersion") or version
 	return UpdateInfo(
-		version=version,
+		version=displayVersion,
 		url=_required_string(data, "url"),
 		size=_required_size(data),
 		sha256=_sha256(data),
 		minimumNVDAVersion=_required_string(data, "minimumNVDAVersion"),
 		lastTestedNVDAVersion=_required_string(data, "lastTestedNVDAVersion"),
 		releaseNotes=_release_notes(data, locale),
+		baseVersion=baseVersion,
+		updateBuild=_non_negative_int(data.get("updateBuild", 0), "updateBuild", "update manifest"),
+		fileName=_update_file_name(data, version),
 	)
 
 
@@ -200,10 +296,11 @@ def fetch_update_manifest(
 
 def check_for_update(locale: str | None, manifestUrl: str = UPDATE_MANIFEST_URL) -> UpdateCheckResult:
 	currentVersion = current_version()
+	currentUpdateBuild = current_update_build(currentVersion)
 	manifest, manifestPath = fetch_update_manifest(manifestUrl)
 	try:
 		update = _parse_update_info(manifest, locale)
-		available = _is_newer_version(update.version, currentVersion)
+		available = _is_update_available(update, currentVersion, currentUpdateBuild)
 	except Exception:
 		try:
 			_remove_file_if_present(manifestPath)
@@ -215,6 +312,7 @@ def check_for_update(locale: str | None, manifestUrl: str = UPDATE_MANIFEST_URL)
 		update=update,
 		available=available,
 		manifestPath=manifestPath,
+		currentUpdateBuild=currentUpdateBuild,
 	)
 
 
@@ -232,7 +330,8 @@ def _update_manifest_path() -> Path:
 
 
 def _download_path_for_update(update: UpdateInfo) -> Path:
-	return _update_download_dir() / f"{ADDON_ID}-{_safe_version_for_file_name(update.version)}.nvda-addon"
+	fileName = update.fileName or f"{ADDON_ID}-{_safe_version_for_file_name(update.version)}.nvda-addon"
+	return _update_download_dir() / _safe_update_file_name(fileName)
 
 
 def _remove_file_if_present(path: Path) -> None:

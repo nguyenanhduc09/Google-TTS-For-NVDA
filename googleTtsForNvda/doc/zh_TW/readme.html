@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+	<meta charset="UTF-8">
+	<title>Google TTS For NVDA</title>
+</head>
+<body>
+	<h1>Google TTS For NVDA</h1>
+	<p><strong>作者：</strong>Nguyen Anh Duc、Dao Duc Trung 和 Pham Hung Vuong</p>
+	<p>長久以來，螢幕報讀軟體的使用者都希望能在 Windows 上的 NVDA 中使用 Google 文字轉語音技術的熟悉語音，就像在 Android 螢幕報讀軟體上的體驗一樣。</p>
+	<p><strong>Google TTS For NVDA</strong> 就是為了實現這個願望而誕生的。透過 WebAssembly（WASM）運用 Google 的文字轉語音技術，在受支援的背景 Chromium 瀏覽器執行階段（例如 Google Chrome、Microsoft Edge 或 Brave）中執行，本附加元件為您帶來熟悉、自然的 Google 語音，提升您日常使用電腦的體驗。</p>
+	<p>下載所需的語音套件後，本附加元件會完全在您的電腦上離線運作，提供即時的語音朗讀，不需要持續連接網路。</p>
+
+	<h2>主要功能</h2>
+	<ul>
+		<li><strong>完全離線運作：</strong>下載所需的語音套件後，語音會在本機處理。</li>
+		<li><strong>多樣的語言與語音：</strong>提供多種受支援語言的 Google TTS 語音套件。</li>
+		<li><strong>快速回應、低延遲：</strong>使用文字分段與音訊緩衝技術，提升 NVDA 的回應速度。</li>
+		<li><strong>Google TTS 語音管理員：</strong>透過無障礙對話方塊瀏覽、下載、移除及檢視語音套件。</li>
+		<li><strong>Chromium 瀏覽器執行階段選擇：</strong>選擇 Google Chrome、Microsoft Edge 或 Brave 作為受支援的背景瀏覽器執行階段。</li>
+		<li><strong>自動語言設定檔：</strong>可選擇使用個別語言設定檔，讓不同語言擁有各自的語音與朗讀數值。</li>
+		<li><strong>內建附加元件更新：</strong>從 NVDA 設定中檢查附加元件更新，並可選擇每次啟動時自動檢查一次。</li>
+	</ul>
+
+	<h2>系統需求</h2>
+	<ul>
+		<li><strong>NVDA：</strong>2024.1 版或更新版本。本附加元件支援 NVDA 2024 至 2026 版本，適用於 32 位元（x86）與 64 位元（x64）的 NVDA。</li>
+		<li><strong>Chromium 瀏覽器：</strong>電腦上須安裝 Google Chrome、Microsoft Edge 或 Brave。若您使用 Microsoft Edge 作為執行階段，還必須具備 Microsoft Edge WebView2 執行階段。</li>
+		<li><strong>互動式 Windows 使用者工作階段：</strong>請勿在 Chromium 瀏覽器執行階段無法啟動的環境中依賴本附加元件，例如 Windows 登入畫面、安全桌面環境、Windows PE、修復環境或其他精簡的 Windows 工作階段。</li>
+	</ul>
+
+	<h2>快速入門指南</h2>
+	<ol>
+		<li>按下 <kbd>NVDA+Ctrl+S</kbd> 開啟 NVDA 的<strong>選擇合成器</strong>對話方塊，並選擇<strong>Google TTS For NVDA</strong>。</li>
+		<li>若尚未安裝任何語音套件，NVDA 會顯示訊息告知您尚未安裝任何 Google TTS For NVDA 語音。按下<strong>確定</strong>開啟 Google TTS 語音管理員並下載語音套件。按下<strong>取消</strong>可暫時繼續使用您目前的合成器。</li>
+		<li>在 Google TTS 語音管理員中，從<strong>下載</strong>頁籤下載至少一個語音套件。</li>
+		<li>下載完成後，開啟<strong>語音設定</strong>（<kbd>NVDA+Ctrl+V</kbd>）以選擇您偏好的語言與變聲。</li>
+	</ol>
+
+	<h2>管理語音</h2>
+	<p>您隨時可以開啟 Google TTS 語音管理員來新增或移除語音套件：</p>
+	<ul>
+		<li>按下快速鍵 <kbd>NVDA+Ctrl+Shift+G</kbd>，或</li>
+		<li>前往 <strong>NVDA 選單 &rarr; 工具 &rarr; Google TTS 語音管理員...</strong></li>
+	</ul>
+	<p>Google TTS 語音管理員有兩個頁籤：</p>
+	<ul>
+		<li><strong>已安裝：</strong>顯示已儲存在您電腦上的語音套件。<strong>狀態</strong>欄會告訴您每個套件是<strong>可用</strong>、不受隨附引擎支援、缺少必要套件、被其他已安裝套件所需要，或依賴其他套件。</li>
+		<li><strong>下載：</strong>顯示可供下載的套件。<strong>狀態</strong>欄會說明該套件是否可供下載、需要其他套件、其所需套件已安裝，或被其他可下載套件所需要。</li>
+	</ul>
+	<p>每個頁籤中，控制項的排列順序為：<strong>依語言篩選</strong>、<strong>勾選所有語音套件</strong>、套件清單，接著是<strong>移除勾選的語音套件</strong>或<strong>下載勾選的語音套件</strong>。對話方塊中還有一行<strong>狀態</strong>文字，以及<strong>重新整理</strong>、<strong>開啟語音套件資料夾</strong>和<strong>關閉</strong>按鈕。</p>
+	<p>若要新增語音，請使用<strong>下載</strong>頁籤，勾選您想要的套件，然後按下<strong>下載勾選的語音套件</strong>。若要移除語音，請使用<strong>已安裝</strong>頁籤，勾選您不再需要的套件，然後按下<strong>移除勾選的語音套件</strong>。</p>
+	<p>部分語音套件依賴其他套件。當您下載一個相依套件時，語音管理員也可以一併下載其所需的套件。當您移除一個其他已安裝套件所依賴的套件時，語音管理員會將這些相依套件一併列出，避免留下無法使用的語音。</p>
+	<p>語音管理員會保護您，避免不小心移除最後一個可用的語音套件。若 Google TTS For NVDA 並非目前使用中的合成器，警告訊息預設為<strong>否</strong>。若 Google TTS For NVDA 是目前使用中的合成器，語音管理員會要求您先切換至其他合成器，若您未切換，則會保留最後一個可用的套件。</p>
+	<p>您可以在任一頁籤使用<strong>依語言篩選</strong>下拉式選單，只顯示您想要的語言（例如英文或越南文）的語音套件，以便更快找到所需語音。此外，您也可以按下<strong>開啟語音套件資料夾</strong>，檢視語音套件在您電腦上的儲存位置。</p>
+	<p>語音下載與移除都會在背景進行，讓您不受中斷地繼續使用 NVDA。進度公告只保留在較大的里程碑與最終結果，不會針對每個細微的百分比變化重複播報。</p>
+
+	<h2>設定</h2>
+	<h3>語音設定</h3>
+	<p>無論自動語言設定檔是開啟或關閉，NVDA 的語音設定對話方塊（<kbd>NVDA+Ctrl+V</kbd>）都會為 Google TTS For NVDA 提供<strong>停頓</strong>設定。當自動語言設定檔關閉時，此對話方塊還會提供：</p>
+	<ul>
+		<li><strong>語音：</strong>選擇已安裝的 Google TTS 語言。</li>
+		<li><strong>變聲：</strong>選擇該語言中的語音名稱，包括已安裝時的 Chrome OS 與 Google Natural 語音。</li>
+		<li><strong>速度：</strong>調整朗讀速度。</li>
+		<li><strong>加快語速：</strong>啟用後可將語速加倍，適合高速閱讀。</li>
+		<li><strong>音調：</strong>調整語音的音調。</li>
+		<li><strong>音量：</strong>調整語音的音量。</li>
+	</ul>
+	<p><strong>停頓：</strong>選擇停頓是保持不變、只在文字結尾縮短，或是在整段朗讀中都縮短以加快閱讀速度。此設定適用於所有 Google TTS 語音。</p>
+
+	<h3>附加元件設定</h3>
+	<p>在 <strong>NVDA 選單 &rarr; 偏好設定 &rarr; 設定 &rarr; Google TTS For NVDA</strong> 中，您可以設定：</p>
+	<ul>
+		<li><strong>Chromium 瀏覽器執行階段：</strong>選擇 Google Chrome、Microsoft Edge 或 Brave，作為本附加元件的背景 Chromium 瀏覽器執行階段。此設定面板會顯示瀏覽器的可用性。</li>
+		<li><strong>Chromium 瀏覽器執行階段狀態：</strong>檢視目前選取的執行階段、瀏覽器可用性，以及使用中的回退執行階段（若有使用）。</li>
+		<li><strong>使用自動語言設定檔：</strong>啟用自動設定檔選擇，並開啟下方所述的設定檔控制項。</li>
+		<li><strong>慣用設定檔語言：</strong>選擇當句子含意不明確時所使用的已啟用設定檔語言。此清單在至少啟用一個語言設定檔之前可能是空的。</li>
+		<li><strong>自動語言設定檔：</strong>選擇要編輯哪一個已安裝的語言設定檔。</li>
+		<li><strong>使用此語言設定檔：</strong>啟用所選的語言設定檔。</li>
+		<li><strong>變聲、速度、加快語速、音調、音量、大寫字母音調改變百分比、大寫字母說出大寫、大寫字母發出嗶嗶聲、使用拼字功能 (若有支援)：</strong>為所選的已啟用設定檔設定朗讀數值。</li>
+		<li><strong>自動語言設定檔狀態：</strong>檢視設定檔目前是關閉、無法使用、缺少已選取的設定檔，或是啟用中。</li>
+		<li><strong>更新：</strong>包含下方的附加元件更新控制項。</li>
+		<li><strong>NVDA 啟動時自動檢查附加元件更新：</strong>讓 Google TTS For NVDA 在下次 NVDA 啟動後檢查一次更新。此選項預設為關閉。</li>
+		<li><strong>附加元件更新狀態：</strong>檢視已安裝的附加元件版本、自動啟動檢查是開啟或關閉，以及目前是否正在進行檢查。</li>
+		<li><strong>檢查更新...</strong>：手動檢查最新的穩定版附加元件。</li>
+	</ul>
+	<p>Google TTS For NVDA 設定分類也可以透過自訂輸入手勢開啟。預設未指派快速鍵；您可以在 <strong>NVDA 選單 &rarr; 偏好設定 &rarr; 輸入手勢</strong> 的 <strong>Google TTS For NVDA</strong> 分類下自行指派。</p>
+
+	<h3>附加元件更新</h3>
+	<p>開啟 <strong>NVDA 選單 &rarr; 偏好設定 &rarr; 設定 &rarr; Google TTS For NVDA</strong>，然後按下<strong>檢查更新...</strong>以檢查最新的穩定版本。當附加元件已是最新版本、無法連接網路，或無法解析更新回應時，手動檢查會顯示確定對話方塊。</p>
+	<p>當有較新版本可用時，Google TTS For NVDA 會顯示<strong>更新資訊</strong>對話方塊，內含下載大小、最低 NVDA 版本、最新測試過的 NVDA 版本以及變更紀錄。選擇<strong>是</strong>可在 NVDA 內下載 <code>.nvda-addon</code> 套件。下載期間，<strong>正在下載 Google TTS For NVDA 更新</strong>對話方塊會顯示<strong>下載狀態</strong>、已知大小時的進度列，以及<strong>取消</strong>按鈕。附加元件會依更新資訊清單的檔案大小與 SHA256 檢查碼驗證下載檔案，然後開啟 NVDA 一般的附加元件安裝程式。</p>
+	<p>自動啟動檢查預設為關閉。若您將其開啟，Google TTS For NVDA 會在下次 NVDA 啟動後檢查一次，並且只有在有較新版本可用時才會顯示訊息，否則保持靜默。無論自動檢查是開啟或關閉，手動檢查功能都可以使用。若在開啟設定分類時已有背景啟動檢查正在執行，手動檢查按鈕會停用，直到該次檢查完成為止。變更<strong>NVDA 啟動時自動檢查附加元件更新</strong>核取方塊，只會影響未來的 NVDA 啟動，不會中斷目前正在執行的檢查。</p>
+
+	<h3>自動語言設定檔</h3>
+	<p>啟用<strong>使用自動語言設定檔</strong>後，偵測到的句子會使用附加元件的個別語言設定檔，而非一般的 NVDA 語音設定。若只啟用一個語言設定檔，該設定檔會套用於每個句子。關閉自動語言設定檔後，您一般的 Google TTS 語言與變聲設定會再次可用。</p>
+	<p>自動語言設定檔使用隨附的 CLD2 偵測器程式庫，適用於 32 位元（x86）與 64 位元（x64）的 NVDA。只有在偵測結果對某個已啟用語言足夠可靠時，CLD2 的結果才會被採用。若文字過短或含意不明確，附加元件會在可行時使用保守的本機語言訊號，接著回退至慣用的已啟用語言。</p>
+	<ol>
+		<li>開啟 <strong>NVDA 選單 &rarr; 偏好設定 &rarr; 設定 &rarr; Google TTS For NVDA</strong>。</li>
+		<li>啟用<strong>使用自動語言設定檔</strong>。</li>
+		<li>移至<strong>慣用設定檔語言</strong>。此清單只會顯示已啟用的語言，因此在您啟用某個設定檔之前，它可能是空的。</li>
+		<li>選取一個<strong>自動語言設定檔</strong>。</li>
+		<li>為每個您希望自動語言設定檔使用的語言，勾選<strong>使用此語言設定檔</strong>核取方塊。在勾選此項之前，語言設定檔都是關閉的。</li>
+		<li>為每個已啟用的語言設定<strong>變聲</strong>、<strong>速度</strong>、<strong>加快語速</strong>、<strong>音調</strong>、<strong>音量</strong>、<strong>大寫字母音調改變百分比</strong>、<strong>大寫字母說出大寫</strong>、<strong>大寫字母發出嗶嗶聲</strong>，以及<strong>使用拼字功能 (若有支援)</strong>。</li>
+		<li>回到<strong>慣用設定檔語言</strong>，選擇當句子含意不明確時所使用的已啟用語言。</li>
+	</ol>
+	<p>速度、音調與音量使用類似 NVDA 語音設定的滑桿控制項。大寫字母音調則使用數字編輯/微調控制項，讓您能精確調整。</p>
+	<p>NVDA 全域的設定，例如標點及符號等級、自動方言切換、報讀語言變更、Unicode 正規化、包含表情符號在內的 Unicode Consortium 資料、額外符號字典、延遲字元描述，以及朗讀模式選擇，仍保留在 NVDA 的語音設定中。</p>
+	<p>Google TTS 針對此合成器會忽略 NVDA 本身的自動語言與方言切換指令，因此這些全域選項不會強制 Google TTS 變更語音。若您想在本附加元件中使用自動語音／設定檔選擇，請使用 Google TTS 自動語言設定檔。若 NVDA 的<strong>朗讀時報讀語言變更</strong>選項已啟用，在設定檔開啟期間，報讀的語言名稱會依循 Google TTS 自動語言設定檔的偵測結果。當設定檔關閉時，NVDA 仍可使用應用程式提供的語言變更資訊來進行語言報讀及字元／符號處理（包括標點及符號字典），但 Google TTS 不會因這些指令而變更語音。</p>
+	<p>自動語言設定檔會在 NVDA 處理文字之前設定語言內容，因此 NVDA 的符號讀法與語音字典處理，仍會依所選語言內容維持在一般的語音流程中。</p>
+	<p>當自動語言設定檔關閉時，NVDA 語音字典會依目前選取的 Google TTS 變聲正常運作。當自動語言設定檔開啟時，附加元件會在 NVDA 處理該段落期間，暫時使用每個已啟用語言設定檔所選變聲的語音字典。NVDA 的預設字典與暫用字典仍會依循 NVDA 的一般行為。</p>
+	<p>當自動語言設定檔啟用時，NVDA 的語音設定對話方塊將不再提供此合成器一般的語音、變聲、速度、加快語速、音調與音量控制項，而是顯示一則可取得焦點的提示，指引您前往 Google TTS For NVDA 設定分類。<strong>停頓</strong>仍會保留在語音設定中，並套用於所有 Google TTS 語音。桌上型鍵盤的 <kbd>NVDA+Ctrl+方向鍵</kbd> 或筆記型電腦鍵盤的 <kbd>NVDA+Shift+Ctrl+方向鍵</kbd> 等一般合成器設定環命令，在此模式下會播報此提示，而不會變更 Google TTS 的語音或朗讀數值。啟用自動語言設定檔時，Google TTS 也會使用每個已啟用設定檔的大寫字母與拼字選項；關閉自動語言設定檔後，一般的語音設定數值會再次可用。Google TTS For NVDA 設定分類中的狀態訊息也可透過 Tab 鍵到達，讓螢幕報讀軟體能夠播報。</p>
+
+	<h2>疑難排解 Edge 執行階段無聲問題</h2>
+	<p>若您選擇 <strong>Microsoft Edge</strong> 作為 Chromium 瀏覽器執行階段，Google TTS For NVDA 也會檢查 Microsoft Edge WebView2 執行階段是否可用。Edge 可能已安裝，但 WebView2 卻遺失或損壞，此時附加元件將無法使用 Edge 來朗讀語音。Google Chrome 與 Brave 不依賴 WebView2。</p>
+	<p>WebView2 是原生 Windows 應用程式用來承載網頁內容的 Microsoft Edge 執行階段。它與 Microsoft Edge 相關，但擁有一般的 Edge 瀏覽器並不代表 WebView2 執行階段已針對應用程式情境安裝妥當且運作正常。Microsoft 建議應用程式使用 Evergreen 版 WebView2 執行階段，因為它是共用的、會自動更新，且小型的 Evergreen 安裝小幫手會下載符合裝置架構的執行階段。</p>
+	<p>當需要 WebView2 時，Google TTS For NVDA 會提供按鈕，讓您下載 Microsoft 的線上 Evergreen 安裝小幫手、開啟 Microsoft 的 WebView2 頁面以取得離線安裝程式或固定版本套件，或是先擱置此變更。在 WebView2 可用之前，NVDA 會繼續使用先前的合成器。</p>
+	<p>若 Windows 無法開啟下載頁面，附加元件會在已標示標籤的唯讀欄位中顯示下載位址，並提供<strong>複製連結</strong>按鈕，方便您手動將該位址貼到瀏覽器中。</p>
+	<p>若電腦已連線至網際網路，請於此處下載 Microsoft Edge WebView2 的 Evergreen 安裝小幫手：<a href="https://go.microsoft.com/fwlink/p/?LinkId=2124703">下載 Microsoft Edge WebView2 執行階段</a>。</p>
+	<p>執行安裝程式、重新啟動 NVDA，然後再次選擇 <strong>Google TTS For NVDA</strong>。若需要離線安裝程式或固定版本的 WebView2 執行階段套件，請開啟 Microsoft 的 WebView2 頁面：<a href="https://developer.microsoft.com/microsoft-edge/webview2">Microsoft Edge WebView2</a>。</p>
+
+	<h2>備註</h2>
+	<ul>
+		<li>使用 NVDA 時，您不需要保持 Google Chrome、Microsoft Edge 或 Brave 瀏覽器視窗開啟。附加元件會自動連線並在背景處理語音。</li>
+		<li>NVDA 啟動後第一次朗讀時，語音可能需要短暫的時間進行初始化。</li>
+	</ul>
+
+	<h2>社群貢獻</h2>
+	<p>我們重視來自社群的提取請求（pull request）。當程式碼能穩定執行、符合附加元件現有的邏輯與介面、不會為其他附加元件功能帶來回歸問題、不會干擾其他 NVDA 附加元件或 NVDA 本身、不會削弱附加元件的安全性，且未經許可不會收集使用者資料時，貢獻即可被接受。</p>
+
+	<h2>支援與聯絡方式</h2>
+	<p>若您有任何問題、意見回饋，或需要協助，歡迎與開發團隊聯絡：</p>
+	<ul>
+		<li><strong>Nguyen Anh Duc：</strong><a href="mailto:ducna1803@gmail.com">ducna1803@gmail.com</a> | <a href="https://t.me/anhduc1803">t.me/anhduc1803</a></li>
+		<li><strong>Dao Duc Trung：</strong><a href="mailto:trung@ddt.one">trung@ddt.one</a> | <a href="https://t.me/Daoductrung">t.me/Daoductrung</a></li>
+		<li><strong>Pham Hung Vuong：</strong><a href="mailto:hungvuong106206@gmail.com">hungvuong106206@gmail.com</a> | <a href="https://t.me/phamhungvuong302">t.me/phamhungvuong302</a></li>
+	</ul>
+
+	<h2>變更紀錄</h2>
+	<h3>版本 0.5（2026-07-19）</h3>
+	<ul>
+		<li><strong>附加元件更新：</strong>在 Google TTS For NVDA 設定分類中新增內建的更新檢查功能，可選擇於啟動時自動檢查、查看在地化的更新資訊、直接在 NVDA 內下載套件，並移交給 NVDA 標準的附加元件安裝程式。</li>
+		<li><strong>Chromium 執行階段回退機制：</strong>改善了 Chrome、Edge 與 Brave 的回退機制，使 Google TTS For NVDA 在所選執行階段無法啟動或尚未就緒時，能嘗試其他受支援的瀏覽器執行階段。現在當缺少 WebView2 且有其他受支援的執行階段可用時，可以略過 Edge。</li>
+		<li><strong>NVDA 相容性：</strong>改善了與新舊版本 NVDA 之間在語音、拼字、語音字典、設定、合成器切換、全域外掛程式及合成器驅動程式方面的相容性。當自動語言設定檔關閉時，Google TTS 也會避免 NVDA／應用程式的語言變更指令切換 Google 語音，同時仍保留這些指令用於語言報讀及字元／符號處理。</li>
+		<li><strong>簡體中文與俄文在地化：</strong>新增簡體中文與俄文的介面翻譯與使用者說明文件。簡體中文還包含在地化的中繼資料與語言排序。</li>
+		<li><strong>語音朗讀穩定性：</strong>修正了少數中斷語音可能不完整重播的情況，恢復了 SeaNet 語音的音調控制，並避免了從 Google TTS 切換至其他合成器後偶發的語音設定錯誤。新增了<strong>停頓</strong>設定，可選擇縮短停頓；請從 NVDA 的語音設定對話方塊（<kbd>NVDA+Ctrl+V</kbd>）啟用，詳見「設定」章節。</li>
+		<li><strong>狀態欄位無障礙性：</strong>讓執行階段、自動語言設定檔、更新、語音設定提示及手動網址回退等狀態欄位更容易取得焦點與檢視，不再有延遲的重複播報。</li>
+	</ul>
+
+	<h3>版本 0.4（2026-07-16）</h3>
+	<ul>
+		<li><strong>自動語言設定檔：</strong>新增受 Android 上 <a href="https://play.google.com/store/apps/details?id=com.vnspeak.autotts">Auto TTS</a> 啟發的個別語言 Google TTS 設定檔。可從 Google TTS For NVDA 設定分類設定；每個已啟用的語言都能擁有各自的變聲、速度、加快語速、音調、音量、大寫字母行為及拼字行為，而當此功能關閉時，一般的 NVDA 語音設定仍可使用。</li>
+		<li><strong>NVDA 相容性：</strong>改善了與 NVDA 2024.1 至 2026 版本的相容性，包括更安全的合成器切換、更安全的語音處理掛勾，以及當其他附加元件包裝 NVDA 的合成器選擇時有更好的行為表現。</li>
+		<li><strong>多語言長文朗讀：</strong>改善了使用非 ASCII 標點符號或字間距有限的文字系統的句子與片語切分，包括為許多語言擴充了以 Unicode 為基礎的標點處理。</li>
+		<li><strong>Chromium 執行階段支援：</strong>新增對 Brave 瀏覽器執行階段的支援，改善了從 Google TTS For NVDA 設定分類中的 Chrome/Edge/Brave 回退機制，並釐清 Microsoft Edge WebView2 執行階段僅在使用 Microsoft Edge 時才需要。</li>
+		<li><strong>文件改善：</strong>在 GitHub README 中新增設定自訂 Chrome、Edge 及 Brave 可執行檔路徑的指引，包括無障礙的 Windows GUI 操作步驟，並在附加元件說明與 GitHub 文件中擴充了 Edge WebView2 疑難排解內容。</li>
+		<li><strong>設定無障礙性：</strong>新增一個未指派的輸入手勢指令，可直接開啟 Google TTS For NVDA 設定，改善狀態欄位讓螢幕報讀軟體能更可靠地播報其標籤與完整訊息，並讓合成器設定環在此功能啟用期間播報自動語言設定檔提示，而不是變更語音數值。這讓由設定檔管理的語音參數與 NVDA 一般的語音設定保持相容。</li>
+		<li><strong>語音選擇與穩定性：</strong>新增更清楚的語音與變聲選擇、更安全的語音暖機、改善語音管理員的套件處理、更靈敏的語音朗讀取消、更安全的語音套件匯入，並修正了英文（奈及利亞）等地區語言名稱。</li>
+	</ul>
+
+	<h3>版本 0.3（2026-07-12）</h3>
+	<ul>
+		<li><strong>Chromium 瀏覽器執行階段選擇：</strong>新增可直接在 NVDA 設定中選擇受支援 Chromium 瀏覽器執行階段的選項（<kbd>NVDA 選單 &rarr; 偏好設定 &rarr; 設定 &rarr; Google TTS For NVDA</kbd>），包括 Google Chrome 與 Microsoft Edge。</li>
+		<li><strong>連線與快取穩定性：</strong>將瀏覽器設定檔儲存位置移至 <code>AppData\Local</code>，以便在 NVDA 重新啟動後保留已編譯的 WASM 快取，並自動隱藏背景瀏覽器輔助視窗。</li>
+		<li><strong>Google TTS 語音管理員強化：</strong>新增<strong>依語言篩選</strong>下拉式選單、套件可用性與相依狀態、更安全地移除會導致無可用語音的套件、更精簡的進度播報、改善螢幕報讀軟體的鍵盤導覽與焦點管理，以及自動偵測並清除孤立的語音套件。</li>
+		<li><strong>語音回應速度與穩定性：</strong>修正了 NVDA 啟動或切換合成器後第一次朗讀被截斷的問題，降低了語音合成延遲，並改善了語音中斷處理。</li>
+		<li><strong>擴充語音目錄：</strong>整合了 180 個 Google TTS 語音套件並統一了語言代碼（其中 160 個套件可完全下載並立即使用，另有 20 個套件目前尚未與 WASM 引擎相容）。</li>
+		<li><strong>在地化與越南文翻譯：</strong>建立了完整的在地化系統，並為使用者介面與說明文件新增完整的越南文翻譯。</li>
+	</ul>
+
+	<h3>版本 0.2（2026-07-03）</h3>
+	<ul>
+		<li>將語音目錄擴充至超過 100 種語音選項，新增 40 多個語言／方言套件與 Google Natural 語音變聲。</li>
+		<li>將 WASM TTS 引擎升級至 20260625.1 版。</li>
+		<li>依語系代碼字母順序重新排列語音套件，方便導覽。</li>
+	</ul>
+
+	<h3>版本 0.1.5（2026-07-02）</h3>
+	<ul>
+		<li>首次發行。</li>
+	</ul>
+	<p>最後編輯於 2026-07-19</p>
+</body>
+</html>

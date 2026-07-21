@@ -81,6 +81,7 @@ Workspace: `C:\Users\hungv\Documents\Codex\Google-TTS-For-NVDA`
 Google-TTS-For-NVDA/
 ├─ googleTtsForNvda/
 │  ├─ manifest.ini
+│  ├─ buildInfo.json     Internal updater hotfix build metadata
 │  ├─ synthDrivers/googleTtsForNvda/
 │  │  ├─ __init__.py        SynthDriver; NVDA integration and settings ring
 │  │  ├─ bridge.py          ChromeTtsBridge; HTTP server, browser lifecycle, CDP/WS
@@ -177,13 +178,13 @@ This add-on depends on a supported Chromium browser runtime, such as Google Chro
 - Browser-runtime code map:
   - Runtime constants and labels live in `bridge.py`: `BROWSER_RUNTIME_CHROME`, `BROWSER_RUNTIME_EDGE`, `BROWSER_RUNTIME_BRAVE`, `BROWSER_RUNTIMES`, `DEFAULT_BROWSER_RUNTIME`, and `BROWSER_RUNTIME_LABELS`.
   - Detection and fallback flow lives in `bridge.py`: `_runtime_fallback_order()`, `_browser_candidates()`, `browser_path_for_runtime()`, `browser_executable_available()`, `edge_webview2_available()`, `browser_runtime_available()`, `browser_availability()`, `_browser_choices()`, `_find_browser_choice()`, `browser_runtime_snapshot()`, `find_browser()`, `effective_browser_runtime()`, and `edge_webview2_blocks_effective_runtime()`.
-  - CDP connection and browser-harness readiness live in `bridge.py`: `CdpClient.request()`, `_friendly_cdp_error()`, `_TRANSIENT_RUNTIME_EVALUATE_ERRORS`, `_is_transient_runtime_evaluate_error()`, `WasmTtsEngineBridge.enable_cdp_domains()`, `WasmTtsEngineBridge.wait_until_ready()`, and `ChromeTtsBridge.ensure_connection()`. During startup, transient `Runtime.evaluate` errors such as `Cannot find default execution context` mean the harness execution context is not stable yet; readiness polling should wait and retry, while non-transient CDP errors must still surface as `CdpError`. If CDP setup or harness readiness fails for the current runtime, `ChromeTtsBridge.ensure_connection()` must close that attempt, terminate the failed browser process, skip that runtime, and try the next fallback runtime unless the failure is cancellation.
+  - CDP connection and browser-harness readiness live in `bridge.py`: `CdpClient.request()`, `_friendly_cdp_error()`, `_TRANSIENT_RUNTIME_EVALUATE_ERRORS`, `_is_transient_runtime_evaluate_error()`, `WasmTtsEngineBridge.enable_cdp_domains()`, `WasmTtsEngineBridge.wait_until_ready()`, and `ChromeTtsBridge.ensure_connection()`. During startup, transient `Runtime.evaluate` errors such as `Cannot find default execution context` mean the harness execution context is not stable yet; readiness polling should wait and retry, while non-transient CDP errors must still surface as `CdpError`. If CDP setup or harness readiness fails for the current runtime, `ChromeTtsBridge.ensure_connection()` must close that attempt, terminate the failed browser process, skip that runtime, and try the next fallback runtime unless the failure is cancellation. If the request cancel event is already set while a CDP command is being sent or while the WebSocket closes without a response, `CdpClient.request()` should raise `CdpCancelled` so synth unloads and user-initiated synth switches do not log false speech failures.
   - Settings UI runtime flow lives in `settings.py`: `_runtime_label()`, `_save_browser_runtime()`, `_schedule_runtime_change_after_synth_switch()`, `_clear_pending_runtime_change()`, `_apply_runtime_after_synth_switch()`, `GoogleTtsSettingsPanel._refresh_runtime_snapshot()`, `_format_runtime_choice()`, `_effective_runtime_message()`, and `_select_saved_runtime()`.
   - Keep the fallback order Chrome, Edge, then Brave unless changing the product decision. If the saved runtime is Brave and Brave is unavailable, fallback must still find Chrome or Edge when they are usable.
   - `browser_runtime_snapshot()` is for UI/status code that needs a consistent view of executable availability, Edge WebView2 availability, and the effective fallback runtime. It must not make Chrome or Brave depend on WebView2.
   - `settings.py` runtime status controls must use focusable read-only text sized through `bind_read_only_text_focus_announcement()` so the selected/effective Chromium runtime message is reachable by Tab and reviewable without delayed automatic re-announcements.
   - Browser profile separation lives in `BrowserProcessManager._browser_profile_root()`, `BrowserProcessManager._browser_profile_dir_name()`, the current-profile `_profileRuntime` guard, and the profile directory constants `CHROME_PROFILE_DIR_NAME`, `EDGE_PROFILE_DIR_NAME`, and `BRAVE_PROFILE_DIR_NAME`. Brave cache/WASM profile data belongs under `braveProfiles`, not the Chrome or Edge profile roots.
-  - Browser profile startup fallback lives in `BrowserProcessManager.start_browser()`, `BrowserProcessManager.start_and_get_websocket_url()`, `BrowserProcessManager._browser_choices_or_raise()`, `BrowserProcessManager._start_browser_choice()`, `BrowserProcessManager._start_first_available_browser()`, `_BrowserProfileInUseError`, `_browser_profile_in_use_error()`, `_get_browser_profile_dir()`, `_cleanup_old_browser_profiles()`, `_release_chrome_profile()`, and `_remove_chrome_profile()`. Start with the persistent `persistentSession` profile so Chromium can reuse WASM/code cache; if Chromium exits with profile-in-use code 21, retry once with a temporary `session-<pid>-<timestamp>` profile under the same runtime profile root before trying the next runtime.
+  - Browser profile startup fallback lives in `BrowserProcessManager.start_browser()`, `BrowserProcessManager.start_and_get_websocket_url()`, `BrowserProcessManager._browser_choices_or_raise()`, `BrowserProcessManager._start_browser_choice()`, `BrowserProcessManager._start_first_available_browser()`, `BrowserProcessManager._read_devtools_port()`, `_BrowserProfileInUseError`, `_browser_profile_in_use_error()`, `_get_browser_profile_dir()`, `_cleanup_old_browser_profiles()`, `_release_chrome_profile()`, and `_remove_chrome_profile()`. Start with the persistent `persistentSession` profile so Chromium can reuse WASM/code cache; if Chromium exits with profile-in-use code 21, retry once with a temporary `session-<pid>-<timestamp>` profile under the same runtime profile root before trying the next runtime. `BrowserProcessManager._read_devtools_port()` must treat a just-created `DevToolsActivePort` file as temporarily unavailable when Windows/Chromium has not finished writing or releasing it: retry on `PermissionError`, `OSError`, empty content, invalid text, or out-of-range ports while the browser process remains alive. This retry is shared by Google Chrome, Microsoft Edge, and Brave; do not add Edge-only handling unless the browser behavior truly diverges.
   - Persistent profile reset is controlled by `PERSISTENT_PROFILE_MAX_BYTES` and must run per runtime profile root only. Resetting an oversized Chrome profile must not remove Edge or Brave profile data, and custom `CHROME_PATH`, `EDGE_PATH`, or `BRAVE_PATH` executable names must not cause profile roots or snapshot runtime status to be inferred from the path basename.
   - Temporary browser profiles are a resilience fallback only. `_release_chrome_profile()` must preserve persistent profiles but remove temporary profiles, while `_remove_chrome_profile()` may delete the current profile after startup failure. Do not make temporary profiles the normal path unless persistent profile reuse is deliberately removed.
 
@@ -240,6 +241,10 @@ These were removed and must stay removed unless the user explicitly requests a n
 
 - Add-on update checks, downloads, checksum verification, temporary update files, and NVDA add-on installation must not depend on the lifetime of the Google TTS Settings panel.
 - `autoUpdateCheckOnStartup` lives under `CONFIG_SECTION = "googleTtsForNvda"` and defaults to `False`.
+- Hotfix build metadata lives in `googleTtsForNvda/buildInfo.json`. `baseVersion` must match `googleTtsForNvda/manifest.ini` `version`, and `updateBuild` increments inside the same public version. When releasing a new public version, reset `updateBuild` to `1` for that new `baseVersion`.
+- Update availability must compare public/base versions first. Only when the remote and installed base versions are the same may the updater compare `updateBuild`. Missing build metadata is build `0` for backward compatibility.
+- `size` and `sha256` verify the downloaded package and must not be used as the signal that a hotfix exists. The release manifest generator must calculate them from the final `.nvda-addon` package.
+- `stable.json` must keep the legacy fields consumed by the 0.4 updater (`version`, `url`, `size`, `sha256`, `minimumNVDAVersion`, `lastTestedNVDAVersion`, and release notes) while adding schema 2 build fields (`baseVersion`, `displayVersion`, and `updateBuild`) for 0.5 and newer.
 - Automatic startup update checks must run at most once per NVDA startup via `core.postNvdaStartup`; manual checks from Settings must still work when automatic checks are disabled.
 - When an update check is already running, the manual Settings button must be disabled or ignored until the current check finishes. Toggling `autoUpdateCheckOnStartup` while a check is running must affect only future NVDA startups and must not cancel, restart, or alter the current check.
 - Manual checks show OK/error dialogs for no-update or check failures. Automatic startup checks delete temporary JSON/files and stay silent for no-update or initial check failures.
@@ -249,8 +254,8 @@ These were removed and must stay removed unless the user explicitly requests a n
 - If the user cancels a download, delete `stable.json`, `stable.json.download`, partial downloads, downloaded `.nvda-addon` files, and the temporary update folder.
 - If the user cancels NVDA's add-on install dialog, delete the downloaded `.nvda-addon` and remove the temporary update folder if empty.
 - Add-on updater code map:
-  - Release manifest generation lives in `make_update_manifest.py`: `ADDON_ID`, `DEFAULT_CHANNEL`, `DEFAULT_OUTPUT`, `DEFAULT_URL_TEMPLATE`, `TRANSLATED_MANIFEST_RE`, `IGNORED_SEARCH_DIRS`, `ManifestError`, `_parse_manifest()`, `_read_addon_manifest()`, `_read_release_notes_by_locale()`, `_sha256()`, `_version_sort_key()`, `_iter_addon_packages()`, `_find_addon_package()`, `build_update_manifest()`, `_parse_args()`, and `main()`.
-  - Manifest/download core lives in `googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py`: `ADDON_ID`, `UPDATE_CHANNEL`, `UPDATE_MANIFEST_URL`, `MAX_UPDATE_MANIFEST_BYTES`, `MAX_UPDATE_PACKAGE_BYTES`, `DOWNLOAD_CHUNK_SIZE`, `UpdateError`, `UpdateCancelled`, `UpdateInfo`, `UpdateCheckResult`, `DownloadedUpdate`, `current_version()`, `fetch_update_manifest()`, `check_for_update()`, `download_update()`, `remove_update_manifest()`, `remove_downloaded_update()`, `cleanup_update_files()`, and `format_size()`.
+  - Release manifest generation lives in `make_update_manifest.py`: `ADDON_ID`, `BUILD_INFO_FILE_NAME`, `DEFAULT_CHANNEL`, `DEFAULT_OUTPUT`, `DEFAULT_URL_TEMPLATE`, `TRANSLATED_MANIFEST_RE`, `IGNORED_SEARCH_DIRS`, `ManifestError`, `_parse_manifest()`, `_read_addon_manifest()`, `_read_addon_build_info()`, `_read_release_notes_by_locale()`, `_sha256()`, `_version_sort_key()`, `_iter_addon_packages()`, `_find_addon_package()`, `build_update_manifest()`, `_parse_args()`, and `main()`.
+  - Manifest/download core lives in `googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py`: `ADDON_ID`, `BUILD_INFO_FILE_NAME`, `UPDATE_CHANNEL`, `UPDATE_MANIFEST_URL`, `MAX_UPDATE_MANIFEST_BYTES`, `MAX_UPDATE_PACKAGE_BYTES`, `DOWNLOAD_CHUNK_SIZE`, `UpdateError`, `UpdateCancelled`, `UpdateInfo`, `UpdateCheckResult`, `DownloadedUpdate`, `current_version()`, `current_update_build()`, `_is_update_available()`, `_parse_update_info()`, `fetch_update_manifest()`, `check_for_update()`, `download_update()`, `remove_update_manifest()`, `remove_downloaded_update()`, `cleanup_update_files()`, and `format_size()`.
   - Runtime UI/controller flow lives in `googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py`: `CONFIG_AUTO_UPDATE_CHECK`, `DEFAULT_AUTO_UPDATE_CHECK`, `_nvda_translate()`, `automatic_update_check_enabled()`, `set_automatic_update_check_enabled()`, `update_check_in_progress()`, `update_status_message()`, `register_update_status_listener()`, `_notify_update_status_changed()`, `_UpdateAvailableDialog`, `_UpdateDownloadDialog`, `_UpdateCheckController`, `_begin_update_check()`, `_finish_update_check()`, `_start_update_check()`, `start_manual_update_check()`, and `start_automatic_update_check()`.
   - Google TTS Settings updater integration lives in `settings.py`: `GoogleTtsSettingsPanel.makeSettings()`, `GoogleTtsSettingsPanel.onSave()`, `GoogleTtsSettingsPanel.on_check_for_updates()`, `GoogleTtsSettingsPanel.on_auto_update_check_changed()`, `GoogleTtsSettingsPanel._refresh_update_controls()`, and `GoogleTtsSettingsPanel._on_destroy()`. Settings must call `updateGui` and must not own manifest/download/install state.
   - Global plugin startup integration lives in `globalPlugins/googleTtsForNvda/__init__.py`: `config.conf.spec[...]` for `updateGui.CONFIG_AUTO_UPDATE_CHECK`, `GlobalPlugin.__init__()`, `GlobalPlugin._on_post_nvda_startup()`, and `GlobalPlugin.terminate()`.
@@ -587,8 +592,9 @@ Compress-Archive -Path googleTtsForNvda\* -DestinationPath dist\googleTtsForNvda
 ### Build script code map
 
 - `build.bat` is the release packaging entry point. It reads `version` from `googleTtsForNvda\manifest.ini`, cleans stale build artifacts and `__pycache__`, checks unresolved merge conflict markers, runs `python build_i18n.py --all-languages`, runs Python and JavaScript syntax checks, rejects `.zvoice` files in the source tree, packages `googleTtsForNvda\*` into `dist\googleTtsForNvda-<version>.nvda-addon`, and cleans `__pycache__` again before exit.
+- `build.sh` is the WSL/Linux equivalent entry point, kept in the repo root next to `build.bat`. It runs the same 8 steps in the same order and prints the same `[n/8]`/`[ERROR]` markers. When changing build steps, update both scripts together; `build.sh` cannot run or test NVDA/Chromium runtime behavior, only build/check/package.
 - Keep the build steps ordered so generated translations are present before syntax/package checks, and so `__pycache__` created by `compileall` is removed before packaging.
-- If adding a new source file type that can contain merge conflict markers or translatable/release content, update the `build.bat` conflict-marker scan patterns and the packaging/check instructions together.
+- If adding a new source file type that can contain merge conflict markers or translatable/release content, update the `build.bat` conflict-marker scan patterns and the packaging/check instructions together, and mirror the same file-type list in `build.sh`.
 
 ### Required checks by change type
 
@@ -598,10 +604,22 @@ For Python changes:
 python -m compileall googleTtsForNvda
 ```
 
+WSL/Linux equivalent:
+
+```bash
+python3 -m compileall googleTtsForNvda
+```
+
 For JavaScript changes:
 
 ```powershell
 node --check googleTtsForNvda\synthDrivers\googleTtsForNvda\web\bridgeHarness.js
+```
+
+WSL/Linux equivalent:
+
+```bash
+node --check googleTtsForNvda/synthDrivers/googleTtsForNvda/web/bridgeHarness.js
 ```
 
 For voice/package changes:
@@ -610,7 +628,11 @@ For voice/package changes:
 rg --files googleTtsForNvda -g "*.zvoice"
 ```
 
-Expected result: no files.
+Expected result: no files. WSL/Linux equivalent, since `rg` (ripgrep) is not guaranteed to be installed:
+
+```bash
+find googleTtsForNvda -name "*.zvoice"
+```
 
 For package inspection:
 
@@ -619,6 +641,12 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path dist\googleTtsForNvda-*.nvda-addon))
 $zip.Entries | Select-Object -First 30 -ExpandProperty FullName
 $zip.Dispose()
+```
+
+WSL/Linux equivalent:
+
+```bash
+unzip -l dist/googleTtsForNvda-*.nvda-addon | head -30
 ```
 
 ### Version management

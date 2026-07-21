@@ -12,6 +12,7 @@ import zipfile
 
 
 ADDON_ID = "googleTtsForNvda"
+BUILD_INFO_FILE_NAME = "buildInfo.json"
 DEFAULT_CHANNEL = "stable"
 DEFAULT_OUTPUT = "stable.json"
 DEFAULT_URL_TEMPLATE = (
@@ -95,6 +96,57 @@ def _read_addon_manifest(addonPath: Path) -> dict[str, str]:
 		raise ManifestError(f"{addonPath} does not contain manifest.ini.") from exc
 	except (OSError, zipfile.BadZipFile, UnicodeDecodeError) as exc:
 		raise ManifestError(f"Could not read {addonPath} as an NVDA add-on package: {exc}") from exc
+
+
+def _json_string(data: dict[str, object], key: str, default: str | None = None) -> str:
+	value = data.get(key, default)
+	if not isinstance(value, str) or not value.strip():
+		raise ManifestError(f"{BUILD_INFO_FILE_NAME} has an invalid {key}.")
+	return value.strip()
+
+
+def _json_positive_int(data: dict[str, object], key: str) -> int:
+	value = data.get(key)
+	if isinstance(value, bool):
+		raise ManifestError(f"{BUILD_INFO_FILE_NAME} has an invalid {key}.")
+	try:
+		number = int(value)
+	except (TypeError, ValueError) as exc:
+		raise ManifestError(f"{BUILD_INFO_FILE_NAME} has an invalid {key}.") from exc
+	if number <= 0:
+		raise ManifestError(f"{BUILD_INFO_FILE_NAME} has an invalid {key}.")
+	return number
+
+
+def _read_addon_build_info(addonPath: Path, version: str) -> dict[str, object]:
+	try:
+		with zipfile.ZipFile(addonPath, "r") as archive:
+			try:
+				rawData = archive.read(BUILD_INFO_FILE_NAME)
+			except KeyError:
+				return {
+					"baseVersion": version,
+					"displayVersion": version,
+					"updateBuild": 0,
+				}
+	except (OSError, zipfile.BadZipFile) as exc:
+		raise ManifestError(f"Could not read {addonPath} as an NVDA add-on package: {exc}") from exc
+	try:
+		data = json.loads(rawData.decode("utf-8-sig"))
+	except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+		raise ManifestError(f"{BUILD_INFO_FILE_NAME} is not valid JSON.") from exc
+	if not isinstance(data, dict):
+		raise ManifestError(f"{BUILD_INFO_FILE_NAME} is not a JSON object.")
+	baseVersion = _json_string(data, "baseVersion", version)
+	if baseVersion != version:
+		raise ManifestError(
+			f"{BUILD_INFO_FILE_NAME} baseVersion {baseVersion} must match manifest.ini version {version}."
+		)
+	return {
+		"baseVersion": baseVersion,
+		"displayVersion": _json_string(data, "displayVersion", baseVersion),
+		"updateBuild": _json_positive_int(data, "updateBuild"),
+	}
 
 
 def _read_release_notes_by_locale(addonPath: Path) -> dict[str, str]:
@@ -206,6 +258,7 @@ def build_update_manifest(
 	version = _require_manifest_value(manifest, "version")
 	if not VERSION_RE.match(version):
 		raise ManifestError(f"Version is not safe for a release URL: {version}")
+	buildInfo = _read_addon_build_info(addonPath, version)
 	expectedFileName = f"{ADDON_ID}-{version}.nvda-addon"
 	if addonPath.name != expectedFileName and not allowNameMismatch:
 		raise ManifestError(
@@ -217,10 +270,13 @@ def build_update_manifest(
 	except (KeyError, IndexError, ValueError) as exc:
 		raise ManifestError(f"Invalid URL template: {exc}") from exc
 	updateManifest: dict[str, object] = {
-		"schema": 1,
+		"schema": 2,
 		"addonId": addonId,
 		"channel": channel,
 		"version": version,
+		"baseVersion": buildInfo["baseVersion"],
+		"displayVersion": buildInfo["displayVersion"],
+		"updateBuild": buildInfo["updateBuild"],
 		"fileName": expectedFileName,
 		"minimumNVDAVersion": _require_manifest_value(manifest, "minimumNVDAVersion"),
 		"lastTestedNVDAVersion": _require_manifest_value(manifest, "lastTestedNVDAVersion"),
@@ -307,6 +363,7 @@ def main(argv: list[str]) -> int:
 	print(f"Created {outputPath}")
 	print(f"Package: {addonPath.resolve()}")
 	print(f"Version: {updateManifest['version']}")
+	print(f"Build: {updateManifest['updateBuild']}")
 	print(f"Size: {updateManifest['size']} bytes")
 	print(f"SHA256: {updateManifest['sha256']}")
 	return 0
