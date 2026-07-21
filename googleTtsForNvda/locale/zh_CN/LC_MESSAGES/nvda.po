@@ -133,10 +133,10 @@ msgid "Downloadable voice packages"
 msgstr "可下载的 嗓音 包"
 
 msgid "Downloaded {count} voice packages."
-msgstr "已下载 {数数} 个 嗓音 包。"
+msgstr "已下载 {count} 个 嗓音 包。"
 
 msgid "Downloaded {package}."
-msgstr "已下载{包裹} 。"
+msgstr "已下载{package} 。"
 
 msgid "Downloading voice packages..."
 msgstr "正在下载 嗓音 包..."
