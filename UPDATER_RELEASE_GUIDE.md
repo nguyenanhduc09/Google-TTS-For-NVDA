@@ -102,7 +102,7 @@ python make_update_manifest.py
 This creates:
 
 ```text
-stable.json
+dist\stable.json
 ```
 
 The script automatically fills:
@@ -129,13 +129,15 @@ Do not calculate `size` or `sha256` manually. The script reads them from the fin
 `.nvda-addon` file. It also reads `baseVersion` and `updateBuild` from the packaged
 `buildInfo.json`, so generate `stable.json` only after rebuilding the add-on package.
 
-When no package path is provided, the script scans the current directory recursively, finds valid `googleTtsForNvda-<version>.nvda-addon` packages, and uses the highest version it finds. The selected package path is printed in the command output.
+When no package path is provided, the script scans the current directory recursively, finds valid `googleTtsForNvda-<version>.nvda-addon` packages, and uses the highest version it finds. By default, `stable.json` is written to the same directory as the selected `.nvda-addon` package. The selected package path and generated manifest path are printed in the command output.
 
 If you need to use a specific package, you can still pass it explicitly:
 
 ```powershell
 python make_update_manifest.py path\to\googleTtsForNvda-0.5.nvda-addon
 ```
+
+Use an absolute `--output` path only when you intentionally want to write the update manifest somewhere else. Relative `--output` paths are resolved from the directory containing the selected `.nvda-addon` package.
 
 ## 4. Publish the GitHub Release
 

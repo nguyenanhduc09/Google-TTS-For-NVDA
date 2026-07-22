@@ -137,7 +137,13 @@
 	</ul>
 
 	<h2>Nhật Ký Thay Đổi</h2>
-	<h3>Phiên bản 0.5 (19/07/2026)</h3>
+	<h3>Phiên bản 0.5.5 (23-07-2026)</h3>
+	<ul>
+		<li><strong>Hồ sơ ngôn ngữ tự động:</strong> Cải thiện khớp hồ sơ ngôn ngữ tự động cho các bí danh mã ngôn ngữ giữa CLD2 và Google TTS, bao gồm tiếng Philippines (Tagalog), tiếng Java, các mã tiếng Do Thái cũ, các biến thể tiếng Na Uy, tiếng Ả Rập và các ánh xạ tiếng Trung giản thể, tiếng Trung phồn thể và tiếng Quảng Đông.</li>
+		<li><strong>DLL CLD2 Windows:</strong> Xây dựng lại các DLL CLD2 Windows đi kèm bằng MSVC thay cho MinGW-w64 để gói add-on đã đóng gói không còn bị báo nhầm vi-rút như trước trong kiểm tra VirusTotal.</li>
+	</ul>
+
+	<h3>Phiên bản 0.5 (19-07-2026)</h3>
 	<ul>
 		<li><strong>Cập nhật add-on:</strong> Thêm kiểm tra cập nhật tích hợp từ danh mục cấu hình Google TTS Cho NVDA, với tùy chọn tự động kiểm tra khi NVDA khởi động, thông tin cập nhật đã bản địa hóa, tải gói ngay trong NVDA, chuyển sang trình cài add-on chuẩn của NVDA và hỗ trợ các bản cập nhật sửa lỗi nhỏ trong cùng một số phiên bản công khai.</li>
 		<li><strong>Dự phòng runtime trình duyệt nhân Chromium:</strong> Cải thiện dự phòng giữa Chrome, Edge và Brave để Google TTS Cho NVDA có thể thử runtime trình duyệt được hỗ trợ khác khi runtime đã chọn không khởi động được hoặc chưa sẵn sàng. Edge có thể được bỏ qua khi thiếu WebView2 và runtime được hỗ trợ khác dùng được. Google TTS Cho NVDA cũng chờ và thử lại khi trình duyệt còn đang hoàn tất khởi động, giúp giảm các trường hợp hiếm bị im lặng hoặc lỗi kết nối runtime lúc khởi động.</li>
@@ -147,7 +153,7 @@
 		<li><strong>Khả năng tiếp cận của ô trạng thái:</strong> Giúp các ô trạng thái về runtime, hồ sơ ngôn ngữ tự động, cập nhật, thông báo trong Cấu hình giọng nói và URL dự phòng thủ công dễ nhận tiêu điểm và duyệt lại hơn mà không tự đọc lặp lại sau một khoảng trễ.</li>
 	</ul>
 
-	<h3>Phiên bản 0.4 (16/07/2026)</h3>
+	<h3>Phiên bản 0.4 (16-07-2026)</h3>
 	<ul>
 		<li><strong>Hồ sơ ngôn ngữ tự động:</strong> Thêm hồ sơ Google TTS riêng cho từng ngôn ngữ, lấy cảm hứng từ <a href="https://play.google.com/store/apps/details?id=com.vnspeak.autotts">Auto TTS</a> trên Android. Cấu hình tính năng này trong danh mục Google TTS Cho NVDA; mỗi ngôn ngữ đã bật có thể dùng Biến thể, tốc độ, tăng tốc độ, cao độ, âm lượng, xử lý chữ hoa và đánh vần riêng, trong khi cấu hình giọng đọc thông thường của NVDA vẫn được dùng lại khi tắt tính năng này.</li>
 		<li><strong>Tương thích NVDA:</strong> Cải thiện tương thích với NVDA 2024.1 đến 2026, gồm đổi bộ đọc an toàn hơn, xử lý các phần can thiệp vào luồng đọc thận trọng hơn và hoạt động tốt hơn khi add-on khác bọc chức năng chọn bộ đọc của NVDA.</li>
@@ -158,7 +164,7 @@
 		<li><strong>Chọn giọng &amp; độ ổn định:</strong> Bổ sung cách chọn Giọng và Tên giọng rõ ràng hơn, làm ấm giọng an toàn hơn, cải thiện xử lý gói giọng trong Trình quản lý giọng, ngắt đọc phản hồi hơn, nhập gói giọng an toàn hơn và sửa tên vùng ngôn ngữ như Tiếng Anh (Nigeria).</li>
 	</ul>
 
-	<h3>Phiên bản 0.3 (12/07/2026)</h3>
+	<h3>Phiên bản 0.3 (12-07-2026)</h3>
 	<ul>
 		<li><strong>Lựa chọn runtime trình duyệt nhân Chromium:</strong> Thêm tùy chọn chọn runtime trình duyệt nhân Chromium được hỗ trợ ngay trong bảng cấu hình NVDA (<kbd>Trình đơn NVDA &rarr; Tùy chọn &rarr; Cấu hình &rarr; Google TTS Cho NVDA</kbd>), gồm Google Chrome và Microsoft Edge.</li>
 		<li><strong>Ổn định kết nối &amp; bộ nhớ đệm:</strong> Chuyển lưu trữ hồ sơ trình duyệt sang thư mục <code>AppData\Local</code> để bảo toàn bộ nhớ đệm WASM qua các lần khởi động lại NVDA và tự động ẩn hoàn toàn cửa sổ nền.</li>
@@ -168,17 +174,17 @@
 		<li><strong>Đa ngôn ngữ &amp; bản dịch tiếng Việt:</strong> Triển khai hệ thống dịch thuật hoàn chỉnh và bổ sung bản dịch tiếng Việt cho toàn bộ giao diện và tài liệu hướng dẫn.</li>
 	</ul>
 
-	<h3>Phiên bản 0.2 (03/07/2026)</h3>
+	<h3>Phiên bản 0.2 (03-07-2026)</h3>
 	<ul>
 		<li>Mở rộng danh sách giọng đọc lên hơn 100 tùy chọn giọng đọc, bổ sung hơn 40 gói ngôn ngữ/phương ngữ mới cùng các biến thể giọng tự nhiên (Google Natural).</li>
 		<li>Nâng cấp công cụ xử lý WASM TTS lên phiên bản 20260625.1.</li>
 		<li>Sắp xếp lại danh sách gói giọng theo mã ngôn ngữ giúp tìm kiếm dễ dàng hơn.</li>
 	</ul>
 
-	<h3>Phiên bản 0.1.5 (02/07/2026)</h3>
+	<h3>Phiên bản 0.1.5 (02-07-2026)</h3>
 	<ul>
 		<li>Phiên bản phát hành đầu tiên.</li>
 	</ul>
-	<p>Cập nhật lần cuối vào ngày 19/07/2026</p>
+	<p>Cập nhật lần cuối vào ngày 23-07-2026</p>
 </body>
 </html>

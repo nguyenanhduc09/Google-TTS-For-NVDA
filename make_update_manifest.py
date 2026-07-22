@@ -316,9 +316,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 	)
 	parser.add_argument(
 		"--output",
-		default=Path(DEFAULT_OUTPUT),
+		default=None,
 		type=Path,
-		help=f"Output update manifest path. Default: {DEFAULT_OUTPUT}",
+		help=(
+			f"Output update manifest path. Default: {DEFAULT_OUTPUT} next to the selected .nvda-addon package. "
+			"Relative paths are resolved from the package directory."
+		),
 	)
 	parser.add_argument(
 		"--channel",
@@ -341,17 +344,25 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 	return parser.parse_args(argv)
 
 
+def _resolve_output_path(outputPath: Path | None, addonPath: Path) -> Path:
+	if outputPath is None:
+		return addonPath.parent / DEFAULT_OUTPUT
+	if outputPath.is_absolute():
+		return outputPath.resolve()
+	return (addonPath.parent / outputPath).resolve()
+
+
 def main(argv: list[str]) -> int:
 	args = _parse_args(argv)
 	try:
-		addonPath = args.addon or _find_addon_package(args.search_dir, args.allow_name_mismatch)
+		addonPath = (args.addon or _find_addon_package(args.search_dir, args.allow_name_mismatch)).resolve()
 		updateManifest = build_update_manifest(
 			addonPath=addonPath,
 			urlTemplate=args.url_template,
 			channel=args.channel,
 			allowNameMismatch=args.allow_name_mismatch,
 		)
-		outputPath = args.output.resolve()
+		outputPath = _resolve_output_path(args.output, addonPath)
 		outputPath.parent.mkdir(parents=True, exist_ok=True)
 		outputPath.write_text(
 			json.dumps(updateManifest, ensure_ascii=False, indent=2) + "\n",
