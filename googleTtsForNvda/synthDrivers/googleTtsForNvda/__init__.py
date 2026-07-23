@@ -749,6 +749,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			self._speechQueue.clear()
 			self._speechCondition.notify_all()
 		with suppress(Exception):
+			self._bridge.cancel_current()
+		with suppress(Exception):
 			self._player.stop()
 
 	def pause(self, switch: bool, *args: Any, **kwargs: Any) -> None:
@@ -2284,7 +2286,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 			if delay > 0 and cancelEvent.wait(delay):
 				return
 			try:
-				self._bridge.ensure_connection()
+				self._bridge.ensure_connection(cancelEvent=cancelEvent)
+			except CdpCancelled:
+				log.debug("Google TTS bridge eager connection cancelled.")
+				return
 			except Exception:
 				log.debug("Google TTS bridge eager connection failed.", exc_info=True)
 				return

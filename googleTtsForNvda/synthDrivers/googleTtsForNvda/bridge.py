@@ -806,7 +806,7 @@ class BrowserProcessManager:
 		cancelEvent: threading.Event | None = None,
 	) -> tuple[int, int]:
 		for usePersistentProfile in (True, False):
-			profileDir = self._get_browser_profile_dir(browserRuntime, usePersistentProfile)
+			profileDir = self._get_browser_profile_dir(browserRuntime, usePersistentProfile, cancelEvent)
 			devToolsFile = profileDir / "DevToolsActivePort"
 			try:
 				devToolsFile.unlink()
@@ -991,16 +991,23 @@ class BrowserProcessManager:
 			self._serverPort = None
 			self._release_chrome_profile()
 
-	def _get_browser_profile_dir(self, runtime: str, usePersistentProfile: bool = True) -> Path:
+	def _get_browser_profile_dir(
+		self,
+		runtime: str,
+		usePersistentProfile: bool = True,
+		cancelEvent: threading.Event | None = None,
+	) -> Path:
 		runtime = _normalize_browser_runtime(runtime)
 		if self._profileDir is not None:
 			if self._profileRuntime == runtime:
 				self._profileDir.mkdir(parents=True, exist_ok=True)
 				return self._profileDir
 			self._release_chrome_profile()
+		_raise_if_cancelled(cancelEvent)
 		root = self._browser_profile_root(runtime)
 		root.mkdir(parents=True, exist_ok=True)
-		self._cleanup_old_browser_profiles(root, runtime)
+		self._cleanup_old_browser_profiles(root, runtime, cancelEvent)
+		_raise_if_cancelled(cancelEvent)
 		if usePersistentProfile:
 			profileDir = root / PERSISTENT_PROFILE_DIR_NAME
 		else:
@@ -1034,9 +1041,15 @@ class BrowserProcessManager:
 			return BRAVE_PROFILE_DIR_NAME
 		return CHROME_PROFILE_DIR_NAME
 
-	def _cleanup_old_browser_profiles(self, root: Path, runtime: str) -> None:
+	def _cleanup_old_browser_profiles(
+		self,
+		root: Path,
+		runtime: str,
+		cancelEvent: threading.Event | None = None,
+	) -> None:
 		cutoff = time.time() - 2 * 24 * 60 * 60
 		for child in root.iterdir():
+			_raise_if_cancelled(cancelEvent)
 			if not child.is_dir() or not child.name.startswith("session-"):
 				continue
 			try:
@@ -1051,6 +1064,7 @@ class BrowserProcessManager:
 			try:
 				totalSize = 0
 				for candidate in persistent.rglob("*"):
+					_raise_if_cancelled(cancelEvent)
 					if not candidate.is_file():
 						continue
 					totalSize += candidate.stat().st_size
@@ -1308,10 +1322,10 @@ class WasmTtsEngineBridge:
 		self._stopLock = threading.Lock()
 		self._runtimeBusy = False
 
-	def enable_cdp_domains(self) -> None:
-		self._cdp.request("Runtime.enable", timeout=15)
-		self._cdp.request("Page.enable", timeout=15)
-		self._cdp.request("Runtime.addBinding", {"name": BINDING_NAME}, timeout=15)
+	def enable_cdp_domains(self, cancelEvent: threading.Event | None = None) -> None:
+		self._cdp.request("Runtime.enable", timeout=15, cancelEvent=cancelEvent)
+		self._cdp.request("Page.enable", timeout=15, cancelEvent=cancelEvent)
+		self._cdp.request("Runtime.addBinding", {"name": BINDING_NAME}, timeout=15, cancelEvent=cancelEvent)
 
 	def wait_until_ready(self, cancelEvent: threading.Event | None = None) -> None:
 		expression = """
@@ -1578,8 +1592,9 @@ class ChromeTtsBridge:
 	def _serverPort(self) -> int | None:
 		return self._process_manager.server_port
 
-	def ensure_connection(self) -> None:
+	def ensure_connection(self, cancelEvent: threading.Event | None = None) -> None:
 		with self._lock:
+			_raise_if_cancelled(cancelEvent)
 			if self._cdp_client.is_connected():
 				return
 			skipRuntimes: set[str] = set()
@@ -1587,12 +1602,13 @@ class ChromeTtsBridge:
 				runtime: str | None = None
 				try:
 					wsUrl = self._process_manager.start_and_get_websocket_url(
+						cancelEvent=cancelEvent,
 						skipRuntimes=skipRuntimes,
 					)
 					runtime = self._process_manager.profile_runtime
 					self._cdp_client.connect(wsUrl)
-					self._engine.enable_cdp_domains()
-					self._engine.wait_until_ready()
+					self._engine.enable_cdp_domains(cancelEvent=cancelEvent)
+					self._engine.wait_until_ready(cancelEvent=cancelEvent)
 					return
 				except CdpCancelled:
 					self._cdp_client.close()
@@ -1611,7 +1627,7 @@ class ChromeTtsBridge:
 					raise
 
 	def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
-		self.ensure_connection()
+		self.ensure_connection(cancelEvent=cancelEvent)
 		return self._engine.preload_voice(options, cancelEvent=cancelEvent)
 
 	def speak(
@@ -1623,7 +1639,7 @@ class ChromeTtsBridge:
 		onMark: MarkCallback | None = None,
 		segments: list[str] | None = None,
 	) -> dict[str, Any]:
-		self.ensure_connection()
+		self.ensure_connection(cancelEvent=cancelEvent)
 		return self._engine.speak(
 			text,
 			options,
