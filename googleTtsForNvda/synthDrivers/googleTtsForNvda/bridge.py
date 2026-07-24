@@ -63,9 +63,11 @@ EDGE_PROFILE_DIR_NAME = "edgeProfiles"
 BRAVE_PROFILE_DIR_NAME = "braveProfiles"
 PERSISTENT_PROFILE_DIR_NAME = "persistentSession"
 PERSISTENT_PROFILE_MAX_BYTES = 500 * 1024 * 1024
+RUNTIME_MEMORY_STARTUP_GRACE_SECONDS = 90
 RUNTIME_MEMORY_CHECK_INTERVAL_SECONDS = 30
-RUNTIME_PRIVATE_BYTES_RECYCLE_THRESHOLD = 768 * 1024 * 1024
+RUNTIME_PRIVATE_BYTES_RECYCLE_THRESHOLD = 1280 * 1024 * 1024
 RUNTIME_WORKING_SET_BYTES_RECYCLE_THRESHOLD = 1024 * 1024 * 1024
+RUNTIME_MEMORY_RECYCLE_CONFIRMATIONS = 2
 CONFIG_SECTION = "googleTtsForNvda"
 CONFIG_BROWSER_RUNTIME = "browserRuntime"
 CONFIG_AUTO_LANGUAGE_DETECTION = "autoLanguageDetection"
@@ -1742,6 +1744,8 @@ class ChromeTtsBridge:
 		self._recycleUrgent = False
 		self._recycleReason = ""
 		self._lastMemoryCheckAt = 0.0
+		self._runtimeReadyAt = 0.0
+		self._highMemorySampleCount = 0
 
 	@classmethod
 	def find_browser(cls) -> str | None:
@@ -1790,6 +1794,8 @@ class ChromeTtsBridge:
 
 	def _mark_memory_recycle_if_needed_locked(self) -> None:
 		now = time.monotonic()
+		if self._runtimeReadyAt and now - self._runtimeReadyAt < RUNTIME_MEMORY_STARTUP_GRACE_SECONDS:
+			return
 		if now - self._lastMemoryCheckAt < RUNTIME_MEMORY_CHECK_INTERVAL_SECONDS:
 			return
 		self._lastMemoryCheckAt = now
@@ -1802,6 +1808,7 @@ class ChromeTtsBridge:
 			privateBytes <= RUNTIME_PRIVATE_BYTES_RECYCLE_THRESHOLD
 			and workingSetBytes <= RUNTIME_WORKING_SET_BYTES_RECYCLE_THRESHOLD
 		):
+			self._highMemorySampleCount = 0
 			return
 		reason = (
 			"memory threshold exceeded "
@@ -1809,6 +1816,15 @@ class ChromeTtsBridge:
 			f"workingSet={_format_bytes(workingSetBytes)}, "
 			f"processes={usage.get('processCount', 0)})"
 		)
+		self._highMemorySampleCount += 1
+		if self._highMemorySampleCount < RUNTIME_MEMORY_RECYCLE_CONFIRMATIONS:
+			log.debug(
+				"Google TTS Chromium runtime memory above threshold (%d/%d): %s",
+				self._highMemorySampleCount,
+				RUNTIME_MEMORY_RECYCLE_CONFIRMATIONS,
+				reason,
+			)
+			return
 		self._mark_runtime_for_recycle_locked(reason, urgent=False)
 
 	def maybe_recycle_runtime(self, *, allowIdleRecycle: bool = True, checkMemory: bool = True) -> bool:
@@ -1829,7 +1845,9 @@ class ChromeTtsBridge:
 			self._needsRecycle = False
 			self._recycleUrgent = False
 			self._recycleReason = ""
-			self._lastMemoryCheckAt = time.monotonic()
+			self._lastMemoryCheckAt = 0.0
+			self._runtimeReadyAt = 0.0
+			self._highMemorySampleCount = 0
 			return True
 
 	def ensure_connection(self, cancelEvent: threading.Event | None = None) -> None:
@@ -1849,6 +1867,9 @@ class ChromeTtsBridge:
 					self._cdp_client.connect(wsUrl)
 					self._engine.enable_cdp_domains(cancelEvent=cancelEvent)
 					self._engine.wait_until_ready(cancelEvent=cancelEvent)
+					self._runtimeReadyAt = time.monotonic()
+					self._lastMemoryCheckAt = self._runtimeReadyAt
+					self._highMemorySampleCount = 0
 					return
 				except CdpCancelled:
 					self._cdp_client.close()
@@ -1923,6 +1944,9 @@ class ChromeTtsBridge:
 			self._needsRecycle = False
 			self._recycleUrgent = False
 			self._recycleReason = ""
+			self._lastMemoryCheckAt = 0.0
+			self._runtimeReadyAt = 0.0
+			self._highMemorySampleCount = 0
 
 	def _cdp_request(
 		self,

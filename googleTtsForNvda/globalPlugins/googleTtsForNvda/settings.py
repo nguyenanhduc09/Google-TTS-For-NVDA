@@ -171,6 +171,24 @@ def _apply_runtime_after_synth_switch(runtime: str, attempts: int) -> None:
 	wx.CallLater(500, _apply_runtime_after_synth_switch, runtime, attempts + 1)
 
 
+class _SettingsGroup:
+	def __init__(self, parent: wx.Window, parentHelper: guiHelper.BoxSizerHelper, label: str) -> None:
+		self.sizer = wx.StaticBoxSizer(wx.VERTICAL, parent, label=label)
+		self.box = self.sizer.GetStaticBox()
+		self.box.SetName(label)
+		self.helper = guiHelper.BoxSizerHelper(parent, sizer=self.sizer)
+		parentHelper.addItem(self.helper)
+
+	def addLabeledControl(self, labelText: str, wxCtrlClass: type, **kwargs: object) -> wx.Window:
+		return self.helper.addLabeledControl(labelText, wxCtrlClass, **kwargs)
+
+	def addCheckBox(self, label: str) -> wx.CheckBox:
+		return self.helper.addItem(wx.CheckBox(self.box, label=label))
+
+	def addButton(self, label: str) -> wx.Button:
+		return self.helper.addItem(wx.Button(self.box, label=label))
+
+
 class GoogleTtsSettingsPanel(SettingsPanel):
 	title = _("Google TTS For NVDA")
 
@@ -180,6 +198,18 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._browserExecutableAvailability = self._runtimeSnapshot["executableAvailability"]
 		self._edgeWebView2Available = self._runtimeSnapshot["edgeWebView2Available"]
 		self._effectiveRuntime = self._runtimeSnapshot["effectiveRuntime"]
+
+	def _add_settings_group(
+		self,
+		parentHelper: guiHelper.BoxSizerHelper,
+		label: str,
+	) -> _SettingsGroup:
+		return _SettingsGroup(self, parentHelper, label)
+
+	def _refresh_settings_layout(self) -> None:
+		self._settingsSizer.Layout()
+		self.Layout()
+		self._sendLayoutUpdatedEvent()
 
 	def makeSettings(self, settingsSizer: wx.Sizer, *args: object, **kwargs: object) -> None:
 		self._settingsSizer = settingsSizer
@@ -212,15 +242,17 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._preferredLanguageValues = self._enabled_auto_language_candidates()
 
 		helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
+		runtimeGroup = self._add_settings_group(helper, _("Chromium browser runtime"))
 		choices = [self._format_runtime_choice(runtime) for runtime in self._runtimeValues]
-		self.runtimeChoice = helper.addLabeledControl(
+		self.runtimeChoice = runtimeGroup.addLabeledControl(
 			_("Chromium browser &runtime:"),
 			wx.Choice,
 			choices=choices,
 		)
 		self.runtimeChoice.SetSelection(self._runtimeValues.index(self._savedRuntime))
 		self.runtimeChoice.SetName(_("Chromium browser runtime"))
-		self.effectiveRuntimeText = helper.addLabeledControl(
+		self.runtimeChoice.Bind(wx.EVT_CHOICE, self.on_runtime_choice_changed)
+		self.effectiveRuntimeText = runtimeGroup.addLabeledControl(
 			_("Chromium browser runtime status") + ":",
 			wx.TextCtrl,
 			value=self._effective_runtime_message(),
@@ -229,9 +261,9 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self.effectiveRuntimeText.SetName(_("Chromium browser runtime status"))
 		bind_read_only_text_focus_announcement(self.effectiveRuntimeText, minLines=2, maxLines=5)
 
-		self.autoLanguageCheck = helper.addItem(
-			wx.CheckBox(self, label=_("&Use automatic language profiles")),
-		)
+		autoLanguageGroup = self._add_settings_group(helper, _("Automatic language profile"))
+		self._autoLanguageSizer = autoLanguageGroup.sizer
+		self.autoLanguageCheck = autoLanguageGroup.addCheckBox(_("&Use automatic language profiles"))
 		self.autoLanguageCheck.SetName(_("Use automatic language profiles"))
 		self.autoLanguageCheck.SetValue(self._savedAutoLanguageDetection and bool(self._languageValues))
 		self.autoLanguageCheck.Bind(wx.EVT_CHECKBOX, self.on_auto_language_detection_changed)
@@ -243,14 +275,14 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			_format_language_choice(language, self._languageCounts[language])
 			for language in self._preferredLanguageValues
 		]
-		self.preferredLanguageChoice = helper.addLabeledControl(
+		self.preferredLanguageChoice = autoLanguageGroup.addLabeledControl(
 			_("Preferred profile &language:"),
 			wx.Choice,
 			choices=preferredLanguageChoices,
 		)
 		self.preferredLanguageChoice.SetName(_("Preferred profile language"))
 		self._select_preferred_auto_language()
-		self.autoProfileLanguageChoice = helper.addLabeledControl(
+		self.autoProfileLanguageChoice = autoLanguageGroup.addLabeledControl(
 			_("Automatic language &profile:"),
 			wx.Choice,
 			choices=languageChoices,
@@ -260,18 +292,16 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			self.autoProfileLanguageChoice.SetSelection(0)
 		self._selectedAutoLanguageProfileIndex = self.autoProfileLanguageChoice.GetSelection()
 		self.autoProfileLanguageChoice.Bind(wx.EVT_CHOICE, self.on_auto_language_profile_changed)
-		self.autoProfileEnabledCheck = helper.addItem(
-			wx.CheckBox(self, label=_("&Use this language profile")),
-		)
+		self.autoProfileEnabledCheck = autoLanguageGroup.addCheckBox(_("&Use this language profile"))
 		self.autoProfileEnabledCheck.SetName(_("Use this language profile"))
 		self.autoProfileEnabledCheck.Bind(wx.EVT_CHECKBOX, self.on_auto_language_profile_enabled_changed)
-		self.autoProfileVoiceChoice = helper.addLabeledControl(
+		self.autoProfileVoiceChoice = autoLanguageGroup.addLabeledControl(
 			f"{self._variantSettingName}:",
 			wx.Choice,
 			choices=[],
 		)
 		self.autoProfileVoiceChoice.SetName(self._variantSettingName)
-		self.autoProfileRateSlider = helper.addLabeledControl(
+		self.autoProfileRateSlider = autoLanguageGroup.addLabeledControl(
 			f"{self._rateSettingName}:",
 			wx.Slider,
 			value=50,
@@ -280,11 +310,9 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		)
 		self.autoProfileRateSlider.SetName(self._rateSettingName)
 		_bind_slider_page_keys(self.autoProfileRateSlider)
-		self.autoProfileRateBoostCheck = helper.addItem(
-			wx.CheckBox(self, label=self._rateBoostSettingName),
-		)
+		self.autoProfileRateBoostCheck = autoLanguageGroup.addCheckBox(self._rateBoostSettingName)
 		self.autoProfileRateBoostCheck.SetName(self._rateBoostSettingName)
-		self.autoProfilePitchSlider = helper.addLabeledControl(
+		self.autoProfilePitchSlider = autoLanguageGroup.addLabeledControl(
 			f"{self._pitchSettingName}:",
 			wx.Slider,
 			value=50,
@@ -293,7 +321,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		)
 		self.autoProfilePitchSlider.SetName(self._pitchSettingName)
 		_bind_slider_page_keys(self.autoProfilePitchSlider)
-		self.autoProfileVolumeSlider = helper.addLabeledControl(
+		self.autoProfileVolumeSlider = autoLanguageGroup.addLabeledControl(
 			f"{self._volumeSettingName}:",
 			wx.Slider,
 			value=100,
@@ -302,7 +330,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		)
 		self.autoProfileVolumeSlider.SetName(self._volumeSettingName)
 		_bind_slider_page_keys(self.autoProfileVolumeSlider)
-		self.autoProfileCapPitchEdit = helper.addLabeledControl(
+		self.autoProfileCapPitchEdit = autoLanguageGroup.addLabeledControl(
 			f"{self._capPitchSettingName}:",
 			nvdaControls.SelectOnFocusSpinCtrl,
 			min=-100,
@@ -310,17 +338,11 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			initial=30,
 		)
 		self.autoProfileCapPitchEdit.SetName(self._capPitchSettingName)
-		self.autoProfileSayCapCheck = helper.addItem(
-			wx.CheckBox(self, label=self._sayCapSettingName),
-		)
+		self.autoProfileSayCapCheck = autoLanguageGroup.addCheckBox(self._sayCapSettingName)
 		self.autoProfileSayCapCheck.SetName(self._sayCapSettingName.replace("&", ""))
-		self.autoProfileBeepCapsCheck = helper.addItem(
-			wx.CheckBox(self, label=self._beepCapsSettingName),
-		)
+		self.autoProfileBeepCapsCheck = autoLanguageGroup.addCheckBox(self._beepCapsSettingName)
 		self.autoProfileBeepCapsCheck.SetName(self._beepCapsSettingName.replace("&", ""))
-		self.autoProfileSpellingCheck = helper.addItem(
-			wx.CheckBox(self, label=self._spellingSettingName),
-		)
+		self.autoProfileSpellingCheck = autoLanguageGroup.addCheckBox(self._spellingSettingName)
 		self.autoProfileSpellingCheck.SetName(self._spellingSettingName.replace("&", ""))
 		self._autoProfileValueControls = (
 			self.autoProfileVoiceChoice,
@@ -333,8 +355,14 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			self.autoProfileBeepCapsCheck,
 			self.autoProfileSpellingCheck,
 		)
+		self._autoProfileValueLayoutItems = []
+		for control in self._autoProfileValueControls:
+			sizer = control.GetContainingSizer()
+			self._autoProfileValueLayoutItems.append(
+				sizer if sizer is not None and sizer is not self._autoLanguageSizer else control,
+			)
 		self._load_selected_auto_language_profile()
-		self.autoLanguageStatusText = helper.addLabeledControl(
+		self.autoLanguageStatusText = autoLanguageGroup.addLabeledControl(
 			_("Automatic language profiles status") + ":",
 			wx.TextCtrl,
 			value=self._auto_language_status_message(),
@@ -344,15 +372,13 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		bind_read_only_text_focus_announcement(self.autoLanguageStatusText, minLines=2, maxLines=5)
 
 		self._unregisterUpdateStatusListener = None
-		updatesSizer = wx.StaticBoxSizer(wx.VERTICAL, self, label=_("Updates"))
-		updatesHelper = guiHelper.BoxSizerHelper(self, sizer=updatesSizer)
-		self.autoUpdateCheck = updatesHelper.addItem(
-			wx.CheckBox(self, label=_("&Automatically check for add-on updates when NVDA starts")),
-		)
+		self._restoreFocusAfterUpdateCheck = False
+		updatesGroup = self._add_settings_group(helper, _("Updates"))
+		self.autoUpdateCheck = updatesGroup.addCheckBox(_("&Automatically check for add-on updates when NVDA starts"))
 		self.autoUpdateCheck.SetName(_("Automatically check for add-on updates when NVDA starts"))
 		self.autoUpdateCheck.SetValue(updateGui.automatic_update_check_enabled())
 		self.autoUpdateCheck.Bind(wx.EVT_CHECKBOX, self.on_auto_update_check_changed)
-		self.updateFeatureStatusText = updatesHelper.addLabeledControl(
+		self.updateFeatureStatusText = updatesGroup.addLabeledControl(
 			_("Add-on update status") + ":",
 			wx.TextCtrl,
 			value=updateGui.update_status_message(self.autoUpdateCheck.GetValue()),
@@ -360,11 +386,8 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		)
 		self.updateFeatureStatusText.SetName(_("Add-on update status"))
 		bind_read_only_text_focus_announcement(self.updateFeatureStatusText, minLines=2, maxLines=5)
-		self.checkUpdatesButton = updatesHelper.addItem(
-			wx.Button(self, label=_("&Check for updates...")),
-		)
+		self.checkUpdatesButton = updatesGroup.addButton(_("&Check for updates..."))
 		self.checkUpdatesButton.Bind(wx.EVT_BUTTON, self.on_check_for_updates)
-		helper.addItem(updatesHelper)
 		self._unregisterUpdateStatusListener = updateGui.register_update_status_listener(self._refresh_update_controls)
 		self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 		self._refresh_update_controls()
@@ -375,12 +398,14 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 	def postInit(self) -> None:
 		self.runtimeChoice.SetFocus()
 
-	def onSave(self, *args: object, **kwargs: object) -> None:
+	def _selected_runtime_choice(self) -> str:
 		selection = self.runtimeChoice.GetSelection()
 		if selection < 0:
-			selectedRuntime = self._savedRuntime
-		else:
-			selectedRuntime = self._runtimeValues[selection]
+			return self._savedRuntime
+		return self._runtimeValues[selection]
+
+	def onSave(self, *args: object, **kwargs: object) -> None:
+		selectedRuntime = self._selected_runtime_choice()
 		self._store_selected_auto_language_profile(self._selectedAutoLanguageProfileIndex)
 		self._save_auto_language_settings()
 		updateGui.set_automatic_update_check_enabled(self.autoUpdateCheck.GetValue())
@@ -400,6 +425,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 					),
 				)
 				self._select_saved_runtime()
+				self._refresh_runtime_status(self._savedRuntime)
 				return
 			ui.message(
 				_("{runtime} was not found. Keeping the current Google TTS For NVDA Chromium browser runtime setting.").format(
@@ -407,6 +433,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 				),
 			)
 			self._select_saved_runtime()
+			self._refresh_runtime_status(self._savedRuntime)
 			return
 
 		effectiveRuntime = self._effectiveRuntime
@@ -425,19 +452,28 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 			if answer == wx.OK or answer == getattr(wx, "ID_OK", wx.OK):
 				_schedule_runtime_change_after_synth_switch(selectedRuntime, self)
 			self._select_saved_runtime()
+			self._refresh_runtime_status(self._savedRuntime)
 			return
 
 		_save_browser_runtime(selectedRuntime)
 		self._savedRuntime = selectedRuntime
-		self._refresh_runtime_snapshot(self._savedRuntime)
+		self._refresh_runtime_status(self._savedRuntime)
+
+	def on_runtime_choice_changed(self, evt: wx.CommandEvent) -> None:
+		self._refresh_runtime_status(self._selected_runtime_choice())
+
+	def _refresh_runtime_status(self, runtime: str) -> None:
+		self._refresh_runtime_snapshot(runtime)
 		self.effectiveRuntimeText.SetValue(self._effective_runtime_message())
 		resize_read_only_text_for_content(self.effectiveRuntimeText, minLines=2, maxLines=5)
-		self.Layout()
-		self._settingsSizer.Layout()
+		self._refresh_settings_layout()
 
 	def on_check_for_updates(self, evt: wx.CommandEvent) -> None:
+		self._restoreFocusAfterUpdateCheck = True
 		if updateGui.start_manual_update_check(self):
 			self._refresh_update_controls()
+		else:
+			self._restoreFocusAfterUpdateCheck = False
 
 	def on_auto_update_check_changed(self, evt: wx.CommandEvent) -> None:
 		self._refresh_update_controls()
@@ -445,12 +481,24 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 	def _refresh_update_controls(self) -> None:
 		try:
 			autoCheckEnabled = self.autoUpdateCheck.GetValue()
+			updateInProgress = updateGui.update_check_in_progress()
 			self.updateFeatureStatusText.SetValue(updateGui.update_status_message(autoCheckEnabled))
 			resize_read_only_text_for_content(self.updateFeatureStatusText, minLines=2, maxLines=5)
-			self.checkUpdatesButton.Enable(not updateGui.update_check_in_progress())
-			self.Layout()
-			self._settingsSizer.Layout()
+			if updateInProgress and self.checkUpdatesButton.HasFocus():
+				self.updateFeatureStatusText.SetFocus()
+			self.checkUpdatesButton.Enable(not updateInProgress)
+			self._refresh_settings_layout()
+			if not updateInProgress and self._restoreFocusAfterUpdateCheck:
+				wx.CallAfter(self._restore_update_check_focus)
 		except (AttributeError, RuntimeError):
+			return
+
+	def _restore_update_check_focus(self) -> None:
+		self._restoreFocusAfterUpdateCheck = False
+		try:
+			if self.checkUpdatesButton.IsEnabled() and self.checkUpdatesButton.IsShown():
+				self.checkUpdatesButton.SetFocus()
+		except RuntimeError:
 			return
 
 	def _on_destroy(self, evt: wx.WindowDestroyEvent) -> None:
@@ -467,7 +515,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		return _("{runtime} ({status})").format(runtime=_runtime_label(runtime), status=status)
 
 	def _effective_runtime_message(self) -> str:
-		selectedRuntime = self._savedRuntime
+		selectedRuntime = self._runtimeSnapshot["selectedRuntime"]
 		selectedLabel = _runtime_label(selectedRuntime)
 		selectedExecutableStatus = _("found") if self._browserExecutableAvailability.get(selectedRuntime, False) else _("not found")
 		if selectedRuntime == browserBridge.BROWSER_RUNTIME_EDGE:
@@ -819,27 +867,21 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 		self._refresh_auto_language_profile_value_controls()
 		self.autoLanguageStatusText.SetValue(self._auto_language_status_message())
 		resize_read_only_text_for_content(self.autoLanguageStatusText, minLines=2, maxLines=5)
-		self.Layout()
-		self._settingsSizer.Layout()
+		self._refresh_settings_layout()
 		if not available:
 			self.autoLanguageCheck.SetValue(False)
 
 	def _refresh_auto_language_profile_value_controls(self) -> None:
-		if not hasattr(self, "_autoProfileValueControls"):
+		if not hasattr(self, "_autoProfileValueLayoutItems"):
 			return
 		show = (
 			bool(self._languageValues)
 			and self.autoLanguageCheck.GetValue()
 			and self.autoProfileEnabledCheck.GetValue()
 		)
-		for control in self._autoProfileValueControls:
-			sizer = control.GetContainingSizer()
-			if sizer is not None and sizer is not self._settingsSizer:
-				self._settingsSizer.Show(sizer, show, recursive=True)
-			else:
-				self._settingsSizer.Show(control, show, recursive=True)
-		self.Layout()
-		self._settingsSizer.Layout()
+		for item in self._autoProfileValueLayoutItems:
+			self._autoLanguageSizer.Show(item, show, recursive=True)
+		self._autoLanguageSizer.Layout()
 
 	def _save_auto_language_settings(self) -> None:
 		wasEnabled = self._configured_auto_language_detection()
