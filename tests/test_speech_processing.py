@@ -259,6 +259,48 @@ class TextSegmenterTests(unittest.TestCase):
             any(len(segment) > self.processing.FAST_SOFT_PHRASE_SEGMENT_MAX_CHARS for segment in segments[1:])
         )
 
+    def test_fast_first_punctuation_free_intact_ceiling(self) -> None:
+        """Verify sentences under the intact ceiling remain a single segment."""
+        text_93 = "Một nghiên cứu gần đây cho thấy rằng việc tối ưu hóa hiệu năng mang lại kết quả rất khả quan."
+        segments = list(self.segmenter.iter_text_segments_for_latency(text_93, True))
+        self.assertEqual([text_93], segments)
+
+        en_text = (
+            "This ordinary instructional sentence intentionally has no punctuation and stays whole for smooth prosody"
+        )
+        en_segments = list(self.segmenter.iter_text_segments_for_latency(en_text, True))
+        self.assertEqual([en_text], en_segments)
+
+    def test_trailing_orphan_protection_across_scripts(self) -> None:
+        """Verify that segments never leave an orphan remainder below minimum threshold."""
+        long_text = (
+            "Khi chúng tôi tiến hành thử nghiệm cấu hình âm thanh mới thì toàn bộ kết quả "
+            "đo đạc thực tế trên hệ thống đều phản hồi rất tích cực và hoạt động vô cùng ổn định."
+        )
+        segments = list(self.segmenter.iter_text_segments_for_latency(long_text, True))
+        self.assertGreaterEqual(len(segments), 2)
+        for segment in segments:
+            self.assertGreaterEqual(len(segment), self.processing.MIN_ORPHAN_SPACE_CHARS)
+
+    def test_fast_first_early_soft_break_preference(self) -> None:
+        """Verify that an early comma produces a faster, natural first segment."""
+        text = "Khi chúng tôi tiến hành thử nghiệm cấu hình âm thanh mới, kết quả đo đạc thực tế phản hồi rất tích cực."
+        segments = list(self.segmenter.iter_text_segments_for_latency(text, True))
+        self.assertEqual(2, len(segments))
+        self.assertTrue(segments[0].endswith(","))
+        self.assertLessEqual(len(segments[0]), self.processing.FAST_FIRST_PREFERRED_SOFT_CHARS + 5)
+        self.assertGreaterEqual(len(segments[1]), self.processing.MIN_ORPHAN_SPACE_CHARS)
+
+    def test_cjk_punctuation_free_intact_ceiling(self) -> None:
+        """Verify CJK text under the intact ceiling stays whole without orphan tail."""
+        cjk_text = (
+            "这是一段专门用于测试无标点符号文本在自适应分段算法下保持完整朗读而不产生孤立片段的中文句子内容并且测试语句长度"
+            * 2
+        )
+        cjk_85 = cjk_text[:85]
+        segments = list(self.segmenter.iter_text_segments_for_latency(cjk_85, True))
+        self.assertEqual([cjk_85], segments)
+
     def test_corpus_schema(self) -> None:
         self.assertEqual(SUPPORTED_SCHEMA_VERSION, self.corpus.get("schemaVersion"))
         self.assertIsInstance(self.corpus.get("source"), dict)

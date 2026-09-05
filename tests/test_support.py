@@ -181,6 +181,7 @@ def make_fake_bridge(
     """Build a ChromeTtsBridge using fake internals (no real browser)."""
     b = bridge_module.ChromeTtsBridge.__new__(bridge_module.ChromeTtsBridge)
     b._lock = threading.RLock()
+    b._connectionLock = threading.Lock()
     b._cdp_client = cdp_client or FakeCdpClient()
     b._process_manager = process_manager or FakeProcessManager()
     b._engine = engine or FakeEngine()

@@ -245,5 +245,83 @@ class RuntimeBusyLockTests(unittest.TestCase):
         self.assertFalse(engine.runtime_busy)
 
 
+# ---------------------------------------------------------------------------
+# Test 4: ensure_connection cancellation does not terminate process manager
+# ---------------------------------------------------------------------------
+
+
+class EnsureConnectionCancellationTests(unittest.TestCase):
+    """Verify that cancellation during ensure_connection() does not kill the browser process."""
+
+    def test_cancelled_connection_does_not_terminate_process_manager(self) -> None:
+        """When ensure_connection() is cancelled, the process manager is NOT terminated."""
+        pm = _FakeProcessManager(urls=["ws://ok:1"])
+        cdp = _FakeCdpClient()
+        bridge_instance = _make_bridge(cdp_client=cdp, process_manager=pm)
+
+        cancel = threading.Event()
+        cancel.set()
+
+        with self.assertRaises(bridge.CdpCancelled):
+            bridge_instance.ensure_connection(cancelEvent=cancel)
+
+        self.assertFalse(pm._terminated, "Process manager should not be terminated on cancellation")
+
+    def test_concurrent_ensure_connection_when_first_caller_is_cancelled(self) -> None:
+        """When a concurrent warmup caller is cancelled, the speech caller still connects cleanly."""
+        pm = _FakeProcessManager(urls=["ws://ok:1"])
+        cdp = _FakeCdpClient()
+        bridge_instance = _make_bridge(cdp_client=cdp, process_manager=pm)
+
+        first_in = threading.Event()
+        allow_first_proceed = threading.Event()
+        cancel_first = threading.Event()
+
+        original_start = pm.start_and_get_websocket_url
+
+        def slow_start(*args, **kwargs):
+            first_in.set()
+            allow_first_proceed.wait(timeout=5)
+            cancel = kwargs.get("cancelEvent")
+            if cancel is not None and cancel.is_set():
+                raise bridge.CdpCancelled()
+            return original_start(*args, **kwargs)
+
+        pm.start_and_get_websocket_url = slow_start
+
+        errors: list[Exception] = []
+
+        def run_warmup():
+            try:
+                bridge_instance.ensure_connection(cancelEvent=cancel_first)
+            except Exception as e:
+                errors.append(e)
+
+        speech_connected = threading.Event()
+
+        def run_speech():
+            first_in.wait(timeout=5)
+            # Cancel the warmup caller
+            cancel_first.set()
+            allow_first_proceed.set()
+            bridge_instance.ensure_connection()
+            speech_connected.set()
+
+        t1 = threading.Thread(target=run_warmup)
+        t2 = threading.Thread(target=run_speech)
+        t1.start()
+        t2.start()
+
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        self.assertFalse(t1.is_alive())
+        self.assertFalse(t2.is_alive())
+        self.assertTrue(speech_connected.is_set())
+        self.assertTrue(cdp.is_connected())
+        self.assertFalse(pm._terminated, "Process manager should not be terminated by cancelled warmup")
+        self.assertTrue(any(isinstance(e, bridge.CdpCancelled) for e in errors))
+
+
 if __name__ == "__main__":
     unittest.main()

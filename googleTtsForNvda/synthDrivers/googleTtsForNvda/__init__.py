@@ -294,7 +294,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         self._pauseMode = _PAUSE_MODE_DO_NOT_SHORTEN
         self._warmupThread: threading.Thread | None = None
         self._warmupCancelEvent = threading.Event()
-        self._warm_current_voice_async()
+        self._warm_current_voice_async(delay=_PRELOAD_RESUME_DELAY_SECONDS)
 
     def _prompt_for_voice_install(self, message: str | None = None) -> None:
         # Fallback for direct synth-driver loads when the global plugin did

@@ -55,6 +55,12 @@ FORCED_SEGMENT_HARD_MAX_CHARS = 320
 NO_SPACE_SCRIPT_SIGNAL_MIN_CHARS = 12
 NO_SPACE_SCRIPT_SIGNAL_MIN_RATIO = 0.55
 NO_SPACE_SCRIPT_COMBINING_LOOKAHEAD = 8
+MIN_ORPHAN_SPACE_CHARS = 24
+MIN_ORPHAN_NO_SPACE_CHARS = 16
+FAST_FIRST_PUNCTUATION_FREE_TRIGGER_CHARS = 115
+FAST_FIRST_PUNCTUATION_FREE_NO_SPACE_TRIGGER_CHARS = 96
+FAST_FIRST_PREFERRED_SOFT_CHARS = 55
+FAST_FIRST_PREFERRED_WHITESPACE_CHARS = 68
 
 SOFT_BREAK_CHARS = (
     ",;:\uff0c\u3001\uff1b\uff1a\u2014\u2013"
@@ -837,6 +843,11 @@ class TextSegmenter:
             remaining = remaining[cut:].strip()
             firstYield = False
 
+    def _min_orphan_chars(self, text: str) -> int:
+        if self._no_space_script_segment_limit(text, SOFT_PHRASE_SEGMENT_MAX_CHARS) is not None:
+            return MIN_ORPHAN_NO_SPACE_CHARS
+        return MIN_ORPHAN_SPACE_CHARS
+
     def _iter_soft_phrase_segments(self, text: str, fastFirstSegment: bool) -> Iterator[str]:
         remaining = text.strip()
         firstSegment = fastFirstSegment
@@ -868,33 +879,50 @@ class TextSegmenter:
                     break
             if noSpaceLimit is not None and len(remaining) <= noSpaceLimit:
                 break
+            isNoSpace = (
+                noSpaceLimit is not None
+                or self._no_space_script_segment_limit(remaining, SOFT_PHRASE_SEGMENT_MAX_CHARS) is not None
+            )
+            minOrphan = MIN_ORPHAN_NO_SPACE_CHARS if isNoSpace else MIN_ORPHAN_SPACE_CHARS
+            puncFreeTrigger = (
+                FAST_FIRST_PUNCTUATION_FREE_NO_SPACE_TRIGGER_CHARS
+                if isNoSpace
+                else FAST_FIRST_PUNCTUATION_FREE_TRIGGER_CHARS
+            )
             fastFirstCut = (
                 firstSegment
                 and len(remaining) > FAST_FIRST_SEGMENT_TRIGGER_CHARS
                 and not self.looks_like_url_token(remaining)
             )
             if noSpaceLimit is not None:
-                cut = self._find_no_space_script_cut(remaining, noSpaceLimit)
+                cut = self._find_no_space_script_cut(remaining, noSpaceLimit, minOrphanChars=minOrphan)
             elif fastFirstCut:
-                cut = self._find_soft_phrase_cut(remaining, True)
+                cut = self._find_soft_phrase_cut(remaining, True, minOrphanChars=minOrphan)
                 if cut is None:
+                    if len(remaining) <= puncFreeTrigger:
+                        break
                     cut = self._find_whitespace_cut(
                         remaining,
                         FAST_SOFT_PHRASE_SEGMENT_MIN_CHARS,
                         FAST_SOFT_PHRASE_SEGMENT_MAX_CHARS,
                         FAST_SOFT_PHRASE_SEGMENT_LOOKAHEAD,
+                        minOrphanChars=minOrphan,
+                        preferredTarget=FAST_FIRST_PREFERRED_WHITESPACE_CHARS,
                     )
-                if cut is None:
+                if cut is None and len(remaining) > puncFreeTrigger:
                     cut = self._find_forced_latency_cut(remaining, FAST_SOFT_PHRASE_SEGMENT_MAX_CHARS)
             else:
-                cut = self._find_soft_phrase_cut(remaining, False)
+                cut = self._find_soft_phrase_cut(remaining, False, minOrphanChars=minOrphan)
                 if cut is None:
                     cut = self._find_whitespace_cut(
                         remaining,
                         SOFT_PHRASE_SEGMENT_MIN_CHARS,
                         SOFT_PHRASE_SEGMENT_MAX_CHARS,
                         SOFT_PHRASE_SEGMENT_LOOKAHEAD,
+                        minOrphanChars=minOrphan,
                     )
+                if cut is None and len(remaining) > SOFT_PHRASE_SEGMENT_MAX_CHARS:
+                    cut = self._find_forced_latency_cut(remaining, SOFT_PHRASE_SEGMENT_MAX_CHARS)
             if cut is None:
                 cut = min(len(remaining), FORCED_SEGMENT_HARD_MAX_CHARS)
             segment = remaining[:cut].strip()
@@ -909,35 +937,77 @@ class TextSegmenter:
         if remaining:
             yield remaining
 
-    def _find_soft_phrase_cut(self, text: str, fastFirstSegment: bool = False) -> int | None:
+    def _find_soft_phrase_cut(
+        self,
+        text: str,
+        fastFirstSegment: bool = False,
+        minOrphanChars: int = 0,
+    ) -> int | None:
         if fastFirstSegment:
             minLength = min(len(text), FAST_SOFT_PHRASE_SEGMENT_MIN_CHARS)
             maxLength = min(len(text), FAST_SOFT_PHRASE_SEGMENT_MAX_CHARS)
+            preferred = min(len(text), FAST_FIRST_PREFERRED_SOFT_CHARS)
             lookahead = FAST_SOFT_PHRASE_SEGMENT_LOOKAHEAD
-        else:
-            minLength = min(len(text), SOFT_PHRASE_SEGMENT_MIN_CHARS)
-            maxLength = min(len(text), SOFT_PHRASE_SEGMENT_MAX_CHARS)
-            lookahead = SOFT_PHRASE_SEGMENT_LOOKAHEAD
+            if preferred > minLength:
+                for index in range(preferred, minLength - 1, -1):
+                    if (
+                        not minOrphanChars or len(text) - index >= minOrphanChars
+                    ) and self._is_contextual_soft_phrase_cut(text, index):
+                        return index
+            for index in range(maxLength, preferred, -1):
+                if (not minOrphanChars or len(text) - index >= minOrphanChars) and self._is_contextual_soft_phrase_cut(
+                    text, index
+                ):
+                    return index
+            lookaheadEnd = min(len(text), maxLength + lookahead)
+            for index in range(maxLength, lookaheadEnd):
+                candidate = index + 1
+                if (
+                    not minOrphanChars or len(text) - candidate >= minOrphanChars
+                ) and self._is_contextual_soft_phrase_cut(text, candidate):
+                    return candidate
+            return None
+        minLength = min(len(text), SOFT_PHRASE_SEGMENT_MIN_CHARS)
+        maxLength = min(len(text), SOFT_PHRASE_SEGMENT_MAX_CHARS)
+        lookahead = SOFT_PHRASE_SEGMENT_LOOKAHEAD
         for index in range(maxLength, minLength - 1, -1):
-            if self._is_contextual_soft_phrase_cut(text, index):
+            if (not minOrphanChars or len(text) - index >= minOrphanChars) and self._is_contextual_soft_phrase_cut(
+                text, index
+            ):
                 return index
         lookaheadEnd = min(len(text), maxLength + lookahead)
         for index in range(maxLength, lookaheadEnd):
-            if self._is_contextual_soft_phrase_cut(text, index + 1):
-                return index + 1
+            candidate = index + 1
+            if (not minOrphanChars or len(text) - candidate >= minOrphanChars) and self._is_contextual_soft_phrase_cut(
+                text, candidate
+            ):
+                return candidate
         return None
 
-    def _find_whitespace_cut(self, text: str, minLength: int, maxLength: int, lookahead: int) -> int | None:
+    def _find_whitespace_cut(
+        self,
+        text: str,
+        minLength: int,
+        maxLength: int,
+        lookahead: int,
+        minOrphanChars: int = 0,
+        preferredTarget: int | None = None,
+    ) -> int | None:
         minLength = min(len(text), minLength)
         maxLength = min(len(text), maxLength)
-        for index in range(maxLength, minLength - 1, -1):
-            if text[index - 1].isspace():
+        target = min(maxLength, preferredTarget) if preferredTarget is not None else maxLength
+        for index in range(target, minLength - 1, -1):
+            if text[index - 1].isspace() and (not minOrphanChars or len(text) - index >= minOrphanChars):
                 return index
+        if target < maxLength:
+            for index in range(target + 1, maxLength + 1):
+                if text[index - 1].isspace() and (not minOrphanChars or len(text) - index >= minOrphanChars):
+                    return index
         lookaheadEnd = min(len(text), maxLength + lookahead)
         for index in range(maxLength, lookaheadEnd):
-            if text[index].isspace():
+            if text[index].isspace() and (not minOrphanChars or len(text) - (index + 1) >= minOrphanChars):
                 return index
-        return self._find_no_space_script_cut(text, maxLength)
+        return self._find_no_space_script_cut(text, maxLength, minOrphanChars=minOrphanChars)
 
     def _find_forced_latency_cut(self, text: str, maxLength: int) -> int:
         if len(text) <= maxLength:
@@ -970,19 +1040,29 @@ class TextSegmenter:
                     return index
         return maxLength
 
-    def _find_no_space_script_cut(self, text: str, maxLength: int) -> int | None:
+    def _find_no_space_script_cut(
+        self,
+        text: str,
+        maxLength: int,
+        minOrphanChars: int = 0,
+    ) -> int | None:
         segmentLimit = self._no_space_script_segment_limit(text, maxLength)
         if segmentLimit is None:
             return None
         target = min(len(text), maxLength, max(FORCED_SEGMENT_MIN_CHARS, segmentLimit))
         for index in range(target, FORCED_SEGMENT_MIN_CHARS - 1, -1):
-            if self._is_contextual_soft_phrase_cut(text, index):
+            if (not minOrphanChars or len(text) - index >= minOrphanChars) and self._is_contextual_soft_phrase_cut(
+                text, index
+            ):
                 return index
-        return self._extend_cut_over_combining_marks(
+        cut = self._extend_cut_over_combining_marks(
             text,
             target,
             min(len(text), maxLength + NO_SPACE_SCRIPT_COMBINING_LOOKAHEAD),
         )
+        if minOrphanChars and len(text) - cut < minOrphanChars and len(text) <= maxLength:
+            return None
+        return cut
 
     def _no_space_script_segment_limit(self, text: str, maxLength: int) -> int | None:
         sample = text[: min(len(text), maxLength)]
