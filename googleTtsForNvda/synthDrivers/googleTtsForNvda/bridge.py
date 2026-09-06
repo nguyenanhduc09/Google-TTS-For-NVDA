@@ -1996,6 +1996,10 @@ class ChromeTtsBridge:
             self._highMemorySampleCount = 0
             return True
 
+    def is_connected(self) -> bool:
+        with self._lock:
+            return self._cdp_client.is_connected()
+
     def safe_for_standby_release(self) -> bool:
         """Return whether standby may safely keep and reuse this runtime."""
         with self._lock:

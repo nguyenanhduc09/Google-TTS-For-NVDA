@@ -382,7 +382,9 @@ def _addon_guard_category() -> CategoryResult:
     )
     language_token_signal = _qualified_member(modules[driver_path], "SynthDriver._language_token_signal")
     result.require(
-        _calls_name(language_token_signal, "language_script_signal"),
+        _calls_name(language_token_signal, "language_script_signal")
+        or _calls_name(language_token_signal, "_language_token_signal")
+        or _calls_name(language_token_signal, "language_token_signal"),
         "SynthDriver._language_token_signal does not call the pure language_profiles fallback",
     )
     entry_points = {

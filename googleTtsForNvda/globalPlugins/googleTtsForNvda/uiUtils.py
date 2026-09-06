@@ -140,3 +140,36 @@ def open_synthesizer_dialog(
             parent or gui.mainFrame,
         )
         return False
+
+
+def show_runtime_error_dialog(
+    message: str | None = None,
+    parent: wx.Window | None = None,
+    title: str | None = None,
+    delayMs: int = 0,
+) -> None:
+    """Show a standardized modal error dialog for Google TTS runtime or speech failures."""
+    import gui
+    from logHandler import log
+
+    dialogTitle = title or _("Google TTS For NVDA")
+    dialogMessage = message or _("Google TTS For NVDA could not start speech in the Chromium browser runtime.")
+
+    def _display() -> None:
+        try:
+            gui.messageBox(
+                dialogMessage,
+                dialogTitle,
+                wx.OK | wx.ICON_ERROR,
+                parent or gui.mainFrame,
+            )
+        except Exception:
+            log.exception("Could not show Google TTS runtime error dialog.", exc_info=True)
+
+    if delayMs > 0:
+        try:
+            wx.CallLater(delayMs, _display)
+            return
+        except Exception:
+            pass
+    _display()

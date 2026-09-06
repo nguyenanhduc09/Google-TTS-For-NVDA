@@ -271,6 +271,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         self._speechQueue: deque[_SpeechRequest] = deque()
         self._activeCancelEvent: threading.Event | None = None
         self._shutdownEvent = threading.Event()
+        self._fallbackTriggered = False
+        self._consecutiveRuntimeErrors = 0
         self._cacheLock = threading.RLock()
         self._shortAudioCache: OrderedDict[tuple[Any, ...], bytes] = OrderedDict()
         self._shortAudioCacheBytes = 0
@@ -374,32 +376,86 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
     def _show_engine_library_error(self, error: EngineLibraryError) -> None:
         try:
-            import gui
-
             log.error("Google TTS WASM TTS Engine error: %s", error.technicalDetail)
-            gui.messageBox(
-                self._engine_library_error_message(error),
-                _("Google TTS For NVDA"),
-                wx.OK | wx.ICON_ERROR,
-                gui.mainFrame,
-            )
+            from globalPlugins.googleTtsForNvda.uiUtils import show_runtime_error_dialog
+
+            show_runtime_error_dialog(self._engine_library_error_message(error))
         except Exception:
-            log.exception("Could not show Google TTS WASM TTS Engine error.", exc_info=True)
+            try:
+                import gui
+
+                gui.messageBox(
+                    self._engine_library_error_message(error),
+                    _("Google TTS For NVDA"),
+                    wx.OK | wx.ICON_ERROR,
+                    gui.mainFrame,
+                )
+            except Exception:
+                log.exception("Could not show Google TTS WASM TTS Engine error.", exc_info=True)
 
     def _show_missing_chrome_error(self) -> None:
+        message = _(
+            "No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
+        )
         try:
-            import gui
+            from globalPlugins.googleTtsForNvda.uiUtils import show_runtime_error_dialog
 
-            gui.messageBox(
-                _(
-                    "No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
-                ),
-                _("Google TTS For NVDA"),
-                wx.OK | wx.ICON_ERROR,
-                gui.mainFrame,
-            )
+            show_runtime_error_dialog(message)
         except Exception:
-            log.exception("Could not show supported browser missing message.", exc_info=True)
+            try:
+                import gui
+
+                gui.messageBox(
+                    message,
+                    _("Google TTS For NVDA"),
+                    wx.OK | wx.ICON_ERROR,
+                    gui.mainFrame,
+                )
+            except Exception:
+                log.exception("Could not show supported browser missing message.", exc_info=True)
+
+    def _trigger_fatal_fallback(self, message: str) -> None:
+        if self._fallbackTriggered or self._shutdownEvent.is_set():
+            return
+        self._fallbackTriggered = True
+        log.error("Google TTS encountered a fatal runtime error: %s", message)
+        with self._speechCondition:
+            self._speechQueue.clear()
+        try:
+            self.cancel()
+        except Exception:
+            log.debug("Could not cancel Google TTS speech before fallback.", exc_info=True)
+
+        try:
+            import synthDriverHandler
+
+            synthDriverHandler.findAndSetNextSynth(self.name)
+        except Exception:
+            log.exception("Could not switch to NVDA fallback synthesizer.", exc_info=True)
+
+        try:
+            from globalPlugins.googleTtsForNvda.uiUtils import show_runtime_error_dialog
+
+            show_runtime_error_dialog(message=message, delayMs=150)
+        except Exception:
+
+            def show_dialog() -> None:
+                try:
+                    import gui
+
+                    gui.messageBox(
+                        message or _("Google TTS For NVDA could not start speech in the Chromium browser runtime."),
+                        _("Google TTS For NVDA"),
+                        wx.OK | wx.ICON_ERROR,
+                        gui.mainFrame,
+                    )
+                except Exception:
+                    log.exception("Could not show Google TTS fatal error dialog.", exc_info=True)
+
+            try:
+                wx.CallLater(150, show_dialog)
+            except Exception:
+                show_dialog()
 
     def terminate(self, *args: Any, **kwargs: Any) -> None:
         with suppress(Exception):
@@ -962,16 +1018,28 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 self._feed_silence(int(_END_OF_UTTERANCE_PAUSE_MS * _end_of_utterance_rate_factor(rate)))
             if not cancelEvent.is_set():
                 synthDoneSpeaking.notify(synth=self)
+                self._consecutiveRuntimeErrors = 0
         except CdpCancelled:
             log.debug("Google TTS speech cancelled.")
         except Exception as exc:
             technicalDetail = str(getattr(exc, "technicalDetail", "") or "")
             if technicalDetail:
-                log.exception("Google TTS speech failed: %s", technicalDetail, exc_info=True)
+                log.exception(f"Google TTS speech failed: {technicalDetail}")
             else:
-                log.exception("Google TTS speech failed.", exc_info=True)
+                log.exception("Google TTS speech failed.")
             if not cancelEvent.is_set():
                 synthDoneSpeaking.notify(synth=self)
+            if not cancelEvent.is_set() and not self._shutdownEvent.is_set() and not self._fallbackTriggered:
+                self._consecutiveRuntimeErrors += 1
+                friendlyMessage = str(exc).strip() or _(
+                    "Google TTS For NVDA could not start speech in the Chromium browser runtime."
+                )
+                unrecoverable = not ChromeTtsBridge.browser_runtime_available() or self._consecutiveRuntimeErrors >= 2
+                if unrecoverable:
+                    try:
+                        wx.CallAfter(self._trigger_fatal_fallback, friendlyMessage)
+                    except Exception:
+                        self._trigger_fatal_fallback(friendlyMessage)
         finally:
             if not cancelEvent.is_set():
                 self._maybe_recycle_bridge_after_request()
@@ -1944,8 +2012,17 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             except CdpCancelled:
                 log.debug("Google TTS bridge eager connection cancelled.")
                 return
-            except Exception:
+            except Exception as exc:
                 log.debug("Google TTS bridge eager connection failed.", exc_info=True)
+                if not cancelEvent.is_set() and not self._shutdownEvent.is_set() and not self._fallbackTriggered:
+                    if not ChromeTtsBridge.browser_runtime_available():
+                        friendlyMessage = str(exc).strip() or _(
+                            "Google TTS For NVDA could not start speech in the Chromium browser runtime."
+                        )
+                        try:
+                            wx.CallAfter(self._trigger_fatal_fallback, friendlyMessage)
+                        except Exception:
+                            self._trigger_fatal_fallback(friendlyMessage)
                 return
             if cancelEvent.is_set() or self._shutdownEvent.is_set():
                 return

@@ -98,30 +98,15 @@ git clean -fdX                            # clean temporary caches
 
 ## What the Tests Cover
 
-These tests run **without NVDA installed**, so they're safe in any environment:
+All 412 unit tests run **without NVDA installed**, making them fast, self-contained, and safe to execute in any environment (Windows, Linux, or macOS):
 
-| Test file | What it covers |
-|---|---|
-| `test_speech_processing.py` | PCM audio processing, text segmentation, cache keys, pause modes, Unicode coverage |
-| `test_audio_math.py` | Pure audio math, rate/pitch conversions, SeaNet rate protection |
-| `test_language_utils.py` | Language normalization, NVDA special locale mappings, display names |
-| `test_dependency_isolation.py` | Vendored WebSocket isolation, private module anchoring |
-| `test_language_redirect.py` | Language redirect, CLDR alias, cross-variant matching |
-| `test_watcher.py` | File system change watcher lifecycle, callback, and edge cases |
-| `test_unicode_data.py` | Generated Unicode script data integrity |
-| `test_build_i18n.py` | Translation template and i18n build logic |
-| `test_build_i18n_helpers.py` | PO parsing, string escaping, manifest values, language normalization |
-| `test_runtime_recovery.py` | Browser-reported speech failure recovery |
-| `test_bridge_concurrency.py` | ensure_connection lock scope, engine capture under lock, runtimeBusy synchronization |
-| `test_bridge_helpers.py` | Path traversal prevention, browser runtime normalization, fallback order, CDP error classification |
-| `test_generate_unicode_data_helpers.py` | UCD record parsing, script aliases, range merging, format helpers |
-| `test_performance.py` | Segment flush threshold, speech request coalescing, PCM lead buffer, pause mode timing |
-| `test_segmentation_benchmarks.py` | Multilingual segmentation throughput, PCM processing speed |
-| `test_segmentation_fuzz.py` | Random Unicode fuzz tests for segmentation correctness and invariants |
-| `test_standby_concurrency.py` | Standby manager generation counter, cancel propagation, bridge claim/release |
-| `test_synth_driver_helpers.py` | Rate factor interpolation, break rate clamping, end-of-utterance timing, word dictionaries |
-| `test_updater_security.py` | SHA256/size validation, path traversal, HTTPS enforcement, version comparison |
-| `test_voice_package_lifecycle.py` | Catalog loading, package verification, removal, copy, install-verify-remove lifecycle |
+- **Speech & Audio Processing**: Text segmentation across Latin, CJK, Thai, Arabic, and mixed scripts, Unicode 17.0 / CLDR 48.2 script ranges, audio math, pause shortening, lead buffering, and audio caching.
+- **Browser Bridge & Standby Concurrency**: Headless Chromium lifecycle, CDP WebSocket communication, race-condition defenses, cancellation handling, process preservation, and standby pre-warm synchronization.
+- **Voice Storage & Updater Security**: Voice catalog loading, `.zvoice` package verification, HTTPS enforcement, SHA-256 validation, path-traversal prevention, and atomic update installation.
+- **Packaging & Localization**: PO file translation templates, i18n build helpers, and dependency isolation for vendored packages.
+- **NVDA Integration & Compatibility**: Backward-compatible configuration migration, NVDA logger exception formatting compatibility, and static API contracts across NVDA 2024.1 through 2026.2.
+
+For the exhaustive file-by-file and class-by-class inventory of every test module, test classes, coverage areas, and benchmarks, see [tests/README.md](tests/README.md).
 
 ---
 

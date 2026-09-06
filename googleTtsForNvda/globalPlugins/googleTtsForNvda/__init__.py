@@ -44,7 +44,7 @@ from synthDrivers.googleTtsForNvda.catalog import EngineLibraryError, VoiceCatal
 
 from . import updateGui, updater
 from .settings import GoogleTtsSettingsPanel
-from .uiUtils import bind_read_only_text_focus_announcement
+from .uiUtils import bind_read_only_text_focus_announcement, show_runtime_error_dialog
 from .voiceManager import VoiceManagerDialog
 
 addonHandler.initTranslation()
@@ -231,12 +231,7 @@ def _engine_library_error_message(error: EngineLibraryError) -> str:
 
 def _show_engine_library_error(error: EngineLibraryError) -> None:
     log.error("Google TTS WASM TTS Engine error: %s", error.technicalDetail)
-    gui.messageBox(
-        _engine_library_error_message(error),
-        _("Google TTS For NVDA"),
-        wx.OK | wx.ICON_ERROR,
-        gui.mainFrame,
-    )
+    show_runtime_error_dialog(_engine_library_error_message(error))
 
 
 def _show_missing_voices_prompt(message: str | None = None) -> None:

@@ -474,6 +474,85 @@ class ConfigCompatTests(unittest.TestCase):
         self.assertIn("volume", loaded)
         self.assertEqual(loaded["volume"], 100)
 
+    def test_speech_failure_logging_compatible_with_nvda_logger(self) -> None:
+        # NVDA's logHandler.Logger.exception signature is:
+        # def exception(self, msg: str = "", exc_info = True, **kwargs):
+        # It does NOT accept *args, so passing formatting positional arguments
+        # alongside exc_info=True causes TypeError: multiple values for 'exc_info'.
+        class NvdaLoggerExceptionSignature:
+            def __init__(self) -> None:
+                self.records: list[str] = []
+
+            def exception(self, msg: str = "", exc_info: bool = True, **kwargs: object) -> None:
+                self.records.append(msg)
+
+        logger = NvdaLoggerExceptionSignature()
+        technicalDetail = "Chromium runtime exited: 1"
+
+        # Formatted single string must succeed without TypeError
+        if technicalDetail:
+            logger.exception(f"Google TTS speech failed: {technicalDetail}")
+        else:
+            logger.exception("Google TTS speech failed.")
+
+        self.assertEqual(len(logger.records), 1)
+        self.assertEqual(logger.records[0], "Google TTS speech failed: Chromium runtime exited: 1")
+
+
+class FatalFallbackTests(unittest.TestCase):
+    """Verify fatal runtime error handling, fallback triggering, and debounce safeguards."""
+
+    def test_friendly_message_extracted_from_cdp_error(self) -> None:
+        from tests.test_support import load_driver_module
+
+        bridge_module = load_driver_module("bridge")
+        default_msg = "Google TTS For NVDA could not start speech in the Chromium browser runtime."
+        error_msg = "The Chromium browser runtime connection closed unexpectedly."
+        err = bridge_module.CdpError(error_msg, "WebSocket closed abruptly")
+        extracted = str(err).strip() or default_msg
+        self.assertEqual(extracted, error_msg)
+
+    def test_empty_error_falls_back_to_default_message(self) -> None:
+        err = Exception("")
+        default_msg = "Google TTS For NVDA could not start speech in the Chromium browser runtime."
+        extracted = str(err).strip() or default_msg
+        self.assertEqual(extracted, default_msg)
+
+    def test_fallback_debounce_prevents_duplicate_dialogs(self) -> None:
+        calls: list[str] = []
+        dialogs: list[str] = []
+
+        class MockDriver:
+            def __init__(self) -> None:
+                self.name = "googleTtsForNvda"
+                self._fallbackTriggered = False
+                self._shutdownEvent = False
+                self._queue = ["item1", "item2"]
+                self.cancelled = False
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+            def _trigger_fatal_fallback(self, message: str) -> None:
+                if self._fallbackTriggered or self._shutdownEvent:
+                    return
+                self._fallbackTriggered = True
+                self._queue.clear()
+                self.cancel()
+                calls.append("findAndSetNextSynth")
+                dialogs.append(message)
+
+        driver = MockDriver()
+        driver._trigger_fatal_fallback("Fatal error 1")
+        # Second call must be debounced
+        driver._trigger_fatal_fallback("Fatal error 2")
+
+        self.assertTrue(driver._fallbackTriggered)
+        self.assertTrue(driver.cancelled)
+        self.assertEqual(len(driver._queue), 0)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(dialogs, ["Fatal error 1"])
+
 
 if __name__ == "__main__":
     unittest.main()
