@@ -98,7 +98,7 @@ git clean -fdX                            # clean temporary caches
 
 ## What the Tests Cover
 
-All 412 unit tests run **without NVDA installed**, making them fast, self-contained, and safe to execute in any environment (Windows, Linux, or macOS):
+All 420 unit tests run **without NVDA installed**, making them fast, self-contained, and safe to execute in any environment (Windows, Linux, or macOS):
 
 - **Speech & Audio Processing**: Text segmentation across Latin, CJK, Thai, Arabic, and mixed scripts, Unicode 17.0 / CLDR 48.2 script ranges, audio math, pause shortening, lead buffering, and audio caching.
 - **Browser Bridge & Standby Concurrency**: Headless Chromium lifecycle, CDP WebSocket communication, race-condition defenses, cancellation handling, process preservation, and standby pre-warm synchronization.
@@ -114,7 +114,7 @@ For the exhaustive file-by-file and class-by-class inventory of every test modul
 
 Before opening a PR, run through this:
 
-1. **All checks pass locally.** Run the [all-in-one command](#run-all-checks-at-once) or each step individually — all should be clean.
+1. **All checks pass locally.** Run the [all-in-one command](#auto-fix-and-run-all-checks-recommended) or each step individually — all should be clean.
 2. **No NVDA-specific imports** are added to standalone modules like `speech_processing.py`, `language_detector.py`, `language_profiles.py`, or `unicode_data.py`. Those must remain runnable without NVDA. (CI will catch this with `ModuleNotFoundError` failures.)
 3. **New tests are added** for any new standalone functionality.
 4. **Build succeeds** — run `build.bat` (Windows) or `build.sh` (Linux/macOS) and verify no errors.

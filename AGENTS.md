@@ -61,6 +61,10 @@ When writing documentation, release notes, commit messages, or user-facing summa
 ### After editing
 
 - Run the smallest relevant checks first, then broader checks if packaging or cross-module behavior changed.
+- When running or verifying the CI workflow (`.github/workflows/test.yml`), execute all commands:
+  ```powershell
+  python -m ruff check --fix ; python -m ruff format ; python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py ; python -m unittest discover -s tests -v ; git clean -fdX
+  ```
 - Report exactly what changed, what was tested, and what could not be tested.
 - Mention any remaining risk or follow-up work.
 
@@ -93,9 +97,15 @@ Google-TTS-For-NVDA/
 │  │  ├─ standby.py         Optional background browser-runtime readiness manager
 │  │  ├─ watcher.py         Reusable Win32 directory-change watcher with heartbeat logging
 │  │  ├─ catalog.py         VoiceCatalog, VoicePackage, Speaker models
+│  │  ├─ cld2/              Vendored CLD2 x86/x64 DLLs and documentation
 │  │  ├─ language_detector.py
 │  │  │                    CLD2-backed language detection with x86/x64 DLL selection
+│  │  ├─ language_profiles.py
+│  │  │                    Pure Unicode-script fallback language detection
 │  │  ├─ language_utils.py  Language normalization, NVDA special locale mappings, display names
+│  │  ├─ speech_processing.py
+│  │  │                    Text segmentation, Unicode 17.0 sentence boundaries, pause shortening
+│  │  ├─ unicode_data.py    Pre-generated Unicode 17.0 / CLDR 48.2 script ranges and terminals
 │  │  ├─ voice_store.py     Download, copy, verify, remove voice packages
 │  │  ├─ web/
 │  │  │  ├─ index.html      Loaded in the headless Chromium browser runtime
@@ -174,75 +184,101 @@ If no voice packages are installed when the synth starts:
 - Cancel aborts synth loading by raising `RuntimeError`.
 - Do not fall back to remote downloads or hidden defaults.
 
-### Browser-runtime availability limits
+### Browser-runtime availability and resilience
 
-This add-on depends on a supported Chromium browser runtime, such as Google Chrome, Microsoft Edge, or Brave, running in the current Windows user session.
+This add-on depends on a supported Chromium browser runtime (Google Chrome, Microsoft Edge, or Brave) running in the current Windows user session.
 
-- Do not document or imply that Google TTS For NVDA is suitable for environments where the Chromium browser runtime is unavailable or cannot start.
-- User-facing documentation should warn that the add-on should not be relied on at the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.
-- User-facing documentation should include an Edge-runtime silence troubleshooting note: if Microsoft Edge is selected as the Chromium browser runtime and speech stays silent even though Edge is installed, direct users to install or repair Microsoft Edge WebView2 Runtime using Microsoft's Evergreen Bootstrapper link (`https://go.microsoft.com/fwlink/p/?LinkId=2124703`), then restart NVDA. Also include Microsoft's WebView2 page (`https://developer.microsoft.com/microsoft-edge/webview2`) for offline installers and fixed-version runtime packages.
-- If opening a WebView2/download URL fails, the fallback dialog must show the URL in a focusable read-only field with a real label association, size the field dynamically with the same read-only text sizing helper used by Google TTS status fields, and include a Copy link button.
-- Microsoft Edge WebView2 Runtime is required only when Microsoft Edge is the selected/effective Chromium browser runtime. Google Chrome and Brave must not depend on WebView2; Chrome and Brave availability should be checked only through their browser executable/path. Status messages, fallback logic, prompts, and documentation must not imply that Chrome or Brave needs Edge WebView2.
-- Keep fallback/error wording clear: if no supported Chromium browser runtime is available, the synth cannot provide speech through the Google WASM TTS engine.
-- Browser runtime fallback starts with the saved/configured runtime, then continues through Chrome, Edge, and Brave with duplicates removed. For speech startup, a runtime is usable only after its executable is found, Edge WebView2 is available when the runtime is Edge, the browser process starts, the DevTools/debug port is available, the Google TTS speech page WebSocket is found, CDP domains are enabled, and the browser harness reports ready. Non-cancellation failures at any of these startup/readiness steps must clean up the failed runtime and try the next runtime; `CdpCancelled` and user cancellation must propagate without trying fallback runtimes.
-- If Edge is missing WebView2, skip Edge and continue to Brave when Brave is otherwise usable. Show the WebView2 install/repair prompt only when no supported fallback runtime remains and Edge WebView2 is the blocking condition.
-- Runtime status and settings UI may use executable/WebView2 snapshots, but the speech path must validate runtime usability from process startup through page WebSocket discovery and CDP/harness readiness.
-- Browser-runtime code map:
-  - `bridge.py` runtime constants and labels: `BROWSER_RUNTIME_CHROME`, `BROWSER_RUNTIME_EDGE`, `BROWSER_RUNTIME_BRAVE`, `BROWSER_RUNTIMES`, `DEFAULT_BROWSER_RUNTIME`, and `BROWSER_RUNTIME_LABELS`.
-  - `bridge.py` runtime configuration persistence: `CONFIG_BROWSER_RUNTIME`, `CONFIG_KEEP_BROWSER_RUNTIME_READY`, `DEFAULT_KEEP_BROWSER_RUNTIME_READY`, `_set_config_value()`, `configured_browser_runtime()`, `set_configured_browser_runtime()`, `configured_keep_browser_runtime_ready()`, and `set_keep_browser_runtime_ready()`.
-  - `bridge.py` availability and fallback selection: `_runtime_fallback_order()`, `_browser_candidates()`, `browser_path_for_runtime()`, `browser_executable_available()`, `edge_webview2_available()`, `browser_runtime_available()`, `browser_availability()`, `_browser_choices()`, `_find_browser_choice()`, `browser_runtime_snapshot()`, `find_browser()`, `effective_browser_runtime()`, and `edge_webview2_blocks_effective_runtime()`.
-  - `bridge.py` CDP connection and harness readiness: `CdpDispatcher`, `CdpClient.request()`, `_friendly_cdp_error()`, `_TRANSIENT_RUNTIME_EVALUATE_ERRORS`, `_is_transient_runtime_evaluate_error()`, `WasmTtsEngineBridge.enable_cdp_domains()`, `WasmTtsEngineBridge.wait_until_ready()`, `ChromeTtsBridge._connectionLock`, and `ChromeTtsBridge.ensure_connection()`.
-  - `bridge.py` startup cancellation path: `ChromeTtsBridge.speak()`, `ChromeTtsBridge.preload_voice()`, `ChromeTtsBridge.ensure_connection()`, `BrowserProcessManager.start_and_get_websocket_url()`, `WasmTtsEngineBridge.enable_cdp_domains()`, `WasmTtsEngineBridge.wait_until_ready()`, and `CdpClient.request()`.
-  - `bridge.py` runtime health, speech-error recovery, and recycle: `_BrowserSpeechError`, `RUNTIME_MEMORY_STARTUP_GRACE_SECONDS`, `RUNTIME_MEMORY_CHECK_INTERVAL_SECONDS`, `RUNTIME_PRIVATE_BYTES_RECYCLE_THRESHOLD`, `RUNTIME_WORKING_SET_BYTES_RECYCLE_THRESHOLD`, `RUNTIME_MEMORY_RECYCLE_CONFIRMATIONS`, `_runtime_error_requires_recycle()`, `_process_tree_memory_usage()`, `BrowserProcessManager.browser_memory_usage()`, `WasmTtsEngineBridge.runtime_busy`, `WasmTtsEngineBridge.speak()`, `ChromeTtsBridge._mark_runtime_error_for_recycle()`, `ChromeTtsBridge._mark_memory_recycle_if_needed_locked()`, `ChromeTtsBridge.maybe_recycle_runtime()`, `ChromeTtsBridge.is_connected()`, `ChromeTtsBridge.safe_for_standby_release()`, and `ChromeTtsBridge.speak()`.
-  - `__init__.py` synth-side recycle scheduling and fatal fallback: `SynthDriver._maybe_recycle_bridge_after_request()`, `SynthDriver._speak_worker()`, `SynthDriver._trigger_fatal_fallback()`, `SynthDriver._show_engine_library_error()`, and `SynthDriver._show_missing_chrome_error()`.
-  - `globalPlugins/googleTtsForNvda/uiUtils.py` standardized error dialog: `show_runtime_error_dialog()`.
-  - `__init__.py` synth/standby handoff: `SynthDriver.__init__()`, `SynthDriver.terminate()`, and `SynthDriver._bridge_safe_for_standby_release()`.
-  - `settings.py` runtime settings UI: `_runtime_label()`, `_save_browser_runtime()`, `_schedule_runtime_change_after_synth_switch()`, `_clear_pending_runtime_change()`, `_apply_runtime_after_synth_switch()`, `GoogleTtsSettingsPanel._selected_runtime_choice()`, `GoogleTtsSettingsPanel._refresh_runtime_snapshot()`, `GoogleTtsSettingsPanel._format_runtime_choice()`, `GoogleTtsSettingsPanel.on_runtime_choice_changed()`, `GoogleTtsSettingsPanel._refresh_runtime_status()`, `GoogleTtsSettingsPanel._effective_runtime_message()`, and `GoogleTtsSettingsPanel._select_saved_runtime()`.
-  - `settings.py` runtime-ready settings UI: `_configured_keep_browser_runtime_ready()`, `_save_keep_browser_runtime_ready()`, `GoogleTtsSettingsPanel.on_keep_browser_runtime_ready_changed()`, `GoogleTtsSettingsPanel._keep_browser_runtime_ready_status_message()`, and `GoogleTtsSettingsPanel._refresh_keep_browser_runtime_ready_status()`.
-  - `standby.py` background runtime readiness: `keep_browser_runtime_ready_enabled()`, `_installed_catalog()`, `_catalog_signature()`, `_current_speech_state()`, `_warmup_voice_ids()`, `_speech_options()`, `_warmup_options()`, `_refresh_reason_requires_runtime_restart()`, `_StandbyRuntimeManager.refresh_async()`, `_StandbyRuntimeManager._run_refresh()`, `_StandbyRuntimeManager._clear_standby_locked()`, `_StandbyRuntimeManager._cancel_current_worker_locked()`, `initialize()`, `refresh_async()`, `claim_bridge()`, `note_synth_active()`, `release_synth_bridge()`, `release_synth_without_bridge()`, and `terminate()`.
-  - `watcher.py` reusable Win32 directory-change watcher: `DirectoryChangeWatcher.__init__()`, `DirectoryChangeWatcher.start()`, `DirectoryChangeWatcher.stop()`, `_watch_path()`, `_signal_stop_locked()`.  The watcher uses `FindFirstChangeNotificationW` / `WaitForMultipleObjects` with `_INFINITE` timeout (fully kernel-blocked while idle).  The caller coalesces rapid bursts via the worker-already-running check in `standby.py`.
-  - `globalPlugins/googleTtsForNvda/__init__.py` standby lifecycle integration: `_refresh_standby_runtime()`, `GlobalPlugin.__init__()`, `GlobalPlugin._on_post_nvda_startup()`, and `GlobalPlugin.terminate()`.
-  - `voiceManager.py` package-change standby refresh: `VoiceManagerDialog._refresh_standby_google_synth_runtime()`.
-  - `bridge.py` browser profile roots and profile selection: `BrowserProcessManager._browser_profile_root()`, `BrowserProcessManager._browser_profile_dir_name()`, `_profileRuntime`, `CHROME_PROFILE_DIR_NAME`, `EDGE_PROFILE_DIR_NAME`, and `BRAVE_PROFILE_DIR_NAME`.
-  - `bridge.py` browser profile startup, fallback, and cleanup: `BrowserProcessManager.start_browser()`, `BrowserProcessManager.start_and_get_websocket_url()`, `BrowserProcessManager._browser_choices_or_raise()`, `BrowserProcessManager._start_browser_choice()`, `BrowserProcessManager._start_first_available_browser()`, `BrowserProcessManager._read_devtools_port()`, `_BrowserProfileInUseError`, `_browser_profile_in_use_error()`, `_get_browser_profile_dir()`, `_cleanup_old_browser_profiles()`, `_release_chrome_profile()`, and `_remove_chrome_profile()`.
-  - `bridge.py` persistent profile size throttling: `PERSISTENT_PROFILE_MAX_BYTES`, `PERSISTENT_PROFILE_SIZE_CHECK_FILE_NAME`, `PERSISTENT_PROFILE_SIZE_CHECK_INTERVAL_SECONDS`, `_persistent_profile_size_check_due()`, and `_remember_persistent_profile_size_check()`.
-  - `bridge.py` startup polling and diagnostics: `STARTUP_POLL_INTERVAL`, `BROWSER_WINDOW_HIDE_POLL_INTERVAL_SECONDS`, `BrowserProcessManager.get_page_websocket_url()`, `BrowserProcessManager._read_devtools_port()`, and `ChromeTtsBridge.ensure_connection()`.
+#### Browser-runtime rules
 
-- Browser-runtime behavior constraints:
-  - During startup, transient `Runtime.evaluate` errors such as `Cannot find default execution context` mean the harness execution context is not stable yet; readiness polling should wait and retry, while non-transient CDP errors must still surface as `CdpError`.
-  - If CDP setup or harness readiness fails for the current runtime, `ChromeTtsBridge.ensure_connection()` must close that attempt, terminate the failed browser process, skip that runtime, and try the next fallback runtime unless the failure is cancellation. When cancelled (`CdpCancelled`), `ensure_connection()` closes the unready CDP client WebSocket but preserves the running browser process so concurrent or subsequent speech requests can immediately reuse it without hitting connection refused errors (`WinError 10061`). Concurrent calls to `ensure_connection()` are serialized through `_connectionLock` with cooperative cancellation checks.
-  - If the request cancel event is already set while a CDP command is being sent or while the WebSocket closes without a response, `CdpClient.request()` should raise `CdpCancelled` so synth unloads and user-initiated synth switches do not log false speech failures.
-  - `CdpDispatcher` must propagate Runtime binding/event handler failures back to the owning request instead of only logging them, because audio decode/feed errors must fail the speech request and must not allow partial PCM to be cached.
-  - Startup cancellation must pass the same `cancelEvent` through speech/preload, connection startup, CDP domain enable, harness readiness, and individual CDP requests.
-  - Runtime/CDP timeout or closed-WebSocket failures should mark the Chromium runtime for urgent recycle after the current speech request.
-  - Browser-harness speech errors must urgently recycle the Chromium/WASM runtime. `ChromeTtsBridge.speak()` may retry the same request at most once after a successful recycle and only when `_BrowserSpeechError.audioStarted` is false; never retry after any PCM packet has been emitted because that can repeat partial speech.
-  - Unrecoverable runtime errors during speech or warm-up (missing supported browser runtime, or consecutive speech failures >= 2) must trigger fatal fallback via `SynthDriver._trigger_fatal_fallback()`:
-    - Debounce using `self._fallbackTriggered` and `self._shutdownEvent` guards to prevent multiple fallback invocations or dialog storms.
-    - Clear `_speechQueue` and call `self.cancel()` to abort pending speech and release wave playback buffers.
-    - Switch to NVDA's fallback synthesizer via `synthDriverHandler.findAndSetNextSynth(self.name)` so the screen reader never remains completely silent.
-    - Display an error dialog using `globalPlugins.googleTtsForNvda.uiUtils.show_runtime_error_dialog(message=..., delayMs=150)`. The 150ms delay allows the fallback synthesizer to fully take over and announce the error dialog message and native [OK] button to the user.
-    - Keep zero new un-translated strings: messages must reuse existing localized messages (`_friendly_cdp_error` strings, `_("No supported Chromium browser runtime was found...")`, `_("Google TTS For NVDA could not start speech in the Chromium browser runtime.")`), and the standard OK button is localized natively by NVDA/wxWidgets.
-  - Standardized OK-only error dialogs (missing browser runtime, WASM engine library error, fatal speech runtime failure) are centralized in `globalPlugins/googleTtsForNvda/uiUtils.py:show_runtime_error_dialog()` to maintain consistent UI presentation, title (`_("Google TTS For NVDA")`), error icon (`wx.OK | wx.ICON_ERROR`), parent window binding (`gui.mainFrame`), and optional delayed dispatch via `wx.CallLater`.
-  - Memory threshold recycling should ignore normal Chromium/WASM cold-start spikes, require confirmed high-memory samples after the startup grace/interval, and recycle only when the synth worker reports an idle queue.
-  - `SynthDriver._maybe_recycle_bridge_after_request()` should run after each non-cancelled speech request, with browser termination kept off NVDA's main thread and away from active audio callbacks.
-  - `keepBrowserRuntimeReady` must default to `False`, must be saved through `bridge.py:set_keep_browser_runtime_ready()` so it follows the same active-config/base-profile path as `set_configured_browser_runtime()`, must be gated through `standby.keep_browser_runtime_ready_enabled()`, and must stay disabled in secure mode.
-  - Standby refresh must be event-driven from Settings OK/Apply, NVDA startup, synth handoff, Voice Manager package changes, and `DirectoryChangeWatcher` (in `watcher.py`). Do not add periodic voice-folder rescans.
-  - Forced standby refresh that replaces an active worker must cancel the old worker and detach/terminate the worker-owned `ChromeTtsBridge` instead of letting the replacement worker reuse the same CDP/browser bridge while the old request is still unwinding.
-  - `standby.claim_bridge()` may hand off only a ready bridge whose `_catalog_signature(catalog)` matches the current installed package/runtime state.
-  - `SynthDriver.terminate()` must call `SynthDriver._bridge_safe_for_standby_release()` before `standby.release_synth_bridge()`. Busy speech queues, active cancel events, live warmup threads, disconnected CDP clients, busy engines, and bridges marked for recycle must terminate their bridge and use `standby.release_synth_without_bridge()` instead. When runtime-ready mode remains enabled, standby must construct and warm a fresh bridge rather than retain the rejected one.
-  - Standby warmup/preload must use installed packages and `ChromeTtsBridge.preload_voice()` only. It must never call `voice_store.download_package()`.
-  - `BrowserProcessManager._start_browser_choice()` should bind DevTools to localhost with `--remote-debugging-address=127.0.0.1`.
-  - Keep the fallback order Chrome, Edge, then Brave unless changing the product decision. If the saved runtime is Brave and Brave is unavailable, fallback must still find Chrome or Edge when they are usable.
-  - `browser_runtime_snapshot()` is for UI/status snapshots only and must not make Chrome or Brave depend on WebView2.
-  - Runtime status controls must use focusable read-only text sized through `bind_read_only_text_focus_announcement()`. Runtime choice preview may refresh immediately, but saving still happens only through Settings OK/Apply.
-  - Brave cache/WASM profile data belongs under `braveProfiles`, not the Chrome or Edge profile roots.
-  - Browser startup should try the persistent `persistentSession` profile first, then retry once with a temporary `session-<pid>-<timestamp>` profile on profile-in-use exit code 21 before trying the next runtime.
-  - Profile cleanup and recursive persistent-profile scans must check the startup cancel event so synth switches do not wait for stale filesystem cleanup.
-  - `DevToolsActivePort` reads must retry on `PermissionError`, `OSError`, empty content, invalid text, or out-of-range ports while the browser process remains alive. This retry path is shared by Chrome, Edge, and Brave.
-  - Persistent profile reset must run per runtime profile root only. Resetting Chrome must not remove Edge or Brave data, and custom executable path basenames must not drive profile root or snapshot runtime inference.
-  - The profile-size marker exists to avoid expensive recursive size scans on every startup; keep cancellation checks inside any scan that remains.
-  - Window-hiding retries should be throttled separately from fast readiness polling, and startup timing logs should remain debug-only diagnostics.
-  - Temporary browser profiles are a resilience fallback only. `_release_chrome_profile()` must preserve persistent profiles but remove temporary profiles, while `_remove_chrome_profile()` may delete the current profile after startup failure.
+- **Environment & WebView2 Limits**:
+  - Google TTS For NVDA requires a full Windows user session. It must not be relied upon at the Windows sign-in screen, secure desktop, Windows PE, or recovery environments.
+  - Microsoft Edge WebView2 Runtime is required *only* when Edge is the selected/effective runtime. Google Chrome and Brave must never depend on WebView2; their availability depends solely on their executable path. Status messages, prompts, and docs must never imply Chrome or Brave requires WebView2.
+  - If Microsoft Edge is selected and speech remains silent, user documentation directs users to install or repair Microsoft Edge WebView2 Runtime via the Evergreen Bootstrapper (`https://go.microsoft.com/fwlink/p/?LinkId=2124703`) or fixed-version packages (`https://developer.microsoft.com/microsoft-edge/webview2`).
+  - If opening a download URL fails, fallback dialogs must display the URL in a focusable read-only text control sized dynamically via `bind_read_only_text_focus_announcement()` and include a Copy link button.
+- **Fallback Order & Startup Cancellation**:
+  - Fallback evaluation order: saved/configured runtime first, then remaining among Chrome, Edge, Brave without duplicates.
+  - A runtime candidate is usable only after: executable found -> (if Edge) WebView2 available -> browser process launches -> DevTools port is read -> page WebSocket discovered -> CDP domains enabled -> browser harness reports ready.
+  - Non-cancellation failures at any startup step clean up the failed runtime and proceed to the next fallback candidate.
+  - If Edge lacks WebView2, Edge is skipped and fallback proceeds to Brave; the WebView2 install prompt appears only when no fallback candidate remains and Edge WebView2 is the blocking condition.
+  - User cancellation (`CdpCancelled`) aborts startup immediately without trying fallback runtimes, preserving the running browser process so concurrent/subsequent speech requests can reuse it without connection-refused errors (`WinError 10061`). Concurrent `ensure_connection()` calls are serialized through `_connectionLock` with cooperative cancellation checks.
+- **Profile Isolation, Recovery & Singleton Handover**:
+  - Browser startup tries the persistent `persistentSession` profile first for performance and caching.
+  - If Chromium exits prematurely with profile-in-use exit codes (`0` or `21`) before DevTools is ready, the add-on immediately retries once using an isolated temporary profile (`session-<pid>-<timestamp>`).
+  - Browser profile directories are strictly segregated per runtime root (`chromeProfiles`, `edgeProfiles`, `braveProfiles`). Resetting one runtime must never delete another runtime's profile data.
+  - Temporary profiles are deleted upon synth termination/cleanup; persistent profiles are preserved across sessions.
+  - Profile cleanup and recursive persistent-profile scans must check `cancelEvent` so synth switches do not wait for stale filesystem cleanup.
+- **Speech Loop Resilience, Crash Defense & Fatal Fallback**:
+  - The speech loop daemon thread (`SynthDriver._speech_loop`) wraps `self._speak_worker(*request)` in `try...except Exception:` to guarantee unexpected exceptions never kill the background thread.
+  - Any unhandled worker exception logs the error via `log.exception("Unexpected exception in speech loop worker.")` and invokes `_trigger_fatal_fallback()` via `wx.CallAfter()`.
+  - All calls to `ChromeTtsBridge.browser_runtime_available()` from worker or warm-up paths are wrapped in `try...except Exception: runtimeAvailable = False` for defense in depth.
+  - Unrecoverable runtime errors (missing browser runtime, or consecutive speech failures >= 2) trigger debounced fatal fallback: clear `_speechQueue`, call `self.cancel()`, switch to NVDA fallback synth via `synthDriverHandler.findAndSetNextSynth()`, and display an error dialog via `uiUtils.show_runtime_error_dialog(message=..., delayMs=150)`. The 150ms delay allows the fallback synth to announce the dialog and its native OK button.
+- **CDP Communication, Error Recovery & Recycling**:
+  - Transient CDP startup errors (`Cannot find default execution context`) indicate harness context is still loading; readiness polling waits and retries, while non-transient CDP errors surface as `CdpError`.
+  - If the request cancel event is set while sending a CDP command or while the WebSocket closes without response, `CdpClient.request()` raises `CdpCancelled`.
+  - `CdpDispatcher` propagates Runtime binding and event handler errors back to the owning request instead of only logging them, ensuring failed requests do not cache partial PCM.
+  - Browser-harness speech errors mark the runtime for urgent recycle. At most one retry is permitted, and only when `audioStarted` is false; never retry after any PCM packet has been emitted to prevent repeated speech.
+  - Runtime memory threshold recycling ignores cold-start spikes, requires confirmed high-memory samples across check intervals, and recycles only when the speech queue is idle.
+- **Standby Readiness & File System Watcher**:
+  - `keepBrowserRuntimeReady` defaults to `False`, follows the same config path as browser runtime selection, and stays disabled in secure mode.
+  - Standby refresh is strictly event-driven (Settings OK/Apply, NVDA startup, synth handoff, Voice Manager package changes, and `DirectoryChangeWatcher`), never periodic polling.
+  - `SynthDriver.terminate()` releases healthy bridges to standby only via `_bridge_safe_for_standby_release()`; busy, unready, or marked-for-recycle bridges are terminated and released without a bridge.
+  - Win32 `DirectoryChangeWatcher` uses `FindFirstChangeNotificationW` / `WaitForMultipleObjects` with `_INFINITE` timeout, remaining fully kernel-blocked while idle with zero CPU usage.
+
+#### Browser-runtime and resilience code map
+
+- **Browser Runtime Availability & Classmethod Delegation**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:browser_runtime_available(runtime: str | None = None) -> bool` — Validates browser executable availability and Edge WebView2 requirement; defaults to checking if any supported runtime is available when `runtime=None`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager.browser_runtime_available(cls, runtime: str | None = None) -> bool` — Classmethod delegating directly to module-level `browser_runtime_available()`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:ChromeTtsBridge.browser_runtime_available(cls, runtime: str | None = None) -> bool` — Classmethod delegating to `BrowserProcessManager.browser_runtime_available()`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:browser_executable_available(runtime: str) -> bool` — Checks browser executable existence on disk.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:edge_webview2_available() -> bool` — Verifies Microsoft Edge WebView2 runtime availability via Windows registry.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:find_browser() -> str | None` — Discovers the first available supported Chromium executable.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:effective_browser_runtime() -> str | None` — Resolves the effective runtime from configuration and availability.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:_runtime_fallback_order() -> list[str]` — Generates candidate fallback sequence starting with the configured runtime.
+
+- **Chromium Profile Management & Profile-In-Use Recovery**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:_browser_profile_in_use_error(exitCode: int = 21) -> _BrowserProfileInUseError` — Constructs profile-in-use exception recording the specific process exit code (`0` or `21`) in `technicalDetail`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._read_devtools_port()` — Reads `DevToolsActivePort`; on persistent profile early exit with code `0` or `21`, raises `_browser_profile_in_use_error(exitCode)`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._start_browser_choice()` — Catches `_BrowserProfileInUseError` during persistent startup and retries immediately with an isolated temporary session profile.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._browser_profile_root()`, `_browser_profile_dir_name()`, `_get_browser_profile_dir()` — Manages isolated profile directory trees (`chromeProfiles`, `edgeProfiles`, `braveProfiles`).
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._cleanup_old_browser_profiles()`, `_release_chrome_profile()`, `_remove_chrome_profile()` — Preserves persistent profiles while removing temporary profiles upon shutdown or failure.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:PERSISTENT_PROFILE_MAX_BYTES`, `PERSISTENT_PROFILE_SIZE_CHECK_INTERVAL_SECONDS`, `_persistent_profile_size_check_due()` — Throttles recursive profile size checks.
+
+- **Speech Loop Crash Resilience & Fatal Fallback**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py:SynthDriver._speech_loop()` — Daemon speech loop containing outer `try...except Exception:` around `self._speak_worker(*request)` to prevent thread termination, logging exceptions and calling `_trigger_fatal_fallback()` via `wx.CallAfter()`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py:SynthDriver._speak_worker()` — Synthesis worker with defensive `ChromeTtsBridge.browser_runtime_available()` call wrapped in `try...except Exception: runtimeAvailable = False`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py:SynthDriver._warm_current_voice_async()` — Background pre-warm worker with defensive `ChromeTtsBridge.browser_runtime_available()` call.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py:SynthDriver._trigger_fatal_fallback(friendlyMessage)` — Debounced fatal fallback handler: clears `_speechQueue`, cancels active wave playback, switches to NVDA fallback synth (`synthDriverHandler.findAndSetNextSynth()`), and shows error dialog.
+  - `globalPlugins/googleTtsForNvda/uiUtils.py:show_runtime_error_dialog(message, delayMs=150)` — Centralized error dialog presentation using `gui.mainFrame`, `wx.ICON_ERROR`, and delayed dispatch.
+
+- **CDP Connection, Dispatcher & Harness Readiness**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:ChromeTtsBridge.ensure_connection(cancelEvent)` — Serialized connection setup via `_connectionLock` with candidate fallback loop and cancellation checks.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:CdpClient.request(method, params, cancelEvent)` — Thread-safe CDP request/response over WebSocket; raises `CdpCancelled` when cancelled.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:CdpDispatcher` — Routes CDP binding/events; propagates runtime errors back to owning request to fail fast without caching bad audio.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:WasmTtsEngineBridge.enable_cdp_domains(cancelEvent)`, `wait_until_ready(cancelEvent)` — Enables CDP domains and polls harness readiness with transient error retries.
+
+- **Runtime Health, Memory Throttling & Recycling**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:_process_tree_memory_usage(rootPid)` — Collects process-tree private bytes and working set via Win32 Toolhelp32 snapshot.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager.browser_memory_usage()` — Queries memory usage for running browser process tree.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:ChromeTtsBridge.maybe_recycle_runtime()` — Recycles browser runtime when memory thresholds are confirmed or speech errors occur.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py:SynthDriver._maybe_recycle_bridge_after_request()` — Post-request idle recycle scheduler.
+
+- **Standby Readiness & Directory Watcher**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/standby.py:keep_browser_runtime_ready_enabled() -> bool` — Gating check for standby pre-warming.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/standby.py:_StandbyRuntimeManager` — Manages pre-warmed bridge lifecycle (`refresh_async`, `claim_bridge`, `release_synth_bridge`, `terminate`).
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/watcher.py:DirectoryChangeWatcher` — Reusable Win32 directory change watcher using `FindFirstChangeNotificationW` / `WaitForMultipleObjects` with `_INFINITE` timeout.
+
+- **Settings UI & Configuration Persistence**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:configured_browser_runtime()`, `set_configured_browser_runtime()`, `configured_keep_browser_runtime_ready()`, `set_keep_browser_runtime_ready()` — Reads and writes configuration keys under `CONFIG_SECTION`.
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py:GoogleTtsSettingsPanel` — Settings UI controls for browser selection and background readiness.
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py:bind_read_only_text_focus_announcement()` — Sized focusable read-only edit helper for status announcements.
+
+- **Regression Test Coverage**:
+  - `tests/test_bridge_helpers.py:BrowserRuntimeAvailableTests` — Verifies module-level and classmethod `browser_runtime_available` checks with/without arguments and invalid runtimes.
+  - `tests/test_bridge_helpers.py:BrowserProfileInUseErrorTests` — Verifies `_browser_profile_in_use_error` formatting across exit codes (`0` and `21`).
+  - `tests/test_synth_driver_helpers.py:SpeechLoopResilienceTests` — Verifies `_speech_loop` catches worker crashes, prevents thread death, and triggers fatal fallback.
+  - `tests/test_synth_driver_helpers.py:FatalFallbackTests` — Verifies fatal fallback debounce, queue clearing, cancellation, and dialog dispatch.
+  - `tests/test_bridge_concurrency.py:EnsureConnectionCancellationTests` — Verifies cancelled connection attempts preserve the running browser process.
 
 ### Supported speech settings parameters
 
@@ -346,7 +382,7 @@ Performance optimization code map:
 - Manual URL fallback dialogs must use real label association, read-only `wx.TextCtrl` sized through `bind_read_only_text_focus_announcement(..., minLines=2, maxLines=5)` without a fixed width, and a Copy link button.
 - Accessibility helper map:
   - Google TTS settings grouped controls live in `settings.py`: `_SettingsGroup`, `_SettingsGroup.addLabeledControl()`, `_SettingsGroup.addCheckBox()`, `_SettingsGroup.addButton()`, `GoogleTtsSettingsPanel._add_settings_group()`, and `GoogleTtsSettingsPanel._refresh_settings_layout()`.
-  - Read-only status/help sizing lives in `googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py`: `_from_dip()`, `_estimate_wrapped_line_count()`, `_estimate_text_width()`, `_max_read_only_text_width()`, `_read_only_text_target_width()`, `resize_read_only_text_for_content()`, and `bind_read_only_text_focus_announcement()`.
+  - Read-only status/help sizing, byte formatting, and dialog helpers live in `googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py`: `_from_dip()`, `_estimate_wrapped_line_count()`, `_estimate_text_width()`, `_max_read_only_text_width()`, `_read_only_text_target_width()`, `resize_read_only_text_for_content()`, `bind_read_only_text_focus_announcement()`, `format_size_mb()`, `format_size_auto()`, `open_synthesizer_dialog()`, and `show_runtime_error_dialog()`.
   - Speech Settings read-only notices live in `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_make_read_only_text_setting_control()`, `_patch_read_only_text_setting()`, `_unpatch_read_only_text_setting()`, and `_hide_google_tts_auto_profile_speech_controls()`.
   - Manual URL fallback dialogs live in `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_show_manual_web_url_dialog()`.
 
@@ -430,9 +466,10 @@ Automatic language profiles deliberately have their own profile system and must 
   - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` voice dictionary and character/spelling overlays: `_patch_auto_language_voice_dictionary()`, `_unpatch_auto_language_voice_dictionary()`, `_auto_profile_character_settings_for_language()`, `_auto_profile_character_context_for_text()`, `_single_auto_profile_character_settings()`, `process_text_with_auto_voice_dictionary()`, `get_spelling_speech_with_auto_profile()`, and `should_use_spelling_functionality_with_auto_profile()`.
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py` settings-ring notice integration: `SynthDriver.supportedSettings`, `ReadOnlyTextDriverSetting`, `_get_availableNotices()`, `_auto_language_notice_message()`, `_get_notice()`, and `_set_notice()`.
   - `googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py` settings UI storage and validation: `_installed_speakers_by_language()`, `_current_speech_defaults()`, `_configured_auto_language_detection()`, `_configured_auto_language_preferred()`, `_configured_auto_language_candidates()`, `_configured_auto_language_profiles()`, `_select_preferred_auto_language()`, `_refresh_preferred_language_choices()`, `_ensure_auto_language_profiles()`, `_default_voice_for_language()`, `_valid_profile_variant()`, `_load_selected_auto_language_profile()`, `_store_selected_auto_language_profile()`, `_enabled_auto_language_candidates()`, `_auto_language_status_message()`, `_refresh_auto_language_controls()`, `_refresh_auto_language_profile_value_controls()`, `_save_auto_language_settings()`, and `_refresh_synth_settings_ring(reloadSpeechSettings=False)`.
-  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/language_utils.py` normalized locale resolution and display name helpers: `SPECIAL_NVDA_LOCALES`, `normalize_language()`, `normalize_language_code()`, `get_nvda_locale_for_language()`, `nvda_locale_exists()`, `resolve_nvda_locale()`, and `get_language_display_name()`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/language_utils.py` normalized locale resolution and display name helpers: `SPECIAL_NVDA_LOCALES`, `normalize_language()`, `normalize_language_code()`, `normalize_language_key()`, `get_nvda_locale_for_language()`, `nvda_locale_exists()`, `resolve_nvda_locale()`, `_language_display_candidates()`, and `get_language_display_name()`.
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/audio_math.py` pure audio conversions and speech options: `OUTPUT_GAIN_MAKEUP`, `PROTECTED_ENGINE_RATE`, `MIN_ARTIFICIAL_RATE`, `MAX_ARTIFICIAL_RATE`, `rate_to_chrome()`, `pitch_to_chrome()`, `uses_protected_engine_rate()`, and `build_speech_options()`.
-  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/language_detector.py` detection wrapper: `_DLL_DIR`, `_DLL_NAMES`, `_LANGUAGE_ALIASES`, `_CHINESE_LANGUAGE_ROOTS`, `_LANGUAGE_REDIRECTS` (dialect → best available redirect), `DetectionResult`, `_Cld2Detector.detect()`, `_Cld2Detector._load_library()`, `detect_language()`, `_candidate_for_language()`, `language_match_keys()`, `_language_aliases()`, `_language_family()`, `_language_root()`, `_normalize_language()`, and `redirect_language()`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/language_detector.py` detection wrapper and sentinels: `GOOGLE_TTS_LANG_CHANGE_ATTR`, `MISSING_GOOGLE_TTS_LANGUAGE`, `_DLL_DIR`, `_DLL_NAMES`, `_MIN_RELIABLE_PERCENT`, `_LANGUAGE_ALIASES`, `_CHINESE_LANGUAGE_ROOTS`, `_LANGUAGE_REDIRECTS`, `redirect_language()`, `DetectionResult`, `_Cld2Detector`, `_Cld2Detector.detect()`, `_Cld2Detector._load_library()`, `_detector`, `detect_language()`, `_candidate_for_language()`, `_language_match_keys_cached()`, `language_match_keys()`, `_language_aliases()`, `_language_family()`, `_language_root()`, `_normalize_language()`, and `language_matches()`.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/cld2/` architecture-specific binaries: `cld2_x86.dll`, `cld2_x64.dll`, `cld2.dll`, `LICENSE.txt`, and `README.txt`.
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/voice_store.py` package validation: `is_package_installed()` (SHA256 + file size + persistent cache), `validate_package_catalog()` (catalog integrity check for speaker IDs, languages, and metadata consistency).
 
 
@@ -467,6 +504,8 @@ Automatic language profiles deliberately have their own profile system and must 
 
 ## 4. NVDA Integration Rules
 
+### NVDA integration rules
+
 - Use `synthDriverHandler.SynthDriver` patterns.
 - Use NVDA-style property methods: `_get_propertyName()` and `_set_propertyName()`.
 - Keep `cachePropertiesByDefault = False`.
@@ -483,27 +522,41 @@ Automatic language profiles deliberately have their own profile system and must 
 - NVDA audio output device storage differs across supported releases: NVDA 2024 stores the selected output device in `config.conf["speech"]["outputDevice"]`, while NVDA 2025 and newer store it in `config.conf["audio"]["outputDevice"]`. Google TTS must read the correct active key before constructing `nvwave.WavePlayer`, and must recreate the player when the real cross-version API `nvwave.isInError()` reports a device-change/error state. Keep only a guarded `audioDeviceError()` fallback for compatibility with unexpected downstream builds.
 - `script_openVoiceManager` has the default gesture `kb:NVDA+control+shift+g`; `script_openSettings` intentionally has no default gesture so user assignments are stored by NVDA in `gestures.ini`.
 - NVDA's custom `logHandler.Logger.exception()` has the signature `def exception(self, msg: str = "", exc_info: Literal[True] | _excInfo_t | BaseException = True, **kwargs):` which does NOT accept `*args` like Python's standard library `logging.Logger.exception`. Calling `log.exception("... %s", technicalDetail, exc_info=True)` passes `technicalDetail` as positional arg 2 into `exc_info`, raising a fatal `TypeError: Logger.exception() got multiple values for argument 'exc_info'` that crashes worker threads (such as `googleTtsForNvda.speech`). Always format the log message into a single string (e.g. via f-string `f"Google TTS speech failed: {technicalDetail}"`) without extra positional formatting arguments.
-- NVDA compatibility code map:
-  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` synth switching: `_normalize_set_synth_args()`, `_call_set_synth_compat()`, `_set_synth_with_google_tts_voice_prompt()`, `_patch_synth_selection()`, and `_unpatch_synth_selection()`.
-  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` voice dictionary/settings dialog hooks: `_patch_voice_dictionary_dialog()`, `_unpatch_voice_dictionary_dialog()`, `_patch_read_only_text_setting()`, and `_unpatch_read_only_text_setting()`.
-  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` voice dictionary loading: `_VoiceDictionarySynthProxy`, `_load_voice_dictionary_for_voice()`, `_current_google_tts_speaker_id()`, `_patch_google_tts_voice_dictionary_loading()`, and `_unpatch_google_tts_voice_dictionary_loading()`.
-  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` speech processing compatibility: `_filter_auto_language_speech_sequence()`, `_patch_auto_language_voice_dictionary()`, `process_text_with_auto_voice_dictionary()`, `get_spelling_speech_with_auto_profile()`, and `should_use_spelling_functionality_with_auto_profile()`.
-  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py` synth driver NVDA entry points: `SynthDriver.terminate()`, `SynthDriver.speak()`, `SynthDriver._speak_worker()`, `SynthDriver.cancel()`, `SynthDriver.pause()`, and `SynthDriver.loadSettings()`.
-  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py` audio output compatibility: `SynthDriver._current_output_device()`, `SynthDriver._default_output_device()`, `SynthDriver._audio_device_error()`, `SynthDriver._create_wave_player()`, and `SynthDriver._ensure_current_output_device()`.
-  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py` fallback & dialog helpers: `SynthDriver._trigger_fatal_fallback()`, `SynthDriver._show_engine_library_error()`, and `SynthDriver._show_missing_chrome_error()`.
-  - `globalPlugins/googleTtsForNvda/uiUtils.py` dialog helpers: `show_runtime_error_dialog()`.
-  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py` settings panel entry points: `GoogleTtsSettingsPanel.makeSettings()` and `GoogleTtsSettingsPanel.onSave()`.
-  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` global plugin entry points: `GlobalPlugin.terminate()`, `GlobalPlugin.on_open_voice_manager()`, `GlobalPlugin.script_openVoiceManager()`, and `GlobalPlugin.script_openSettings()`.
-  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` input gesture map: `GlobalPlugin.__gestures`, `GlobalPlugin.script_openVoiceManager()`, and `GlobalPlugin.script_openSettings()`.
-  - `tests/test_synth_driver_helpers.py` NVDA compatibility tests: `FatalFallbackTests` (verifies unrecoverable error detection, queue clearing, cancellation, fallback synth invocation, and delayed dialog display), and `ConfigCompatTests.test_speech_failure_logging_compatible_with_nvda_logger` (verifies NVDA `logHandler.Logger.exception` single-string compatibility without positional arguments).
-  - `tests/check_nvda_api_contracts.py` static contract runner: `CategoryResult`, `SourceTree`, `discover_trees()`, `check_tree()`, and `main()`; it checks all add-on integration categories and reports high-risk `setSynth`, `WavePlayer`, output-device, `nvwave.isInError`, and `AutoSettingsMixin.refreshGui` contracts without importing NVDA.
-  - `tests/NVDA_CHROMIUM_MANUAL_CHECKLIST.md` is the release-test checklist for real NVDA, Chromium/WASM startup, audible PCM, focus announcements, Voice Manager, settings, updater, and lifecycle behavior that static inspection cannot prove.
-
 - Support `synthIndexReached` and `synthDoneSpeaking` notifications.
 - Speech cancellation must be responsive and must not leave browser-runtime/CDP calls hanging.
 - Do not import NVDA-only modules unguarded in modules that may be imported by tests. Existing try/except patterns for `logHandler`, `addonHandler`, and `globalVars` are intentional.
 - UI operations must run on the wx/NVDA GUI thread. Use `wx.CallAfter()` when returning from worker threads.
 - User-facing UI strings should be wrapped in `_('...')` after `addonHandler.initTranslation()` has been initialized.
+
+### NVDA integration code map
+
+- **Synth Switching & Selection Interception**:
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_normalize_set_synth_args()`, `_call_set_synth_compat()`, `_set_synth_with_google_tts_voice_prompt()`, `_patch_synth_selection()`, and `_unpatch_synth_selection()`.
+
+- **Voice Dictionaries & Speech Hooks**:
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_patch_voice_dictionary_dialog()`, `_unpatch_voice_dictionary_dialog()`, `_patch_read_only_text_setting()`, and `_unpatch_read_only_text_setting()`.
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_VoiceDictionarySynthProxy`, `_load_voice_dictionary_for_voice()`, `_current_google_tts_speaker_id()`, `_patch_google_tts_voice_dictionary_loading()`, and `_unpatch_google_tts_voice_dictionary_loading()`.
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `_filter_auto_language_speech_sequence()`, `_patch_auto_language_voice_dictionary()`, `process_text_with_auto_voice_dictionary()`, `get_spelling_speech_with_auto_profile()`, and `should_use_spelling_functionality_with_auto_profile()`.
+
+- **Synth Driver Entry Points & Speech Loop**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py`: `SynthDriver.terminate()`, `SynthDriver.speak()`, `SynthDriver._speech_loop()`, `SynthDriver._speak_worker()`, `SynthDriver.cancel()`, `SynthDriver.pause()`, and `SynthDriver.loadSettings()`.
+
+- **Audio Output & Device Error Recovery**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py`: `SynthDriver._current_output_device()`, `SynthDriver._default_output_device()`, `SynthDriver._audio_device_error()`, `SynthDriver._create_wave_player()`, and `SynthDriver._ensure_current_output_device()`.
+
+- **Fatal Fallback & Runtime Dialogs**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py`: `SynthDriver._trigger_fatal_fallback()`, `SynthDriver._show_engine_library_error()`, and `SynthDriver._show_missing_chrome_error()`.
+  - `globalPlugins/googleTtsForNvda/uiUtils.py`: `show_runtime_error_dialog()`.
+
+- **GUI Settings Panel & Global Plugin Integration**:
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py`: `GoogleTtsSettingsPanel.makeSettings()` and `GoogleTtsSettingsPanel.onSave()`.
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `GlobalPlugin.terminate()`, `GlobalPlugin.on_open_voice_manager()`, `GlobalPlugin.script_openVoiceManager()`, and `GlobalPlugin.script_openSettings()`.
+  - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` input gesture map: `GlobalPlugin.__gestures`, `GlobalPlugin.script_openVoiceManager()`, and `GlobalPlugin.script_openSettings()`.
+
+- **NVDA Static API Contract Checks & Test Coverage**:
+  - `tests/test_synth_driver_helpers.py`: `FatalFallbackTests` (unrecoverable error detection, queue clearing, cancellation, fallback synth invocation, delayed dialog dispatch), `ConfigCompatTests.test_speech_failure_logging_compatible_with_nvda_logger` (NVDA `logHandler.Logger.exception` single-string compatibility without positional arguments), and `SpeechLoopResilienceTests` (speech loop worker exception handling).
+  - `tests/check_nvda_api_contracts.py`: static contract runner checking `setSynth`, `WavePlayer`, output-device, `nvwave.isInError`, and `AutoSettingsMixin.refreshGui` across installed NVDA release trees.
+  - `tests/NVDA_CHROMIUM_MANUAL_CHECKLIST.md`: manual test checklist for interactive NVDA runtime validation.
 
 ---
 
@@ -576,6 +629,7 @@ They are required for `SharedArrayBuffer` support. Do not remove or weaken them.
 - Cache keys for short speech must include both `pitch` and `postPitch`; otherwise changing Pitch can replay cached audio generated with the old post-synthesis pitch.
 - Expect higher CPU usage when users read quickly or use non-neutral pitch with SeaNet packages because the add-on performs post-synthesis audio processing.
 - SeaNet rate/pitch code map:
+  - Pure audio math and rate calculations in `googleTtsForNvda/synthDrivers/googleTtsForNvda/audio_math.py`: `OUTPUT_GAIN_MAKEUP`, `PROTECTED_ENGINE_RATE`, `MIN_ARTIFICIAL_RATE`, `MAX_ARTIFICIAL_RATE`, `rate_to_chrome()`, `pitch_to_chrome()`, `uses_protected_engine_rate()`, and `build_speech_options()`.
   - Synth-side option building: `_speech_options()`, `_uses_protected_engine_rate()`, `_rate_to_chrome()`, `_pitch_to_chrome()`, and `_short_cache_key()`.
   - Python-to-browser payload: `WasmTtsEngineBridge.speak()`.
   - Browser-side loudness/rate/pitch processing: `outputGainFromPayload()`, `limitSample()`, `postPitchFactorFromPayload()`, `tempoRateFromPayload()`, `resetPitchProcessor()`, `processPitchSamples()`, `processTempoSamples()`, `queueTempoInput()`, `flushAudioProcessors()`, `flushTempoProcessor()`, `queueAudio()`, `finishSegmentAudio()`, and `googleTtsForNvdaSpeak()`.
@@ -648,6 +702,12 @@ The SHA-256 verification cache must be invalidated after download, remove, and c
 
 When changing catalog structure, update all code that depends on runtime JSON consumed by the WASM engine.
 
+- Voice catalog code map:
+  - Catalog constants & engine paths: `googleTtsForNvda/synthDrivers/googleTtsForNvda/catalog.py:BASE_DIR`, `ENGINE_VERSION`, `ENGINE_ROOT`, `ENGINE_DIR`, `CATALOG_PATH`, `REQUIRED_ENGINE_FILES`, and `UNSUPPORTED_ENGINE_PACKAGE_ID_PARTS`.
+  - Engine verification & exceptions: `googleTtsForNvda/synthDrivers/googleTtsForNvda/catalog.py:EngineLibraryError`, `inspect_engine_library()`, and `is_package_supported_by_engine()`.
+  - Data models & package helpers: `googleTtsForNvda/synthDrivers/googleTtsForNvda/catalog.py:VoicePackage`, `Speaker`, `package_id_to_language()`, and `_safe_str()`.
+  - VoiceCatalog model & runtime export: `googleTtsForNvda/synthDrivers/googleTtsForNvda/catalog.py:VoiceCatalog.load()`, `VoiceCatalog.from_json()`, `VoiceCatalog.package_for_voice()`, `VoiceCatalog.speaker_for_voice()`, `VoiceCatalog.to_runtime_json()`, `VoiceCatalog.packages_by_language`, `VoiceCatalog.all_languages`, and `VoiceCatalog.speakers_for_language()`.
+
 ### Voice preloading
 
 - Preloading lives in `SynthDriver._warm_current_voice_async()` and uses `ChromeTtsBridge.preload_voice()`; it must stay cancellable and must not download packages.
@@ -707,6 +767,14 @@ When modifying `voiceManager.py` or any UI:
 - Errors must be visible to screen-reader users, not only logged.
 - Per-tab **Filter by language** comboboxes must retain independent selection state per tab and announce item counts clearly when filtered.
 - Ensure the **Open voice packages folder** button correctly launches the system file explorer pointing to the installed voice directory.
+
+- Voice Manager UI code map:
+  - Dialog lifecycle & tabs: `googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py:VoiceManagerDialog`, `VoiceManagerDialog.__init__()`, `_build_ui()`, `_build_installed_tab()`, `_build_download_tab()`, `_create_list()`, `focus_default_control()`, `show_download_tab()`, `_focus_active_page()`, `_focus_installed_tab()`, `_focus_download_tab()`, `on_char_hook()`, and `_on_notebook_key_down()`.
+  - Language filtering, sorting & display names: `googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py:get_nvda_locale_for_language()`, `get_language_display_name()`, `_current_ui_language()`, `_locale_candidates()`, `_language_sort_rules_for_current_ui()`, `_load_language_sort_rules()`, `_normalize_language_sort_rules()`, `_combining_marks_from_names()`, `_strip_combining_marks()`, `_rule_based_visible_sort_key()`, `_visible_language_sort_key()`, `_language_codes_for_display()`, `_update_language_combo()`, `_apply_installed_filter()`, `_apply_download_filter()`, `on_installed_language_filter_changed()`, `on_download_language_filter_changed()`, `_populate_installed_list()`, `_populate_download_list()`, `_visible_package_sort_key()`, and `_insert_package_row()`.
+  - Package status & dependency analysis: `googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py:_direct_installed_dependents()`, `_direct_download_dependents()`, `_installed_package_status()`, `_download_package_status()`, `_speaker_names()`, `_format_size()`, `_checked_packages()`, `_with_installed_dependents()`, `_with_required_download_dependencies()`, `_missing_dependency_for_package()`, `_dependency_depth()`, `_dependents_first()`, `_dependencies_first()`, and `_package_list_text()`.
+  - Download, installation & progress worker: `googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py:on_download_selected()`, `_download_worker()`, `_update_download_progress()`, and `_warm_current_google_synth_voice()`.
+  - Package removal, safety protection & config reset: `googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py:on_remove_selected()`, `_removes_all_usable_voices()`, `_usable_packages_after_removal()`, `_remove_worker()`, `_reset_configured_voice_if_removed()`, `_reset_auto_language_profile_variants_if_removed()`, and `_apply_reset_voice_to_current_synth()`.
+  - Folder & system integration: `googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py:on_open_folder()`.
 
 ---
 
@@ -795,11 +863,10 @@ Compress-Archive -Path googleTtsForNvda\* -DestinationPath dist\googleTtsForNvda
 
 - `CONTRIBUTING.md` is the source of truth for CI workflows, local verification commands (Ruff, Mypy, Unittest), toolchain setup, and PowerShell helpers.
 - `tests/README.md` is the source of truth for test architecture, individual test modules, and standalone test execution.
-
-To run the complete verification suite locally:
+- When running the `.github/workflows/test.yml` workflow locally or preparing a commit/PR, run all commands:
 
 ```powershell
-python -m ruff check ; python -m ruff format --check ; python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py ; python -m unittest discover -s tests -v
+python -m ruff check --fix ; python -m ruff format ; python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py ; python -m unittest discover -s tests -v ; git clean -fdX
 ```
 
 Before packaging, verify no `.zvoice` files are in the source tree:

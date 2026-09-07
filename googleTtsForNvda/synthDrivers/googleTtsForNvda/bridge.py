@@ -376,12 +376,12 @@ def _process_tree_memory_usage(rootPid: int) -> dict[str, int] | None:
     }
 
 
-def _browser_profile_in_use_error() -> _BrowserProfileInUseError:
+def _browser_profile_in_use_error(exitCode: int = 21) -> _BrowserProfileInUseError:
     message = _(
         "The browser profile used by Google TTS For NVDA is already in use. "
         "Restart NVDA, or close any leftover supported Chromium browser helper processes."
     )
-    technicalDetail = "Chromium browser runtime exited with profile-in-use code 21."
+    technicalDetail = f"Chromium browser runtime exited with profile-in-use code {exitCode}."
     log.debug("Google TTS Chromium browser runtime detail: %s", technicalDetail)
     return _BrowserProfileInUseError(message, technicalDetail)
 
@@ -693,10 +693,15 @@ def edge_webview2_available() -> bool:
     return _registry_has_edge_webview2_runtime()
 
 
-def browser_runtime_available(runtime: str) -> bool:
-    if not browser_executable_available(runtime):
+def browser_runtime_available(runtime: str | None = None) -> bool:
+    if runtime is None:
+        return find_browser() is not None
+    normalized = str(runtime).strip().lower()
+    if normalized not in BROWSER_RUNTIMES:
         return False
-    if _normalize_browser_runtime(runtime) == BROWSER_RUNTIME_EDGE:
+    if not browser_executable_available(normalized):
+        return False
+    if normalized == BROWSER_RUNTIME_EDGE:
         return edge_webview2_available()
     return True
 
@@ -910,6 +915,10 @@ class BrowserProcessManager:
     @classmethod
     def find_browser(cls) -> str | None:
         return find_browser()
+
+    @classmethod
+    def browser_runtime_available(cls, runtime: str | None = None) -> bool:
+        return browser_runtime_available(runtime)
 
     @property
     def chrome_process(self) -> subprocess.Popen[bytes] | None:
@@ -1389,8 +1398,10 @@ class BrowserProcessManager:
             if self._chromeProcess is not None and self._chromeProcess.poll() is not None:
                 exitCode = self._chromeProcess.returncode
                 self._chromeProcess = None
+                if exitCode in (0, 21) and self._profileIsPersistent:
+                    raise _browser_profile_in_use_error(exitCode)
                 if exitCode == 21:
-                    raise _browser_profile_in_use_error()
+                    raise _browser_profile_in_use_error(exitCode)
                 raise _friendly_cdp_error(
                     _("The Chromium browser runtime closed before Google TTS For NVDA was ready."),
                     f"Chromium browser runtime exited before DevTools became available: {exitCode}",
@@ -1900,6 +1911,10 @@ class ChromeTtsBridge:
     @classmethod
     def find_browser(cls) -> str | None:
         return BrowserProcessManager.find_browser()
+
+    @classmethod
+    def browser_runtime_available(cls, runtime: str | None = None) -> bool:
+        return BrowserProcessManager.browser_runtime_available(runtime)
 
     @property
     def _ws(self) -> websocket.WebSocket | None:

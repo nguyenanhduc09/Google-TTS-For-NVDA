@@ -960,6 +960,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 self._activeCancelEvent = request[-1]
             try:
                 self._speak_worker(*request)
+            except Exception:
+                log.exception("Unexpected exception in speech loop worker.")
+                if not self._shutdownEvent.is_set() and not self._fallbackTriggered:
+                    fallbackMsg = _("Google TTS For NVDA could not start speech in the Chromium browser runtime.")
+                    try:
+                        wx.CallAfter(self._trigger_fatal_fallback, fallbackMsg)
+                    except Exception:
+                        self._trigger_fatal_fallback(fallbackMsg)
             finally:
                 with self._speechCondition:
                     if self._activeCancelEvent is request[-1]:
@@ -1034,7 +1042,11 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 friendlyMessage = str(exc).strip() or _(
                     "Google TTS For NVDA could not start speech in the Chromium browser runtime."
                 )
-                unrecoverable = not ChromeTtsBridge.browser_runtime_available() or self._consecutiveRuntimeErrors >= 2
+                try:
+                    runtimeAvailable = ChromeTtsBridge.browser_runtime_available()
+                except Exception:
+                    runtimeAvailable = False
+                unrecoverable = not runtimeAvailable or self._consecutiveRuntimeErrors >= 2
                 if unrecoverable:
                     try:
                         wx.CallAfter(self._trigger_fatal_fallback, friendlyMessage)
@@ -2015,7 +2027,11 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             except Exception as exc:
                 log.debug("Google TTS bridge eager connection failed.", exc_info=True)
                 if not cancelEvent.is_set() and not self._shutdownEvent.is_set() and not self._fallbackTriggered:
-                    if not ChromeTtsBridge.browser_runtime_available():
+                    try:
+                        runtimeAvailable = ChromeTtsBridge.browser_runtime_available()
+                    except Exception:
+                        runtimeAvailable = False
+                    if not runtimeAvailable:
                         friendlyMessage = str(exc).strip() or _(
                             "Google TTS For NVDA could not start speech in the Chromium browser runtime."
                         )

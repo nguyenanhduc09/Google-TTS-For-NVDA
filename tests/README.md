@@ -1,6 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes an exhaustive standalone test suite comprising **412 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
+Google TTS For NVDA includes an exhaustive standalone test suite comprising **420 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
 
 All unit tests run **without importing NVDA** or requiring an active NVDA installation. Pure driver and plugin modules (`speech_processing.py`, `audio_math.py`, `voice_store.py`, `language_detector.py`, `language_utils.py`, `standby.py`, `watcher.py`, `updater.py`, etc.) are loaded directly in isolation via `test_support.py`, ensuring tests exercise the production implementation rather than mock AST copies.
 
@@ -37,7 +37,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 |---|---|---|---|
 | [`test_audio_math.py`](#test_audio_mathpy) | 6 | 1 | Audio math, rate/pitch conversions, SeaNet rate protection |
 | [`test_bridge_concurrency.py`](#test_bridge_concurrencypy) | 11 | 4 | Browser connection lock scopes, engine capture under lock, cancellation process preservation |
-| [`test_bridge_helpers.py`](#test_bridge_helperspy) | 47 | 16 | Path traversal prevention, browser runtime normalization, fallback order, CDP error classification |
+| [`test_bridge_helpers.py`](#test_bridge_helperspy) | 54 | 18 | Path traversal prevention, browser runtime normalization/availability, fallback order, profile-in-use exit codes, CDP error classification |
 | [`test_build_i18n.py`](#test_build_i18npy) | 6 | 1 | POT translation template updating, locale selection, manifest version sync, obsolete entry purging |
 | [`test_build_i18n_helpers.py`](#test_build_i18n_helperspy) | 29 | 7 | PO parsing, format placeholder extraction, PO string escaping, language code normalization |
 | [`test_dependency_isolation.py`](#test_dependency_isolationpy) | 8 | 1 | Vendored WebSocket isolation, relative import compliance, driver asset and library path anchoring |
@@ -51,12 +51,12 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | [`test_speech_processing.py`](#test_speech_processingpy) | 38 | 6 | Three pause modes, noise floor, chunk invariance, text segmentation, cache keys, sentence terminals |
 | [`test_standby_concurrency.py`](#test_standby_concurrencypy) | 22 | 5 | Generation counter, cancelEvent propagation, bridge claim/release, clean termination |
 | [`test_support.py`](#test_supportpy) | — | — | Shared test infrastructure, isolated module loader, mock bridge/CDP/engine/process helpers |
-| [`test_synth_driver_helpers.py`](#test_synth_driver_helperspy) | 30 | 7 | Rate factor interpolation, break rate clamping, word dictionaries, config compat, NVDA logger formatting, fatal fallback |
+| [`test_synth_driver_helpers.py`](#test_synth_driver_helperspy) | 31 | 8 | Rate factor interpolation, break rate clamping, word dictionaries, config compat, NVDA logger formatting, fatal fallback, speech loop resilience |
 | [`test_unicode_data.py`](#test_unicode_datapy) | 10 | 1 | Unicode 17.0 / CLDR 48.2 script ranges, automatic language profile fallback, sentence terminals |
 | [`test_updater_security.py`](#test_updater_securitypy) | 77 | 15 | SHA-256 validation, size checks, path traversal defense, HTTPS enforcement, manifest parsing, versions |
 | [`test_voice_package_lifecycle.py`](#test_voice_package_lifecyclepy) | 18 | 6 | Catalog loading/sorting, package verification, removal, copying, full lifecycle, catalog validation |
 | [`test_watcher.py`](#test_watcherpy) | 17 | 4 | Win32 DirectoryChangeWatcher lifecycle, callbacks, edge cases, kernel-level directory watching |
-| **Total** | **412** | **94** | **Exhaustive standalone test suite** |
+| **Total** | **420** | **96** | **Exhaustive standalone test suite** |
 
 ---
 
@@ -101,7 +101,7 @@ Verifies thread safety, synchronization, and race-condition mitigations in `brid
   - `test_concurrent_ensure_connection_when_first_caller_is_cancelled`: Verifies serialized concurrent callers to `ensure_connection()`, ensuring that if the first caller is cancelled (e.g. background warm-up), the second caller (e.g. interactive speech) acquires the lock and successfully establishes CDP connectivity using the already-running browser.
 
 ### `test_bridge_helpers.py`
-*47 tests across 16 classes*
+*54 tests across 18 classes*
 
 Validates pure helper functions in `bridge.py`:
 - **`SafeJoinTests`**: Verifies path-traversal defenses against parent directory (`..`), absolute path, and encoded traversal attacks. *(Cross-platform note: assertions call `.resolve()` on expected and actual paths to normalize Windows 8.3 short names).*
@@ -120,6 +120,8 @@ Validates pure helper functions in `bridge.py`:
 - **`BrowserExecutableAvailableTests`**: Verifies executable existence check.
 - **`BrowserAvailabilityTests`**: Verifies comprehensive availability dictionary across all supported browsers.
 - **`BrowserChoicesTests`**: Tests generation and filtering of browser choice tuples.
+- **`BrowserRuntimeAvailableTests`**: Tests `browser_runtime_available(runtime=None)` with and without runtime argument, unknown runtimes, and validates delegation through `BrowserProcessManager.browser_runtime_available` and `ChromeTtsBridge.browser_runtime_available`.
+- **`BrowserProfileInUseErrorTests`**: Verifies that `_browser_profile_in_use_error(exitCode)` properly formats technical details with the provided exit code (such as 0 or 21).
 
 ### `test_build_i18n.py`
 *6 tests across 1 class*
@@ -272,7 +274,7 @@ Tests the background standby runtime manager (`_StandbyRuntimeManager` in `stand
 - **`TerminateTests`**: Verifies that `terminate()` sets the shutdown flag, clears synth active markers, increments the generation counter, and safely handles `None` bridge references.
 
 ### `test_synth_driver_helpers.py`
-*30 tests across 7 classes*
+*31 tests across 8 classes*
 
 Tests pure helper functions extracted from the SynthDriver (`__init__.py`):
 - **`InterpolateRateFactorTests`**: Tests rate factor interpolation across table boundaries, minimum/maximum clamps, midpoint interpolation, and custom tables.
@@ -289,6 +291,7 @@ Tests pure helper functions extracted from the SynthDriver (`__init__.py`):
   - `test_friendly_message_extracted_from_cdp_error`: Verifies that `str(err).strip()` on `CdpError` extracts the user-friendly localized message without requiring any new UI strings.
   - `test_empty_error_falls_back_to_default_message`: Verifies that an empty exception string falls back safely to the pre-existing default localized string.
   - `test_fallback_debounce_prevents_duplicate_dialogs`: Verifies that `_trigger_fatal_fallback` debounces duplicate triggers via `self._fallbackTriggered`, clears the background speech queue, and cancels active audio.
+- **`SpeechLoopResilienceTests`**: Verifies that `_speech_loop` wraps `_speak_worker` in exception catching, logs unhandled worker exceptions, triggers fatal fallback cleanly without letting the speech loop thread crash or hang NVDA, and cleans up active cancel events.
 
 ### `test_unicode_data.py`
 *10 tests across 1 class*

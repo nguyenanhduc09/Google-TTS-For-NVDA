@@ -389,5 +389,65 @@ class BrowserChoicesTests(unittest.TestCase):
             self.assertNotEqual(bridge.BROWSER_RUNTIME_CHROME, runtime)
 
 
+# ---------------------------------------------------------------------------
+# browser_runtime_available
+# ---------------------------------------------------------------------------
+
+
+class BrowserRuntimeAvailableTests(unittest.TestCase):
+    """Verify browser_runtime_available and classmethod delegations."""
+
+    def test_browser_runtime_available_without_args(self) -> None:
+        avail = bridge.browser_runtime_available()
+        self.assertIsInstance(avail, bool)
+
+    def test_browser_runtime_available_with_known_runtimes(self) -> None:
+        for runtime in bridge.BROWSER_RUNTIMES:
+            avail = bridge.browser_runtime_available(runtime)
+            self.assertIsInstance(avail, bool)
+
+    def test_browser_runtime_available_unknown_runtime_returns_false(self) -> None:
+        self.assertFalse(bridge.browser_runtime_available("non_existent_browser_runtime"))
+
+    def test_browser_process_manager_delegation(self) -> None:
+        self.assertEqual(
+            bridge.browser_runtime_available(),
+            bridge.BrowserProcessManager.browser_runtime_available(),
+        )
+        for runtime in bridge.BROWSER_RUNTIMES:
+            self.assertEqual(
+                bridge.browser_runtime_available(runtime),
+                bridge.BrowserProcessManager.browser_runtime_available(runtime),
+            )
+
+    def test_chrome_tts_bridge_delegation(self) -> None:
+        self.assertEqual(
+            bridge.browser_runtime_available(),
+            bridge.ChromeTtsBridge.browser_runtime_available(),
+        )
+        for runtime in bridge.BROWSER_RUNTIMES:
+            self.assertEqual(
+                bridge.browser_runtime_available(runtime),
+                bridge.ChromeTtsBridge.browser_runtime_available(runtime),
+            )
+
+
+# ---------------------------------------------------------------------------
+# _browser_profile_in_use_error
+# ---------------------------------------------------------------------------
+
+
+class BrowserProfileInUseErrorTests(unittest.TestCase):
+    """Verify profile-in-use error creation with exit codes."""
+
+    def test_default_exit_code(self) -> None:
+        err = bridge._browser_profile_in_use_error()
+        self.assertIn("21", err.technicalDetail)
+
+    def test_custom_exit_code_zero(self) -> None:
+        err = bridge._browser_profile_in_use_error(0)
+        self.assertIn("0", err.technicalDetail)
+
+
 if __name__ == "__main__":
     unittest.main()

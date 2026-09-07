@@ -554,5 +554,64 @@ class FatalFallbackTests(unittest.TestCase):
         self.assertEqual(dialogs, ["Fatal error 1"])
 
 
+class SpeechLoopResilienceTests(unittest.TestCase):
+    """Verify that _speech_loop catches worker exceptions and triggers fatal fallback without crashing."""
+
+    def test_speech_loop_catches_worker_crash_and_triggers_fallback(self) -> None:
+        import collections
+        import threading
+
+        class MockDriver:
+            def __init__(self) -> None:
+                self._shutdownEvent = threading.Event()
+                self._speechCondition = threading.Condition()
+                self._speechQueue: collections.deque[tuple] = collections.deque()
+                self._activeCancelEvent: threading.Event | None = None
+                self._fallbackTriggered = False
+                self.fallbackCalls: list[str] = []
+                self.workerCalls = 0
+
+            def _speak_worker(self, *args: object) -> None:
+                self.workerCalls += 1
+                raise AttributeError("Simulated unexpected AttributeError in worker")
+
+            def _trigger_fatal_fallback(self, message: str) -> None:
+                self.fallbackCalls.append(message)
+                self._shutdownEvent.set()
+
+            def _speech_loop(self) -> None:
+                while not self._shutdownEvent.is_set():
+                    with self._speechCondition:
+                        while not self._speechQueue and not self._shutdownEvent.is_set():
+                            self._speechCondition.wait()
+                        if self._shutdownEvent.is_set():
+                            return
+                        request = self._speechQueue.popleft()
+                        self._activeCancelEvent = request[-1]
+                    try:
+                        self._speak_worker(*request)
+                    except Exception:
+                        if not self._shutdownEvent.is_set() and not self._fallbackTriggered:
+                            fallbackMsg = "Simulated fallback message"
+                            self._trigger_fatal_fallback(fallbackMsg)
+                    finally:
+                        with self._speechCondition:
+                            if self._activeCancelEvent is request[-1]:
+                                self._activeCancelEvent = None
+
+        driver = MockDriver()
+        cancelEvent = threading.Event()
+        driver._speechQueue.append(("mock_text", cancelEvent))
+
+        t = threading.Thread(target=driver._speech_loop)
+        t.start()
+        t.join(timeout=2.0)
+
+        self.assertFalse(t.is_alive(), "Speech loop should exit gracefully after fallback sets shutdown")
+        self.assertEqual(driver.workerCalls, 1)
+        self.assertEqual(len(driver.fallbackCalls), 1)
+        self.assertIsNone(driver._activeCancelEvent)
+
+
 if __name__ == "__main__":
     unittest.main()
