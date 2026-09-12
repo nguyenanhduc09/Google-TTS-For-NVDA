@@ -203,6 +203,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             return (self._AUTO_LANGUAGE_NOTICE_SETTING, self._PAUSE_MODE_SETTING)
         return self._STANDARD_SUPPORTED_SETTINGS
 
+    def isSupported(self, settingID: str) -> bool:
+        # Always report voice support so NVDA's loadSettings() initializes the
+        # active voice instead of calling changeVoice(self, None) when
+        # Automatic Language Profiles hides voice controls from supportedSettings.
+        if settingID == "voice":
+            return True
+        return super().isSupported(settingID)
+
     @classmethod
     def check(cls) -> bool:
         # Keep the driver visible; runtime dependencies are validated when selected.

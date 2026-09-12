@@ -200,7 +200,10 @@ def _general_categories(tree: SourceTree) -> list[CategoryResult]:
                 ("autoSettingsUtils.driverSetting", item)
                 for item in ("DriverSetting", "BooleanDriverSetting", "NumericDriverSetting")
             ]
-            + [("autoSettingsUtils.utils", "StringParameterInfo")]
+            + [
+                ("autoSettingsUtils.autoSettings", "AutoSettings.isSupported"),
+                ("autoSettingsUtils.utils", "StringParameterInfo"),
+            ]
             + [
                 ("speech.commands", item)
                 for item in (

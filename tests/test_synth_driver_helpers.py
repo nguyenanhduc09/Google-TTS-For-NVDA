@@ -613,5 +613,118 @@ class SpeechLoopResilienceTests(unittest.TestCase):
         self.assertIsNone(driver._activeCancelEvent)
 
 
+class SynthDriverIsSupportedTests(unittest.TestCase):
+    """Verify that SynthDriver.isSupported("voice") always returns True.
+
+    This ensures NVDA's loadSettings() initializes the active voice via
+    synthDriverHandler.changeVoice(self, voice) instead of changeVoice(self, None)
+    when Automatic Language Profiles is enabled.
+    """
+
+    def test_synth_driver_ast_defines_is_supported_override(self) -> None:
+        import ast
+        from pathlib import Path
+
+        init_path = (
+            Path(__file__).resolve().parents[1]
+            / "googleTtsForNvda"
+            / "synthDrivers"
+            / "googleTtsForNvda"
+            / "__init__.py"
+        )
+        tree = ast.parse(init_path.read_text(encoding="utf-8"))
+        synth_driver_node = None
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == "SynthDriver":
+                synth_driver_node = node
+                break
+        self.assertIsNotNone(synth_driver_node, "SynthDriver class must be defined in __init__.py")
+        assert synth_driver_node is not None
+
+        method_node = None
+        for item in synth_driver_node.body:
+            if isinstance(item, ast.FunctionDef) and item.name == "isSupported":
+                method_node = item
+                break
+        self.assertIsNotNone(method_node, "SynthDriver must override isSupported")
+        assert method_node is not None
+
+        param_names = [arg.arg for arg in method_node.args.args]
+        self.assertEqual(param_names, ["self", "settingID"])
+
+    def test_is_supported_behavior_when_auto_language_profiles_enabled_and_disabled(self) -> None:
+        auto_notice_setting = _MockSetting("notice", "notice", useConfig=False)
+        pause_setting = _MockSetting("pauseMode", "doNotShorten")
+
+        class BaseAutoSettings:
+            def __init__(self, supported_settings: tuple[_MockSetting, ...]) -> None:
+                self.supportedSettings = supported_settings
+
+            def isSupported(self, settingID: str) -> bool:
+                return any(s.id == settingID for s in self.supportedSettings)
+
+        class SimulatedSynthDriver(BaseAutoSettings):
+            def __init__(self, auto_language_enabled: bool) -> None:
+                self.auto_language_enabled = auto_language_enabled
+                settings = (auto_notice_setting, pause_setting) if auto_language_enabled else _STANDARD_SETTINGS
+                super().__init__(settings)
+
+            def isSupported(self, settingID: str) -> bool:
+                if settingID == "voice":
+                    return True
+                return super().isSupported(settingID)
+
+        # 1. Profiles enabled: voice is hidden from supportedSettings but isSupported("voice") is True
+        driver_auto = SimulatedSynthDriver(auto_language_enabled=True)
+        self.assertNotIn("voice", [s.id for s in driver_auto.supportedSettings])
+        self.assertTrue(driver_auto.isSupported("voice"))
+        self.assertTrue(driver_auto.isSupported("pauseMode"))
+        self.assertTrue(driver_auto.isSupported("notice"))
+        self.assertFalse(driver_auto.isSupported("rate"))
+        self.assertFalse(driver_auto.isSupported("pitch"))
+        self.assertFalse(driver_auto.isSupported("nonexistent"))
+
+        # 2. Profiles disabled: voice is in supportedSettings and isSupported("voice") is True
+        driver_manual = SimulatedSynthDriver(auto_language_enabled=False)
+        self.assertIn("voice", [s.id for s in driver_manual.supportedSettings])
+        self.assertTrue(driver_manual.isSupported("voice"))
+        self.assertTrue(driver_manual.isSupported("rate"))
+        self.assertTrue(driver_manual.isSupported("pitch"))
+        self.assertTrue(driver_manual.isSupported("pauseMode"))
+        self.assertFalse(driver_manual.isSupported("notice"))
+
+    def test_nvda_load_settings_initializes_valid_voice_id(self) -> None:
+        """Simulate NVDA's loadSettings() voice initialization behavior.
+
+        Verifies that when isSupported("voice") is True, changeVoice receives a valid
+        voice ID instead of None.
+        """
+        config_voice = "vi"
+        available_voices = {"vi": "Vietnamese", "en-US": "English (US)"}
+
+        recorded_voice_id: str | None = "initial"
+
+        def simulated_change_voice(synth: object, voice_id: str | None) -> None:
+            nonlocal recorded_voice_id
+            recorded_voice_id = voice_id
+
+        def simulated_nvda_load_settings(driver_is_supported_voice: bool) -> None:
+            if driver_is_supported_voice:
+                voice = config_voice
+                simulated_change_voice("googleTtsForNvda", voice)
+            else:
+                simulated_change_voice("googleTtsForNvda", None)
+
+        # When isSupported("voice") is True even when profiles are enabled
+        simulated_nvda_load_settings(driver_is_supported_voice=True)
+        self.assertEqual(recorded_voice_id, "vi")
+        self.assertIn(recorded_voice_id, available_voices)
+
+        # When isSupported("voice") was False
+        simulated_nvda_load_settings(driver_is_supported_voice=False)
+        self.assertIsNone(recorded_voice_id)
+        self.assertNotIn(recorded_voice_id, available_voices)
+
+
 if __name__ == "__main__":
     unittest.main()

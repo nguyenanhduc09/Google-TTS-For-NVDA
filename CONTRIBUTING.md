@@ -98,13 +98,13 @@ git clean -fdX                            # clean temporary caches
 
 ## What the Tests Cover
 
-All 420 unit tests run **without NVDA installed**, making them fast, self-contained, and safe to execute in any environment (Windows, Linux, or macOS):
+All 423 unit tests run **without NVDA installed**, making them fast, self-contained, and safe to execute in any environment (Windows, Linux, or macOS):
 
 - **Speech & Audio Processing**: Text segmentation across Latin, CJK, Thai, Arabic, and mixed scripts, Unicode 17.0 / CLDR 48.2 script ranges, audio math, pause shortening, lead buffering, and audio caching.
 - **Browser Bridge & Standby Concurrency**: Headless Chromium lifecycle, CDP WebSocket communication, race-condition defenses, cancellation handling, process preservation, and standby pre-warm synchronization.
 - **Voice Storage & Updater Security**: Voice catalog loading, `.zvoice` package verification, HTTPS enforcement, SHA-256 validation, path-traversal prevention, and atomic update installation.
 - **Packaging & Localization**: PO file translation templates, i18n build helpers, and dependency isolation for vendored packages.
-- **NVDA Integration & Compatibility**: Backward-compatible configuration migration, NVDA logger exception formatting compatibility, and static API contracts across NVDA 2024.1 through 2026.2.
+- **NVDA Integration & Compatibility**: Backward-compatible configuration migration, NVDA logger exception formatting compatibility, active voice initialization support across profile states, and static API contracts across NVDA 2024.1 through 2026.2.
 
 For the exhaustive file-by-file and class-by-class inventory of every test module, test classes, coverage areas, and benchmarks, see [tests/README.md](tests/README.md).
 
