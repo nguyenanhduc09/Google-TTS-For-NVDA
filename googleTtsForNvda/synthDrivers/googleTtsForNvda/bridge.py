@@ -450,6 +450,17 @@ def _elevate_chrome_priority(processId: int) -> None:
         from ctypes import wintypes
 
         ABOVE_NORMAL_PRIORITY_CLASS = 0x00008000
+        PROCESS_POWER_THROTTLING = 4
+        PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1
+
+        class PROCESS_POWER_THROTTLING_STATE(ctypes.Structure):
+            _fields_ = [
+                ("Version", wintypes.DWORD),
+                ("ControlMask", wintypes.DWORD),
+                ("StateMask", wintypes.DWORD),
+            ]
+
         kernel32 = ctypes.windll.kernel32
         openProcess = ctypes.WINFUNCTYPE(
             wintypes.HANDLE,
@@ -466,10 +477,38 @@ def _elevate_chrome_priority(processId: int) -> None:
             wintypes.BOOL,
             wintypes.HANDLE,
         )(("CloseHandle", kernel32))
-        handle = openProcess(0x0200, False, processId)
-        if handle:
-            setPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
-            closeHandle(handle)
+
+        setProcessInformation = None
+        if hasattr(kernel32, "SetProcessInformation"):
+            setProcessInformation = ctypes.WINFUNCTYPE(
+                wintypes.BOOL,
+                wintypes.HANDLE,
+                ctypes.c_int,
+                ctypes.c_void_p,
+                wintypes.DWORD,
+            )(("SetProcessInformation", kernel32))
+
+        throttlingState = PROCESS_POWER_THROTTLING_STATE(
+            PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+            PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+            0,
+        )
+
+        for pid in _process_tree_ids(processId):
+            handle = openProcess(0x0200, False, pid)
+            if not handle:
+                continue
+            try:
+                setPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS)
+                if setProcessInformation is not None:
+                    setProcessInformation(
+                        handle,
+                        PROCESS_POWER_THROTTLING,
+                        ctypes.cast(ctypes.byref(throttlingState), ctypes.c_void_p),
+                        ctypes.sizeof(throttlingState),
+                    )
+            finally:
+                closeHandle(handle)
     except Exception:
         log.debug("Could not elevate Google TTS browser process priority.", exc_info=True)
 
@@ -1051,7 +1090,7 @@ class BrowserProcessManager:
                 "--disable-backgrounding-occluded-windows",
                 "--disable-renderer-backgrounding",
                 "--js-flags=--no-idle-gc --wasm-lazy-compilation=false --wasm-dynamic-tiering --max-old-space-size=512",
-                "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs",
+                "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,TimerThrottlingForBackgroundTabs,msEdgeEfficiencyMode",
                 "--enable-features=AudioWorkletThreadRealtimePriority,WebAssemblySimd,WebAssemblyTiering,WasmCodeGC,WasmCodeProtection",
                 "--enable-wasm-simd",
                 pageUrl,
@@ -1067,6 +1106,7 @@ class BrowserProcessManager:
                 _elevate_chrome_priority(self._chromeProcess.pid)
                 self._debugPort = self._read_devtools_port(devToolsFile, cancelEvent)
                 _hide_chrome_windows(self._chromeProcess.pid)
+                _elevate_chrome_priority(self._chromeProcess.pid)
             except _BrowserProfileInUseError:
                 self._debugPort = None
                 if usePersistentProfile:

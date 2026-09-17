@@ -449,5 +449,22 @@ class BrowserProfileInUseErrorTests(unittest.TestCase):
         self.assertIn("0", err.technicalDetail)
 
 
+# ---------------------------------------------------------------------------
+# _elevate_chrome_priority
+# ---------------------------------------------------------------------------
+
+
+class ElevateChromePriorityTests(unittest.TestCase):
+    """Verify _elevate_chrome_priority handles process tree and invalid PIDs safely."""
+
+    def test_elevate_current_process_does_not_raise(self) -> None:
+        import os
+
+        bridge._elevate_chrome_priority(os.getpid())
+
+    def test_elevate_invalid_pid_does_not_raise(self) -> None:
+        bridge._elevate_chrome_priority(999999)
+
+
 if __name__ == "__main__":
     unittest.main()

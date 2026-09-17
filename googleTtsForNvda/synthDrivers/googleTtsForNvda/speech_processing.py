@@ -8,12 +8,15 @@ synth driver.
 from __future__ import annotations
 
 import bisect
+import logging
 import unicodedata
 from collections.abc import Iterator, Sequence
 from functools import lru_cache
 from typing import Any
 
 from .unicode_data import SENTENCE_TERMINAL_CODEPOINTS
+
+log = logging.getLogger(__name__)
 
 PAUSE_MODE_DO_NOT_SHORTEN = "0"
 PAUSE_MODE_SHORTEN_END_ONLY = "1"
@@ -173,162 +176,7 @@ def _find_no_space_range(codepoint: int) -> tuple[int, int, int] | None:
     return None
 
 
-COMMON_ABBREVIATIONS = {
-    # English
-    "mr",
-    "mrs",
-    "ms",
-    "dr",
-    "prof",
-    "sr",
-    "jr",
-    "st",
-    "rev",
-    "gen",
-    "col",
-    "maj",
-    "capt",
-    "lt",
-    "sgt",
-    "hon",
-    "gov",
-    "sen",
-    "rep",
-    "esq",
-    "vs",
-    "etc",
-    "inc",
-    "ltd",
-    "co",
-    "corp",
-    "no",
-    "fig",
-    "eq",
-    "vol",
-    "ch",
-    "p",
-    "pp",
-    "sec",
-    "min",
-    "max",
-    "approx",
-    "est",
-    "dept",
-    "dist",
-    "ave",
-    "blvd",
-    "rd",
-    "jan",
-    "feb",
-    "mar",
-    "apr",
-    "jun",
-    "jul",
-    "aug",
-    "sep",
-    "sept",
-    "oct",
-    "nov",
-    "dec",
-    "ph",
-    "phd",
-    "md",
-    "ba",
-    "ma",
-    "bsc",
-    "msc",
-    "jd",
-    "llb",
-    "llm",
-    # German
-    "usw",
-    "bzw",
-    "ca",
-    "evtl",
-    "ggf",
-    "inkl",
-    "nr",
-    "ing",
-    "mag",
-    # French
-    "mme",
-    "mlle",
-    "mgr",
-    "ex",
-    "p.",
-    "n.b.",
-    "c.-à-d.",
-    # Spanish / Portuguese
-    "sra",
-    "srta",
-    "dra",
-    "profa",
-    "num",
-    "pag",
-    "cap",
-    "ej",
-    "av",
-    "eng",
-    "exc",
-    # Vietnamese
-    "tp",
-    "ths",
-    "ts",
-    "gs",
-    "pgs",
-    "bs",
-    "ks",
-    "cn",
-    "tx",
-    "tt",
-    "qd",
-    "nd",
-    # Italian
-    "dott",
-    "avv",
-    "cav",
-    "ecc",
-    # Polish
-    "inż",  # Turkish
-    "doç",
-    "yrd",
-    "vb",
-    "müh",
-    # Malay / Indonesian
-    "drg",
-    "dll",
-    "dsb",
-    # Hungarian
-    "stb",
-    # Czech / Slovak
-    "doc",  # Romanian
-    "cond",  # Russian / Cyrillic
-    "ул",
-    "им",
-    "обл",
-    "рис",
-    "см",
-    "стр",
-    "тд",
-    "тп",
-    "пр",
-    "руб",
-    "коп",
-    "тыс",
-    "млн",
-    "млрд",
-    "др",
-    "г",
-    "гор",
-    "пер",
-    "пл",
-    "просп",
-    "проф",
-    "канд",
-    "доц",
-    # Devanagari (hi, mr, ne, sa, brx, doi, kok, mai)
-    "डॉ",
-}
+COMMON_ABBREVIATIONS: frozenset[str] = frozenset()
 
 
 def pcm_bytes_for_milliseconds(milliseconds: int, sampleRate: int, bytesPerSample: int = PCM_BYTES_PER_SAMPLE) -> int:
@@ -788,8 +636,6 @@ class TextSegmenter:
         wordBefore = text[wordStart + 1 : periodIndex].lower()
         if len(wordBefore) == 1 and wordBefore.isalpha() and wordBefore.isascii():
             return True
-        if wordBefore in COMMON_ABBREVIATIONS:
-            return True
         return wordBefore.isalpha() and wordStart >= 0 and text[wordStart] == "."
 
     def _period_is_numeric_separator(self, text: str, periodIndex: int) -> bool:
@@ -1012,33 +858,50 @@ class TextSegmenter:
     def _find_forced_latency_cut(self, text: str, maxLength: int) -> int:
         if len(text) <= maxLength:
             return len(text)
+        cut: int | None = None
         minLength = min(maxLength, max(FORCED_SEGMENT_MIN_CHARS, int(maxLength * 0.55)))
         for index in range(maxLength, minLength - 1, -1):
             if self._is_contextual_soft_phrase_cut(text, index):
-                return index
-        for index in range(maxLength, minLength - 1, -1):
-            if text[index - 1].isspace():
-                return index
-        lookaheadEnd = min(len(text), maxLength + FORCED_SEGMENT_FORWARD_LOOKAHEAD)
-        for index in range(maxLength, lookaheadEnd):
-            if text[index].isspace():
-                return index
-        noSpaceCut = self._find_no_space_script_cut(text, maxLength)
-        if noSpaceCut is not None:
-            return noSpaceCut
-        urlBreakCharacters = "/\\?&=#%._-~:"
-        for index in range(maxLength, minLength - 1, -1):
-            if text[index - 1] in urlBreakCharacters:
-                return index
-        for index in range(maxLength, lookaheadEnd):
-            if text[index] in urlBreakCharacters:
-                return index + 1
-        if text[maxLength - 1].isalnum() and text[maxLength].isalnum():
+                cut = index
+                break
+        if cut is None:
+            for index in range(maxLength, minLength - 1, -1):
+                if text[index - 1].isspace():
+                    cut = index
+                    break
+        if cut is None:
+            lookaheadEnd = min(len(text), maxLength + FORCED_SEGMENT_FORWARD_LOOKAHEAD)
+            for index in range(maxLength, lookaheadEnd):
+                if text[index].isspace():
+                    cut = index
+                    break
+        if cut is None:
+            cut = self._find_no_space_script_cut(text, maxLength)
+        if cut is None:
+            urlBreakCharacters = "/\\?&=#%._-~:"
+            for index in range(maxLength, minLength - 1, -1):
+                if text[index - 1] in urlBreakCharacters:
+                    cut = index
+                    break
+            if cut is None:
+                for index in range(maxLength, lookaheadEnd):
+                    if text[index] in urlBreakCharacters:
+                        cut = index + 1
+                        break
+        if cut is None and text[maxLength - 1].isalnum() and text[maxLength].isalnum():
             wordEnd = min(len(text), FORCED_SEGMENT_HARD_MAX_CHARS)
             for index in range(maxLength, wordEnd):
                 if not text[index].isalnum():
-                    return index
-        return maxLength
+                    cut = index
+                    break
+        finalCut = cut if cut is not None else maxLength
+        log.debug(
+            "Forced segment cut: textLength=%d, cutIndex=%d, maxLength=%d.",
+            len(text),
+            finalCut,
+            maxLength,
+        )
+        return finalCut
 
     def _find_no_space_script_cut(
         self,

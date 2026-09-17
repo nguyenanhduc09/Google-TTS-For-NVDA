@@ -29,7 +29,7 @@ language profiles are enabled, and relevant NVDA log/audio captures.
 ## 2. PCM, pause shortening, segmentation, and cache behavior
 
 - [ ] Listen to representative base and SeaNet packages, including Multi, AFH, FIS, MultiSeaNet, AFHSeaNet, and FISSeaNet where installed.
-- [ ] At volume 100, compare perceived level with other installed synthesizers (e.g., eSpeak) and listen for clipping, pumping, sudden level changes, harshness, or lost beginnings/endings.
+- [ ] At volume 100, compare perceived level with other installed synthesizers and listen for clipping, pumping, sudden level changes, harshness, or lost beginnings/endings.
 - [ ] Distinguish known distortion produced by the original WASM voice from distortion introduced by add-on PCM processing.
 - [ ] Compare the same short and hidden-multi-segment utterances in all three pause modes: **Do not shorten** preserves internal and final engine pauses; **Shorten at end of text only** preserves internal pauses but shortens the final pause; **Shorten all pauses** shortens both internal and final pauses.
 - [ ] Exercise PCM arriving in many small packets and verify no clicks or sample loss at packet boundaries.

@@ -636,5 +636,44 @@ class UnicodeSentenceTerminatorTests(unittest.TestCase):
                 self.assertFalse(is_term(char))
 
 
+class CommonAbbreviationsIntegrityTests(unittest.TestCase):
+    """Verify that no hardcoded abbreviation dictionary is retained in the synth driver."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.processing = load_driver_module("speech_processing")
+
+    def test_no_hardcoded_abbreviations_retained(self) -> None:
+        abbrevs = self.processing.COMMON_ABBREVIATIONS
+        self.assertEqual(len(abbrevs), 0)
+
+    def test_single_letter_initials_still_bound(self) -> None:
+        segmenter = self.processing.DEFAULT_TEXT_SEGMENTER
+        self.assertTrue(segmenter._period_stays_with_previous_token("A. B.", 1))
+        self.assertTrue(segmenter._period_stays_with_previous_token("U.S.A.", 1))
+
+    def test_multi_letter_abbreviations_not_suppressed(self) -> None:
+        segmenter = self.processing.DEFAULT_TEXT_SEGMENTER
+        self.assertFalse(segmenter._period_stays_with_previous_token("Dr. Smith", 2))
+        self.assertFalse(segmenter._period_stays_with_previous_token("Mr. Jones", 2))
+
+
+class ForcedLatencyCutLoggingTests(unittest.TestCase):
+    """Verify debug logging when forced latency cuts are triggered."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.processing = load_driver_module("speech_processing")
+        cls.segmenter = cls.processing.DEFAULT_TEXT_SEGMENTER
+
+    def test_forced_cut_emits_debug_log(self) -> None:
+        long_text = "word " * 30  # 150 chars
+        with self.assertLogs(self.processing.log, level="DEBUG") as cm:
+            cut = self.segmenter._find_forced_latency_cut(long_text, 64)
+            self.assertGreater(cut, 0)
+            self.assertLessEqual(cut, 64 + self.processing.FORCED_SEGMENT_FORWARD_LOOKAHEAD)
+        self.assertTrue(any("Forced segment cut" in msg for msg in cm.output))
+
+
 if __name__ == "__main__":
     unittest.main()

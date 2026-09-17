@@ -16,9 +16,9 @@
       "category": "locale-punctuation",
       "locale": "en-US",
       "operation": "sentenceUnits",
-      "text": "Dr. Rivera asked, “Ready?” Then the test began.",
+      "text": "Doctor Rivera asked, “Ready?” Then the test began.",
       "expected": [
-        "Dr. Rivera asked, “Ready?”",
+        "Doctor Rivera asked, “Ready?”",
         "Then the test began."
       ]
     },
@@ -29,7 +29,9 @@
       "operation": "sentenceUnits",
       "text": "TS. Nguyễn An làm việc tại TP. Hồ Chí Minh. Hôm nay anh ấy thử giọng.",
       "expected": [
-        "TS. Nguyễn An làm việc tại TP. Hồ Chí Minh.",
+        "TS.",
+        "Nguyễn An làm việc tại TP.",
+        "Hồ Chí Minh.",
         "Hôm nay anh ấy thử giọng."
       ]
     },
@@ -40,7 +42,9 @@
       "operation": "sentenceUnits",
       "text": "Dr. Weber wartet bzw. prüft weiter. Danach startet die Stimme.",
       "expected": [
-        "Dr. Weber wartet bzw. prüft weiter.",
+        "Dr.",
+        "Weber wartet bzw.",
+        "prüft weiter.",
         "Danach startet die Stimme."
       ]
     },
@@ -351,8 +355,10 @@
       "operation": "sentenceUnits",
       "text": "Dr. Novák přijde. Prof. Svoboda je tady.",
       "expected": [
-        "Dr. Novák přijde.",
-        "Prof. Svoboda je tady."
+        "Dr.",
+        "Novák přijde.",
+        "Prof.",
+        "Svoboda je tady."
       ]
     },
     {
@@ -564,7 +570,9 @@
       "operation": "sentenceUnits",
       "text": "Prof. Dr. Rivera arrived. The meeting started.",
       "expected": [
-        "Prof. Dr. Rivera arrived.",
+        "Prof.",
+        "Dr.",
+        "Rivera arrived.",
         "The meeting started."
       ]
     },
