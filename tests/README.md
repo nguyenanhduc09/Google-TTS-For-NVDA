@@ -1,6 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes an exhaustive standalone test suite comprising **429 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
+Google TTS For NVDA includes an exhaustive standalone test suite comprising **434 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
 
 All unit tests run **without importing NVDA** or requiring an active NVDA installation. Pure driver and plugin modules (`speech_processing.py`, `audio_math.py`, `voice_store.py`, `language_detector.py`, `language_utils.py`, `standby.py`, `watcher.py`, `updater.py`, etc.) are loaded directly in isolation via `test_support.py`, ensuring tests exercise the production implementation rather than mock AST copies.
 
@@ -48,7 +48,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | [`test_runtime_recovery.py`](#test_runtime_recoverypy) | 5 | 1 | Browser speech failure recovery, single retry policy before audio, standby release safety gating |
 | [`test_segmentation_benchmarks.py`](#test_segmentation_benchmarkspy) | 12 | 2 | Multilingual segmentation throughput benchmarks, cache warm-up passes, PCM processing speed |
 | [`test_segmentation_fuzz.py`](#test_segmentation_fuzzpy) | 13 | 2 | Unicode fuzz testing, sentence split monotonicity, invariant verification across scripts |
-| [`test_speech_processing.py`](#test_speech_processingpy) | 42 | 8 | Three pause modes, noise floor, chunk invariance, text segmentation, cache keys, sentence terminals, abbreviation removal verification, forced cut debug logging |
+| [`test_speech_processing.py`](#test_speech_processingpy) | 47 | 9 | Three pause modes, noise floor, chunk invariance, text segmentation, cache keys, sentence terminals, abbreviation removal verification, forced cut debug logging, URL and domain boundary splitting |
 | [`test_standby_concurrency.py`](#test_standby_concurrencypy) | 22 | 5 | Generation counter, cancelEvent propagation, bridge claim/release, clean termination |
 | [`test_support.py`](#test_supportpy) | — | — | Shared test infrastructure, isolated module loader, mock bridge/CDP/engine/process helpers |
 | [`test_synth_driver_helpers.py`](#test_synth_driver_helperspy) | 34 | 9 | Rate factor interpolation, break rate clamping, word dictionaries, config compat, NVDA logger formatting, fatal fallback, speech loop resilience, voice setting support |
@@ -56,7 +56,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | [`test_updater_security.py`](#test_updater_securitypy) | 77 | 15 | SHA-256 validation, size checks, path traversal defense, HTTPS enforcement, manifest parsing, versions |
 | [`test_voice_package_lifecycle.py`](#test_voice_package_lifecyclepy) | 18 | 6 | Catalog loading/sorting, package verification, removal, copying, full lifecycle, catalog validation |
 | [`test_watcher.py`](#test_watcherpy) | 17 | 4 | Win32 DirectoryChangeWatcher lifecycle, callbacks, edge cases, kernel-level directory watching |
-| **Total** | **429** | **100** | **Exhaustive standalone test suite** |
+| **Total** | **434** | **101** | **Exhaustive standalone test suite** |
 
 ---
 
@@ -254,17 +254,18 @@ Fuzz tests for speech text segmentation using pseudo-random Unicode streams:
   - `test_ellipsis_doesnt_over_split`: Asserts ellipsis character sequences do not produce runaway splits.
 
 ### `test_speech_processing.py`
-*42 tests across 8 classes*
+*47 tests across 9 classes*
 
-Comprehensive tests for PCM audio processing, text segmentation, caching, Unicode sentence boundaries, abbreviation validation, and forced cut telemetry:
+Comprehensive tests for PCM audio processing, text segmentation, caching, Unicode sentence boundaries, abbreviation validation, forced cut telemetry, and URL/domain boundary sentence splitting:
 - **`PcmSilenceShortenerTests`**: Validates the three pause modes (`shortenAll`, `shortenEndOnly`, `doNotShorten`), inclusive PCM noise floor detection, invariant behavior across arbitrary packet chunk boundaries, flush of incomplete detection blocks at stream finish, flush of audible blocks at hidden boundaries, chunking invariance across hidden boundaries, and rejection of invalid pause modes.
 - **`PcmLeadBufferTests`**: Verifies that the lead buffer releases audio once threshold is reached and passes subsequent audio through directly, and that short audio flushes cleanly on finish without loss.
-- **`TextSegmenterTests`**: Covers opt-in medium-text fast-first segmentation, enforcement of fast-first limit strictly on the first segment, punctuation-free intact ceilings, trailing orphan word protection across Latin and non-Latin scripts, preference for early soft punctuation breaks, CJK punctuation-free intact ceilings, corpus schema version 1 verification, corpus test case coverage, and ASCII fast-path optimizations (`sample.isascii()` and `_FLATTENED_NO_SPACE_RANGES`).
+- **`TextSegmenterTests`**: Covers opt-in medium-text fast-first segmentation, enforcement of fast-first limit strictly on the first segment, punctuation-free intact ceilings (up to 135 chars for space-delimited text and 110 chars for no-space text), natural sentences under 120 chars staying intact without premature clause splitting (`test_fast_first_under_120_chars_stays_intact`), maximum sentence segmentation threshold (200 chars), 1:1 Unicode whitespace and BMP Private Use Area (PUA) normalization (`_SPEECH_SANITIZE_TABLE`, tested in `test_sanitize_speech_text_normalizes_unicode_whitespace_and_pua`), trailing orphan word protection across Latin and non-Latin scripts, preference for early soft punctuation breaks, CJK punctuation-free intact ceilings, corpus schema version 1 verification, corpus test case coverage, and ASCII fast-path optimizations (`sample.isascii()` and `_FLATTENED_NO_SPACE_RANGES`).
 - **`ShortAudioCacheKeyTests`**: Verifies cache key composition across audio and segmentation parameters, rejection of oversized texts or hidden-segment markers, boundary-context encapsulation in segment cache keys, and requirement of full boundaries for speech completion.
 - **`SingleLetterAbbreviationGuardTests`**: Verifies that Kannada and Oriya single-letter words before periods split correctly (ASCII guard preventing non-Latin letters from blocking splits), while Latin single-letter abbreviation initials remain bound to their periods.
 - **`UnicodeSentenceTerminatorTests`**: Validates sentence terminal classification across ASCII (`.`, `!`, `?`), CJK fullwidth terminals (`。`, `！`, `？`), Arabic sentence terminals (`؟`, `۔`), Devanagari danda (`।`, `॥`), Thai angular punctuation (`ฯ`), Meetei Mayek section markers (`꯫`), Greek question mark (`;`), tailored ellipsis (`…`), and non-terminal punctuation.
 - **`CommonAbbreviationsIntegrityTests`**: Verifies that no hardcoded abbreviation dictionary is retained in the synthesizer, single-letter initials remain bound to periods, and multi-letter abbreviations are not artificially suppressed.
 - **`ForcedLatencyCutLoggingTests`**: Verifies that `_find_forced_latency_cut()` emits debug log telemetry with text length, cut boundary index, and maximum length when splitting overly long utterances.
+- **`UrlAndDomainBoundaryTests`**: Verifies URL and electronic token recognition (schemes, `www.`, `mailto:`, `ftp.`, emails) via `looks_like_url_token()` and asserts that sentences terminating in URLs or domain names split accurately while dotted acronyms (`U.S.A.`, `B.Sc.`, `e.g.`) remain intact.
 
 ### `test_standby_concurrency.py`
 *22 tests across 5 classes*

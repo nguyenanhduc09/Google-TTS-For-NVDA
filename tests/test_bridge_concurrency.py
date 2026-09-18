@@ -109,7 +109,6 @@ class EnsureConnectionLockScopeTests(unittest.TestCase):
 
         def cancel_after_delay():
             first_attempt_done.wait(timeout=5)
-            time.sleep(0.05)
             cancel.set()
 
         t = threading.Thread(target=cancel_after_delay)

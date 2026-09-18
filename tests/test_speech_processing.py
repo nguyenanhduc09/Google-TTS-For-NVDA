@@ -275,7 +275,7 @@ class TextSegmenterTests(unittest.TestCase):
         """Verify that segments never leave an orphan remainder below minimum threshold."""
         long_text = (
             "Khi chúng tôi tiến hành thử nghiệm cấu hình âm thanh mới thì toàn bộ kết quả "
-            "đo đạc thực tế trên hệ thống đều phản hồi rất tích cực và hoạt động vô cùng ổn định."
+            "đo đạc thực tế trên hệ thống đều được ghi nhận đầy đủ và lưu trữ vào cơ sở dữ liệu."
         )
         segments = list(self.segmenter.iter_text_segments_for_latency(long_text, True))
         self.assertGreaterEqual(len(segments), 2)
@@ -284,12 +284,28 @@ class TextSegmenterTests(unittest.TestCase):
 
     def test_fast_first_early_soft_break_preference(self) -> None:
         """Verify that an early comma produces a faster, natural first segment."""
-        text = "Khi chúng tôi tiến hành thử nghiệm cấu hình âm thanh mới, kết quả đo đạc thực tế phản hồi rất tích cực."
+        text = (
+            "Khi chúng tôi tiến hành thử nghiệm cấu hình âm thanh mới, kết quả đo đạc thực tế "
+            "trên hệ thống được ghi nhận đầy đủ và lưu trữ vào cơ sở dữ liệu."
+        )
         segments = list(self.segmenter.iter_text_segments_for_latency(text, True))
         self.assertEqual(2, len(segments))
         self.assertTrue(segments[0].endswith(","))
         self.assertLessEqual(len(segments[0]), self.processing.FAST_FIRST_PREFERRED_SOFT_CHARS + 5)
         self.assertGreaterEqual(len(segments[1]), self.processing.MIN_ORPHAN_SPACE_CHARS)
+
+    def test_fast_first_under_120_chars_stays_intact(self) -> None:
+        """Verify natural single sentences under the 120-char trigger are not prematurely split."""
+        text = "Khi chúng tôi tiến hành thử nghiệm cấu hình âm thanh mới, kết quả đo đạc thực tế được ghi nhận đầy đủ."
+        segments = list(self.segmenter.iter_text_segments_for_latency(text, True))
+        self.assertEqual([text], segments)
+
+    def test_sanitize_speech_text_normalizes_unicode_whitespace_and_pua(self) -> None:
+        """Verify fast-path whitespace normalization preserves 1:1 character length."""
+        raw = "Hello\u00a0world\u3000test\u202ffast\u2003space\ue000pua\U000f0001supp"
+        sanitized = self.segmenter.sanitize_speech_text(raw)
+        self.assertEqual(len(raw), len(sanitized))
+        self.assertEqual("Hello world test fast space pua supp", sanitized)
 
     def test_cjk_punctuation_free_intact_ceiling(self) -> None:
         """Verify CJK text under the intact ceiling stays whole without orphan tail."""
@@ -673,6 +689,44 @@ class ForcedLatencyCutLoggingTests(unittest.TestCase):
             self.assertGreater(cut, 0)
             self.assertLessEqual(cut, 64 + self.processing.FORCED_SEGMENT_FORWARD_LOOKAHEAD)
         self.assertTrue(any("Forced segment cut" in msg for msg in cm.output))
+
+
+class UrlAndDomainBoundaryTests(unittest.TestCase):
+    """Verify URL token recognition and sentence splitting at URL/domain boundaries."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.processing = load_driver_module("speech_processing")
+        cls.segmenter = cls.processing.DEFAULT_TEXT_SEGMENTER
+
+    def test_looks_like_url_token(self) -> None:
+        self.assertTrue(self.segmenter.looks_like_url_token("https://google.com"))
+        self.assertTrue(self.segmenter.looks_like_url_token("http://example.com/path"))
+        self.assertTrue(self.segmenter.looks_like_url_token("www.google.com"))
+        self.assertTrue(self.segmenter.looks_like_url_token("ftp.example.org"))
+        self.assertTrue(self.segmenter.looks_like_url_token("mailto:user@example.com"))
+        self.assertTrue(self.segmenter.looks_like_url_token("user@example.com"))
+        self.assertFalse(self.segmenter.looks_like_url_token("hello world"))
+        self.assertFalse(self.segmenter.looks_like_url_token("plain"))
+        self.assertFalse(self.segmenter.looks_like_url_token("U.S.A."))
+
+    def test_sentence_split_after_url_and_domain(self) -> None:
+        cases = [
+            ("Truy cập https://google.com. Sau đó nhấn Enter.", 29),
+            ("Open www.example.org. Then continue.", 22),
+            ("Truy cập google.com. Sau đó tiếp tục.", 21),
+            ("Read news on vnexpress.net. Check later.", 28),
+            ("Check bbc.co.uk. Then reply.", 17),
+        ]
+        for text, expected_split in cases:
+            with self.subTest(text=text):
+                splits = self.segmenter.find_sentence_splits(text)
+                self.assertEqual(splits, [expected_split])
+
+    def test_acronyms_do_not_split_erroneously(self) -> None:
+        self.assertEqual(self.segmenter.find_sentence_splits("I visited the U.S.A. last year."), [])
+        self.assertEqual(self.segmenter.find_sentence_splits("He has a B.Sc. degree in math."), [])
+        self.assertEqual(self.segmenter.find_sentence_splits("For e.g. this example."), [])
 
 
 if __name__ == "__main__":

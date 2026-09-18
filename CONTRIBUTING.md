@@ -98,7 +98,7 @@ git clean -fdX                            # clean temporary caches
 
 ## What the Tests Cover
 
-All 429 unit tests run **without NVDA installed**, making them fast, self-contained, and safe to execute in any environment (Windows, Linux, or macOS):
+All 434 unit tests run **without NVDA installed**, making them fast, self-contained, and safe to execute in any environment (Windows, Linux, or macOS):
 
 - **Speech & Audio Processing**: Text segmentation across Latin, CJK, Thai, Arabic, and mixed scripts, Unicode 17.0 / CLDR 48.2 script ranges, audio math, pause shortening, lead buffering, and audio caching.
 - **Browser Bridge & Standby Concurrency**: Headless Chromium lifecycle, CDP WebSocket communication, race-condition defenses, cancellation handling, process tree priority elevation, Windows 11 EcoQoS (Power Throttling) disablement, Edge efficiency mode suppression, and standby pre-warm synchronization.

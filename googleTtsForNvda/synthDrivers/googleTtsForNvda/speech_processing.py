@@ -42,16 +42,16 @@ SHORT_AUDIO_CACHE_OPTION_FIELDS = (
 FAST_FIRST_SEGMENT_MIN_CHARS = 30
 REGULAR_SEGMENT_MIN_CHARS = 110
 FAST_FIRST_SEGMENT_MAX_CHARS = 64
-FAST_FIRST_SEGMENT_TRIGGER_CHARS = 90
-REGULAR_SEGMENT_MAX_CHARS = 240
+FAST_FIRST_SEGMENT_TRIGGER_CHARS = 120
+REGULAR_SEGMENT_MAX_CHARS = 200
 SEAMLESS_UTTERANCE_MAX_CHARS = 900
 FAST_SOFT_PHRASE_SEGMENT_MIN_CHARS = 30
-FAST_SOFT_PHRASE_SEGMENT_MAX_CHARS = 90
+FAST_SOFT_PHRASE_SEGMENT_MAX_CHARS = 120
 FAST_SOFT_PHRASE_SEGMENT_LOOKAHEAD = 40
 SOFT_PHRASE_SEGMENT_MIN_CHARS = 100
-SOFT_PHRASE_SEGMENT_MAX_CHARS = 240
+SOFT_PHRASE_SEGMENT_MAX_CHARS = 200
 SOFT_PHRASE_SEGMENT_LOOKAHEAD = 55
-URL_TOKEN_SEGMENT_MAX_CHARS = 220
+URL_TOKEN_SEGMENT_MAX_CHARS = 200
 FORCED_SEGMENT_MIN_CHARS = 32
 FORCED_SEGMENT_FORWARD_LOOKAHEAD = 24
 FORCED_SEGMENT_HARD_MAX_CHARS = 320
@@ -60,8 +60,8 @@ NO_SPACE_SCRIPT_SIGNAL_MIN_RATIO = 0.55
 NO_SPACE_SCRIPT_COMBINING_LOOKAHEAD = 8
 MIN_ORPHAN_SPACE_CHARS = 24
 MIN_ORPHAN_NO_SPACE_CHARS = 16
-FAST_FIRST_PUNCTUATION_FREE_TRIGGER_CHARS = 115
-FAST_FIRST_PUNCTUATION_FREE_NO_SPACE_TRIGGER_CHARS = 96
+FAST_FIRST_PUNCTUATION_FREE_TRIGGER_CHARS = 135
+FAST_FIRST_PUNCTUATION_FREE_NO_SPACE_TRIGGER_CHARS = 110
 FAST_FIRST_PREFERRED_SOFT_CHARS = 55
 FAST_FIRST_PREFERRED_WHITESPACE_CHARS = 68
 
@@ -177,6 +177,40 @@ def _find_no_space_range(codepoint: int) -> tuple[int, int, int] | None:
 
 
 COMMON_ABBREVIATIONS: frozenset[str] = frozenset()
+
+# Precomputed translation table for high-speed one-pass string sanitization.
+# Maps all 25 non-standard Unicode whitespace characters and BMP Private Use Area
+# (Co) codepoints to standard ASCII spaces, normalizing whitespace
+# while preserving 1:1 character index alignments.
+_SPEECH_SANITIZE_TABLE: dict[int, str] = {
+    0x000B: " ",
+    0x000C: " ",
+    0x001C: " ",
+    0x001D: " ",
+    0x001E: " ",
+    0x001F: " ",
+    0x0085: " ",
+    0x00A0: " ",
+    0x1680: " ",
+    0x2000: " ",
+    0x2001: " ",
+    0x2002: " ",
+    0x2003: " ",
+    0x2004: " ",
+    0x2005: " ",
+    0x2006: " ",
+    0x2007: " ",
+    0x2008: " ",
+    0x2009: " ",
+    0x200A: " ",
+    0x2028: " ",
+    0x2029: " ",
+    0x202F: " ",
+    0x205F: " ",
+    0x3000: " ",
+}
+for _pua_codepoint in range(0xE000, 0xF900):
+    _SPEECH_SANITIZE_TABLE[_pua_codepoint] = " "
 
 
 def pcm_bytes_for_milliseconds(milliseconds: int, sampleRate: int, bytesPerSample: int = PCM_BYTES_PER_SAMPLE) -> int:
@@ -560,7 +594,10 @@ class TextSegmenter:
     def sanitize_speech_text(self, text: str) -> str:
         if not text:
             return text
-        return "".join(" " if unicodedata.category(character) == "Co" else character for character in text)
+        sanitized = text.translate(_SPEECH_SANITIZE_TABLE)
+        if max(sanitized) >= "\U000f0000":
+            return "".join(" " if 0xF0000 <= ord(character) <= 0x10FFFD else character for character in sanitized)
+        return sanitized
 
     def spoken_bridge_segments(self, segments: list[str]) -> list[str]:
         spokenSegments: list[str] = []
@@ -636,7 +673,17 @@ class TextSegmenter:
         wordBefore = text[wordStart + 1 : periodIndex].lower()
         if len(wordBefore) == 1 and wordBefore.isalpha() and wordBefore.isascii():
             return True
-        return wordBefore.isalpha() and wordStart >= 0 and text[wordStart] == "."
+        if wordBefore.isalpha() and wordStart >= 0 and text[wordStart] == ".":
+            tokenStart = wordStart
+            while tokenStart >= 0 and not text[tokenStart].isspace():
+                tokenStart -= 1
+            tokenBeforePeriod = text[tokenStart + 1 : periodIndex]
+            if self.looks_like_url_token(tokenBeforePeriod) or "://" in tokenBeforePeriod:
+                return False
+            cleanToken = tokenBeforePeriod.strip("()[]{}'\"“”«»`‘’,")
+            parts = cleanToken.split(".")
+            return not any(len(part) > 2 for part in parts)
+        return False
 
     def _period_is_numeric_separator(self, text: str, periodIndex: int) -> bool:
         before = text[periodIndex - 1] if periodIndex > 0 else ""
@@ -960,7 +1007,18 @@ class TextSegmenter:
     def looks_like_url_token(self, text: str) -> bool:
         if any(character.isspace() for character in text):
             return False
-        return "://" in text or "/" in text or "\\" in text
+        lower = text.lower()
+        return (
+            "://" in text
+            or "/" in text
+            or "\\" in text
+            or ("@" in text and "." in text[text.find("@") :])
+            or lower.startswith("www.")
+            or lower.startswith("http.")
+            or lower.startswith("https.")
+            or lower.startswith("mailto:")
+            or lower.startswith("ftp.")
+        )
 
     def _is_forced_soft_break(self, text: str, index: int) -> bool:
         character = text[index - 1]

@@ -92,6 +92,15 @@ class FakeCdpClient:
             self.connected = False
             self.close_count += 1
 
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return {"result": {"result": {"value": True}}}
+
 
 class FakeEngine:
     """Minimal stand-in for WasmTtsEngineBridge that records calls."""
@@ -158,6 +167,11 @@ class FakeProcessManager:
     def start_and_get_websocket_url(self, *, cancelEvent=None, skipRuntimes=None):
         with self._lock:
             self._started_count += 1
+            if skipRuntimes and self.profile_runtime in skipRuntimes:
+                for candidate in ("edge", "brave", "chrome"):
+                    if candidate not in skipRuntimes:
+                        self.profile_runtime = candidate
+                        break
             if self._index >= len(self._urls):
                 raise bridge_module.CdpError("No more runtimes", "Exhausted")
             url = self._urls[self._index]
