@@ -466,5 +466,61 @@ class ElevateChromePriorityTests(unittest.TestCase):
         bridge._elevate_chrome_priority(999999)
 
 
+# ---------------------------------------------------------------------------
+# _hidden_chrome_startup_kwargs & browser process creation handles
+# ---------------------------------------------------------------------------
+
+
+class HiddenChromeStartupKwargsTests(unittest.TestCase):
+    """Verify _hidden_chrome_startup_kwargs returns proper startup flags."""
+
+    def test_hidden_chrome_startup_kwargs(self) -> None:
+        import os
+        import subprocess
+
+        kwargs = bridge._hidden_chrome_startup_kwargs()
+        if os.name == "nt":
+            self.assertIn("startupinfo", kwargs)
+            self.assertIn("creationflags", kwargs)
+            startup_info = kwargs["startupinfo"]
+            self.assertTrue(startup_info.dwFlags & subprocess.STARTF_USESHOWWINDOW)
+            self.assertEqual(0, startup_info.wShowWindow)
+            self.assertEqual(getattr(subprocess, "CREATE_NO_WINDOW", 0), kwargs["creationflags"])
+        else:
+            self.assertEqual({}, kwargs)
+
+
+class BrowserProcessManagerSpawnTests(unittest.TestCase):
+    """Verify browser process spawning isolates standard handles."""
+
+    def test_start_browser_choice_passes_devnull_handles(self) -> None:
+        import subprocess
+        import tempfile
+        from unittest.mock import MagicMock, patch
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_dir = Path(temp_dir)
+            pm = bridge.BrowserProcessManager(catalog=bridge.VoiceCatalog([]))
+            pm._serverPort = 8080
+            mock_proc = MagicMock()
+            mock_proc.pid = 4321
+
+            with (
+                patch.object(pm, "_get_browser_profile_dir", return_value=profile_dir),
+                patch.object(pm, "_page_url", return_value="http://127.0.0.1:8080/index.html"),
+                patch.object(pm, "_read_devtools_port", return_value=9222),
+                patch.object(bridge, "_hide_chrome_windows"),
+                patch.object(bridge, "_elevate_chrome_priority"),
+                patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+            ):
+                pm._start_browser_choice("chrome", "dummy_browser.exe")
+
+                mock_popen.assert_called_once()
+                _, kwargs = mock_popen.call_args
+                self.assertEqual(subprocess.DEVNULL, kwargs.get("stdin"))
+                self.assertEqual(subprocess.DEVNULL, kwargs.get("stdout"))
+                self.assertEqual(subprocess.DEVNULL, kwargs.get("stderr"))
+
+
 if __name__ == "__main__":
     unittest.main()

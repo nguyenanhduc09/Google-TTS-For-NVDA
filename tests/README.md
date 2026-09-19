@@ -1,6 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes an exhaustive standalone test suite comprising **434 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
+Google TTS For NVDA includes an exhaustive standalone test suite comprising **436 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
 
 All unit tests run **without importing NVDA** or requiring an active NVDA installation. Pure driver and plugin modules (`speech_processing.py`, `audio_math.py`, `voice_store.py`, `language_detector.py`, `language_utils.py`, `standby.py`, `watcher.py`, `updater.py`, etc.) are loaded directly in isolation via `test_support.py`, ensuring tests exercise the production implementation rather than mock AST copies.
 
@@ -37,7 +37,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | :--- | :---: | :---: | :--- |
 | [`test_audio_math.py`](#test_audio_mathpy) | 6 | 1 | Non-linear rate mapping, pitch conversion, SeaNet rate capping, WSOLA parameters |
 | [`test_bridge_concurrency.py`](#test_bridge_concurrencypy) | 11 | 4 | Connection lock scope, safe engine reference capture, busy lock, cancellation |
-| [`test_bridge_helpers.py`](#test_bridge_helperspy) | 56 | 19 | Path traversal prevention, browser runtime normalization/availability, fallback order, profile-in-use exit codes, CDP error classification, process tree priority elevation & EcoQoS disablement |
+| [`test_bridge_helpers.py`](#test_bridge_helperspy) | 58 | 21 | Path traversal prevention, browser runtime normalization/availability, fallback order, profile-in-use exit codes, CDP error classification, process tree priority elevation & EcoQoS disablement, hidden startup flags, standard handle isolation |
 | [`test_build_i18n.py`](#test_build_i18npy) | 6 | 1 | POT translation template updating, locale selection, manifest version sync, obsolete entry purging |
 | [`test_build_i18n_helpers.py`](#test_build_i18n_helperspy) | 29 | 7 | PO parsing, format placeholder extraction, PO string escaping, language code normalization |
 | [`test_dependency_isolation.py`](#test_dependency_isolationpy) | 8 | 1 | Vendored WebSocket isolation, relative import compliance, driver asset and library path anchoring |
@@ -56,7 +56,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | [`test_updater_security.py`](#test_updater_securitypy) | 77 | 15 | SHA-256 validation, size checks, path traversal defense, HTTPS enforcement, manifest parsing, versions |
 | [`test_voice_package_lifecycle.py`](#test_voice_package_lifecyclepy) | 18 | 6 | Catalog loading/sorting, package verification, removal, copying, full lifecycle, catalog validation |
 | [`test_watcher.py`](#test_watcherpy) | 17 | 4 | Win32 DirectoryChangeWatcher lifecycle, callbacks, edge cases, kernel-level directory watching |
-| **Total** | **434** | **101** | **Exhaustive standalone test suite** |
+| **Total** | **436** | **103** | **Exhaustive standalone test suite** |
 
 ---
 
@@ -101,7 +101,7 @@ Verifies thread safety, synchronization, and race-condition mitigations in `brid
   - `test_concurrent_ensure_connection_when_first_caller_is_cancelled`: Verifies serialized concurrent callers to `ensure_connection()`, ensuring that if the first caller is cancelled (e.g. background warm-up), the second caller (e.g. interactive speech) acquires the lock and successfully establishes CDP connectivity using the already-running browser.
 
 ### `test_bridge_helpers.py`
-*56 tests across 19 classes*
+*58 tests across 21 classes*
 
 Validates pure helper functions in `bridge.py`:
 - **`SafeJoinTests`**: Verifies path-traversal defenses against parent directory (`..`), absolute path, and encoded traversal attacks. *(Cross-platform note: assertions call `.resolve()` on expected and actual paths to normalize Windows 8.3 short names).*
@@ -123,6 +123,8 @@ Validates pure helper functions in `bridge.py`:
 - **`BrowserRuntimeAvailableTests`**: Tests `browser_runtime_available(runtime=None)` with and without runtime argument, unknown runtimes, and validates delegation through `BrowserProcessManager.browser_runtime_available` and `ChromeTtsBridge.browser_runtime_available`.
 - **`BrowserProfileInUseErrorTests`**: Verifies that `_browser_profile_in_use_error(exitCode)` properly formats technical details with the provided exit code (such as 0 or 21).
 - **`ElevateChromePriorityTests`**: Verifies safe elevation of current process priority, process tree traversal, disabling EcoQoS (Power Throttling), and handling invalid PIDs without raising exceptions.
+- **`HiddenChromeStartupKwargsTests`**: Verifies that `_hidden_chrome_startup_kwargs()` configures proper hidden window startup info (`STARTF_USESHOWWINDOW`, `wShowWindow = 0`) and creation flags (`CREATE_NO_WINDOW`) on Windows NT, returning an empty dictionary on non-Windows platforms.
+- **`BrowserProcessManagerSpawnTests`**: Verifies that `BrowserProcessManager._start_browser_choice()` passes `stdin=subprocess.DEVNULL`, `stdout=subprocess.DEVNULL`, and `stderr=subprocess.DEVNULL` to `subprocess.Popen`, isolating child browser standard I/O handles from invalid or non-redirectable parent console handles.
 
 ### `test_build_i18n.py`
 *6 tests across 1 class*

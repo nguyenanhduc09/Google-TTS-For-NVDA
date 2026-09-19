@@ -1098,6 +1098,7 @@ class BrowserProcessManager:
             try:
                 self._chromeProcess = subprocess.Popen(
                     args,
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     **_hidden_chrome_startup_kwargs(),

@@ -207,6 +207,7 @@ This add-on depends on a supported Chromium browser runtime (Google Chrome, Micr
   - Browser profile directories are strictly segregated per runtime root (`chromeProfiles`, `edgeProfiles`, `braveProfiles`). Resetting one runtime must never delete another runtime's profile data.
   - Temporary profiles are deleted upon synth termination/cleanup; persistent profiles are preserved across sessions.
   - Profile cleanup and recursive persistent-profile scans must check `cancelEvent` so synth switches do not wait for stale filesystem cleanup.
+  - Browser process spawning isolates standard I/O by explicitly passing `stdin=subprocess.DEVNULL`, `stdout=subprocess.DEVNULL`, and `stderr=subprocess.DEVNULL` along with `_hidden_chrome_startup_kwargs()` (`STARTF_USESHOWWINDOW` / `CREATE_NO_WINDOW`), preventing Windows kernel errors (`[WinError 50]` or `[WinError 6]`) if NVDA's parent console handles are closed or invalid.
 - **Speech Loop Resilience, Crash Defense & Fatal Fallback**:
   - The speech loop daemon thread (`SynthDriver._speech_loop`) wraps `self._speak_worker(*request)` in `try...except Exception:` to guarantee unexpected exceptions never kill the background thread.
   - Any unhandled worker exception logs the error via `log.exception("Unexpected exception in speech loop worker.")` and invokes `_trigger_fatal_fallback()` via `wx.CallAfter()`.
@@ -237,9 +238,10 @@ This add-on depends on a supported Chromium browser runtime (Google Chrome, Micr
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:_runtime_fallback_order() -> list[str]` — Generates candidate fallback sequence starting with the configured runtime.
 
 - **Chromium Profile Management & Profile-In-Use Recovery**:
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:_hidden_chrome_startup_kwargs() -> dict[str, Any]` — Prepares hidden window `STARTUPINFO` flags (`STARTF_USESHOWWINDOW`, `wShowWindow = 0`) and `CREATE_NO_WINDOW` creation flags on Windows.
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:_browser_profile_in_use_error(exitCode: int = 21) -> _BrowserProfileInUseError` — Constructs profile-in-use exception recording the specific process exit code (`0` or `21`) in `technicalDetail`.
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._read_devtools_port()` — Reads `DevToolsActivePort`; on persistent profile early exit with code `0` or `21`, raises `_browser_profile_in_use_error(exitCode)`.
-  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._start_browser_choice()` — Catches `_BrowserProfileInUseError` during persistent startup and retries immediately with an isolated temporary session profile.
+  - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._start_browser_choice()` — Spawns Chromium with `stdin=subprocess.DEVNULL`, `stdout=subprocess.DEVNULL`, and `stderr=subprocess.DEVNULL` to isolate standard handles from parent process environment, catches `_BrowserProfileInUseError` during persistent startup, and retries immediately with an isolated temporary session profile.
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._browser_profile_root()`, `_browser_profile_dir_name()`, `_get_browser_profile_dir()` — Manages isolated profile directory trees (`chromeProfiles`, `edgeProfiles`, `braveProfiles`).
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:BrowserProcessManager._cleanup_old_browser_profiles()`, `_release_chrome_profile()`, `_remove_chrome_profile()` — Preserves persistent profiles while removing temporary profiles upon shutdown or failure.
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/bridge.py:PERSISTENT_PROFILE_MAX_BYTES`, `PERSISTENT_PROFILE_SIZE_CHECK_INTERVAL_SECONDS`, `_persistent_profile_size_check_due()` — Throttles recursive profile size checks.
@@ -550,9 +552,9 @@ Automatic language profiles deliberately have their own profile system and must 
   - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: `GlobalPlugin.terminate()`, `GlobalPlugin.on_open_voice_manager()`, `GlobalPlugin.script_openVoiceManager()`, and `GlobalPlugin.script_openSettings()`.
   - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py` input gesture map: `GlobalPlugin.__gestures`, `GlobalPlugin.script_openVoiceManager()`, and `GlobalPlugin.script_openSettings()`.
 
-- **NVDA Static API Contract Checks & Test Coverage**:
-  - `tests/test_synth_driver_helpers.py`: `FatalFallbackTests` (unrecoverable error detection, queue clearing, cancellation, fallback synth invocation, delayed dialog dispatch), `ConfigCompatTests.test_speech_failure_logging_compatible_with_nvda_logger` (NVDA `logHandler.Logger.exception` single-string compatibility without positional arguments), `SpeechLoopResilienceTests` (speech loop worker exception handling), and `SynthDriverIsSupportedTests` (verifying `isSupported("voice")` returns `True` across profile states, AST signature conformity, and valid voice initialization in `loadSettings()`).
-  - `tests/check_nvda_api_contracts.py`: static contract runner checking `setSynth`, `WavePlayer`, output-device, `nvwave.isInError`, `AutoSettingsMixin.refreshGui`, and `AutoSettings.isSupported` across installed NVDA release trees.
+- **NVDA Static API Contract Checks & Test Suite**:
+  - Standalone unit tests verify fallback behavior, speech loop resilience, logger compatibility, and voice setting states. Detailed test inventory and execution instructions are documented in [tests/README.md](tests/README.md).
+  - `tests/check_nvda_api_contracts.py`: static contract runner checking NVDA API compatibility across releases.
   - `tests/NVDA_CHROMIUM_MANUAL_CHECKLIST.md`: manual test checklist for interactive NVDA runtime validation.
 
 ---
