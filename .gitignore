@@ -3,6 +3,9 @@ dist/
 *.nvda-addon
 *.zip
 *.pot
+googleTtsForNvda/doc/**/*.mo
+googleTtsForNvda/doc/**/*.po
+googleTtsForNvda/doc/**/*.md
 
 # Python artifacts & caches
 .ruff_cache/

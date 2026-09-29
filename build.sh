@@ -45,6 +45,9 @@ if [ -f "googleTtsForNvda/googleTtsForNvda.nvda-addon" ]; then
     rm -f "googleTtsForNvda/googleTtsForNvda.nvda-addon"
     echo "      Removed stale .nvda-addon from source tree."
 fi
+if [ -d "googleTtsForNvda/doc" ]; then
+    find googleTtsForNvda/doc \( -name "*.mo" -o -name "*.po" -o -name "*.md" \) -type f -delete 2>/dev/null || true
+fi
 echo "      Done."
 echo
 

@@ -1,318 +1,268 @@
 # Translating Google TTS For NVDA
 
-This add-on uses NVDA's gettext layout for interface and manifest translations:
+This add-on uses standard gettext conventions for interface strings and supports HTML, PO, or Markdown workflows for user documentation. Existing localized folders (`googleTtsForNvda/locale/vi/` and `googleTtsForNvda/doc/vi/`) serve as complete in-tree reference implementations.
+
+### Translation File Layout
 
 ```text
-googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.po
-googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.mo
-googleTtsForNvda/locale/<language>/manifest.ini
+googleTtsForNvda/
+├── locale/
+│   ├── nvda.pot                                 # UI string template (generated)
+│   └── <language>/
+│       ├── LC_MESSAGES/
+│       │   ├── nvda.po                          # Source interface translations
+│       │   └── nvda.mo                          # Compiled binary catalog (generated)
+│       ├── manifest.ini                         # Translated add-on metadata (generated)
+│       └── languageSort.json                    # Optional visible language sorting
+└── doc/
+    ├── readme.pot                               # Documentation template (generated)
+    └── <language>/
+        ├── readme.html                          # User help guide (required for packaging)
+        ├── readme.po                            # Optional gettext documentation source
+        └── readme.md                            # Optional Markdown documentation source
 ```
 
-Documentation is translated separately:
+Regenerate templates after adding or modifying user-facing strings or English documentation. See [Checking and building](#checking-and-building) for exact commands.
 
-```text
-googleTtsForNvda/doc/<language>/readme.html
+---
+
+## Prerequisites & Recommended Tools
+
+`build_i18n.py` includes pure-Python fallbacks for all operations, allowing basic checks and builds to work out of the box. However, installing recommended libraries and GNU gettext tools is strongly advised for optimal performance, syntax validation, and feature support:
+
+### 1. Python packages for documentation processing
+
+```bash
+pip install markdown nh3 lxml pymdown-extensions mdx_truly_sane_lists mdx_gh_links
 ```
 
-The English source-string template is generated at:
+- **`markdown` & extensions (`pymdown-extensions`, `mdx_truly_sane_lists`, `mdx_gh_links`)**: Converts Markdown to accessible HTML with full support for tables, tab-preserving code blocks, clean nested lists, GitHub links, and `<kbd>` tags.
+- **`nh3` (Ammonia engine)**: High-speed HTML sanitization removing unsafe scripts while preserving documentation markup (`<kbd>`, MathML, anchor IDs, tables).
+- **`lxml`**: High-performance XML/HTML parser that strictly validates HTML syntax and catches unclosed tags or broken structures.
+- *(Optional)* **`l2m4m`** (`pip install l2m4m`): Converts LaTeX formulas to accessible MathML.
 
-```text
-googleTtsForNvda/locale/nvda.pot
-```
+### 2. GNU gettext tools for PO/MO operations
 
-Regenerate it after adding or changing user-facing strings. See [Checking and building](#checking-and-building) for the exact commands.
+`build_i18n.py` uses GNU `msgfmt` and `msgmerge` for strict PO syntax verification, template merging, and binary MO compilation:
+- **Windows**: Install [Poedit](https://poedit.com/). `build_i18n.py` automatically detects `msgfmt.exe` and `msgmerge.exe` in standard Poedit installation folders.
+- **Linux / WSL**: Install gettext via your package manager:
+  ```bash
+  sudo apt update && sudo apt install gettext
+  ```
 
-## What each translation part means
+If `msgmerge` or `msgfmt` are absent, `build_i18n.py` falls back to internal pure-Python routines.
 
-Each translation part affects a different place in the add-on:
+---
 
-- Interface strings in `nvda.po` are the text users hear or see inside NVDA dialogs, settings, prompts, progress messages, errors, and Voice Manager controls.
-- `nvda.mo` is the compiled form of `nvda.po`. NVDA loads this file at runtime, so it must match the current `.po` when the translation is installed or packaged.
-- The localized `manifest.ini` provides translated add-on metadata, especially the summary and description shown by NVDA's add-on interface.
-- Translated documentation in `doc/<language>/readme.html` is the user's help page for the add-on in that language. It should explain installation, first-run behavior, settings, voice management, and any translation-specific notes in natural language.
-- `languageSort.json` is optional. It only changes the visible order of language names in Voice Manager for that locale, so users see a natural alphabetic order in their own language.
-- `nvda.pot` is not a user-facing translation. It is the English source-string template that translators use to create or update `.po` files.
+## Translation Components & Capabilities
 
-## What the i18n script does
+`build_i18n.py` automates translation maintenance across UI strings and documentation:
 
-`build_i18n.py` validates translations, extracts the English source-string template, updates selected locale `.po` files from that template, compiles `.po` files into `.mo`, and writes localized `manifest.ini` files. It does not create translated documentation or `languageSort.json`; those files are written by translators and then validated by the script.
+1. **Interface Strings & Add-on Metadata (`locale/<language>/`)**:
+   - `LC_MESSAGES/nvda.po`: Primary gettext source containing all UI strings, dialog labels, and manifest fields (`summary`, `description`).
+   - `LC_MESSAGES/nvda.mo`: Runtime binary catalog compiled from `nvda.po` via GNU `msgfmt` or internal compiler.
+   - `manifest.ini`: Translated metadata displayed in NVDA's Add-on Store, generated automatically from `nvda.po`.
+   - `languageSort.json`: Optional custom alphabetical sorting rules for language names displayed in Voice Manager.
+   - `nvda.pot`: Source template extracted from Python source code and manifest.
 
-## Translation quality
+2. **User Documentation (`doc/<language>/`)**:
+   - `readme.html`: User help guide opened via NVDA's Add-on Help menu. Required for release packaging.
+   - `readme.po`: Optional gettext file extracted from English `readme.html` segments for translators using Poedit or translation memory tools.
+   - `readme.md`: Optional Markdown document that can be bidirectionally converted to or from `readme.html`.
+   - `readme.pot`: Documentation template extracted from `doc/en/readme.html`.
 
-Whether you translate a complete locale or only a specific part, every translated part should be complete for its scope, easy for users to understand, and faithful to the source meaning. Do not omit warnings, setup steps, limitations, security notes, or compatibility notes from a translated section.
+---
 
-Use natural wording for the target language while keeping technical meaning accurate. Keep terminology consistent with the add-on UI, NVDA's own translated terms, and the surrounding documentation.
+## Translation Quality & NVDA Conventions
 
-## Starting a new language
+- **Completeness & Accuracy**: Every translated section should be complete for its scope, clear to screen-reader users, and faithful to the source meaning. Never omit warnings, setup steps, limitations, security notes, or compatibility notes.
+- **Standard NVDA Terminology**: Always match the established terms NVDA users hear in your target language for core concepts (e.g. Synthesizer, Voice, Rate, Pitch, Volume, Add-on Store, Input Gestures) and standard dialog buttons (`OK`, `Cancel`, `Apply`, `Close`, `Yes`, `No`).
+- **Terminology Consistency**: When translating documentation, check your locale's `nvda.po` first. Reuse those exact terms for menu paths, dialog titles, settings, and gestures instead of inventing synonyms.
 
-Before starting or updating a translation, sync your local source tree with the latest project changes. This helps you translate the newest source strings, manifest text, documentation, and any updated terminology instead of working from stale files.
+---
 
-Add-on translations should use language codes that NVDA supports. In practice, this means the language has been contributed to NVDA itself, including NVDA's interface and documentation translation, and appears in NVDA's installed `locale` folder. When that is true, this add-on accepts the same locale code.
+## Starting a New Language
 
-Use NVDA's locale code for the target language. Examples:
+Sync your local branch before starting. Use standard NVDA locale codes (e.g. `de`, `es`, `fr`, `ja`, `pt_BR`, `zh_CN`). If a language is not yet in NVDA's installed locale folder, the add-on translation can still be prepared (a notice will indicate the code is not detected in local NVDA installations).
 
-```text
-zh_CN  Simplified Chinese / Mainland China
-km     Khmer
-ru     Russian
-```
+### 1. Interface translation (UI)
 
-If a language is not present in NVDA's installed locale folder yet, the add-on translation can still be prepared, but the validation script will report that the language code is not currently supported by that NVDA installation.
-
-To start the interface translation:
-
-1. Generate or refresh the source template if it is missing or stale.
-2. Create this folder:
-
-```text
-googleTtsForNvda/locale/<language>/LC_MESSAGES
-```
-
-3. Use Poedit to create `nvda.po` from `googleTtsForNvda/locale/nvda.pot`, or copy the template to:
-
-```text
-googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.po
-```
-
+1. Generate or refresh the UI template:
+   ```powershell
+   python build_i18n.py --extract-template
+   ```
+2. Create the target language directory:
+   ```powershell
+   mkdir googleTtsForNvda/locale/<language>/LC_MESSAGES
+   ```
+3. Copy `googleTtsForNvda/locale/nvda.pot` to `googleTtsForNvda/locale/<language>/LC_MESSAGES/nvda.po` (or initialize via Poedit).
 4. Translate all `msgstr` entries.
-5. Translate the documentation by copying `googleTtsForNvda/doc/en/readme.html` to:
+5. Validate and build `nvda.mo` and `manifest.ini`:
+   ```powershell
+   python build_i18n.py --build-ui -l <language>
+   ```
 
-```text
-googleTtsForNvda/doc/<language>/readme.html
-```
+### 2. Documentation translation
 
-When translating user documentation, check your locale's `nvda.po` and existing localized UI wording first. Reuse those exact terms for menu paths, dialog names, settings, status labels, and gesture-management wording instead of inventing synonyms. For Vietnamese, follow the terms already used in `googleTtsForNvda/locale/vi/LC_MESSAGES/nvda.po`, such as `Google TTS Cho NVDA`, `cấu hình`, `hồ sơ ngôn ngữ tự động`, `Trình quản lý giọng Google TTS`, and `Quản lý thao tác`.
+Choose one of three supported documentation workflows:
 
-6. If your language needs a custom alphabetic order for language names in Voice Manager, see [Visible language sorting](#visible-language-sorting).
-7. Check or build the locale as described in [Checking and building](#checking-and-building).
+- **Workflow A: Gettext PO (Recommended)**:
+  1. Extract or update the documentation PO:
+     ```powershell
+     python build_i18n.py --update-doc-po -l <language>
+     ```
+  2. Translate `doc/<language>/readme.po` in Poedit.
+  3. Compile to HTML:
+     ```powershell
+     python build_i18n.py --build-docs -l <language>
+     ```
 
-## Visible language sorting
+- **Workflow B: Markdown**:
+  1. Create `doc/<language>/readme.md` (or convert English HTML with `python build_i18n.py --html-to-md -l en` and copy it).
+  2. Translate the Markdown document.
+  3. Compile to HTML:
+     ```powershell
+     python build_i18n.py --md-to-html -l <language>
+     ```
 
-Voice Manager normally keeps the catalog order for language lists. If your translation needs a more natural visible order, add:
+- **Workflow C: Direct HTML**:
+  1. Copy `doc/en/readme.html` to `doc/<language>/readme.html`.
+  2. Translate the HTML directly, preserving tags and layout.
+  3. Validate syntax:
+     ```powershell
+     python build_i18n.py --check-docs -l <language>
+     ```
 
-```text
-googleTtsForNvda/locale/<language>/languageSort.json
-```
+---
 
-This file is optional. It is only used to sort the language names that users see in Voice Manager. It must not change translated names, package IDs, catalog data, voice downloads, voice removal, or runtime behavior.
+## Visible Language Sorting (`languageSort.json`)
 
-Example:
+Voice Manager normally follows catalog order. If a language requires custom alphabetical collation, add `googleTtsForNvda/locale/<language>/languageSort.json`:
 
 ```json
 {
-  "stripPrefixes": ["Tiếng "],
-  "letterOrder": ["a", "ă", "â", "b", "c", "d", "đ"],
-  "ignoreCombiningMarks": ["grave", "acute", "tilde", "hook above", "dot below"]
+  "stripPrefixes": ["LanguagePrefix "],
+  "letterOrder": ["a", "b", "c", "..."],
+  "ignoreCombiningMarks": ["acute", "grave", "tilde", "circumflex"]
 }
 ```
 
-Fields:
+- `stripPrefixes`: Words or articles stripped solely for sorting (still visible in UI).
+- `letterOrder`: Dedicated alphabetical sequence for languages where accented or modified letters have separate positions.
+- `ignoreCombiningMarks`: Unicode combining mark names to ignore during sort comparisons.
 
-- `stripPrefixes`: visible prefixes ignored only for sorting. The prefix still appears in the UI.
-- `letterOrder`: alphabet order for this translation.
-- `ignoreCombiningMarks`: Unicode combining marks ignored while sorting.
+This file is optional and only affects visible sorting in Voice Manager. It does not alter package IDs, downloads, or runtime logic.
 
-For example, Vietnamese displays `Tiếng Anh`, but sorts it internally as `Anh`. The UI must still show `Tiếng Anh`, not `anh`.
-
-If `languageSort.json` is missing, Voice Manager keeps catalog order. If the file is invalid, the translation checker reports an error. To check only this file, use the `sort` check described in [Check categories](#check-categories).
-
-## Vietnamese
-
-The Vietnamese translation is the in-tree example for a complete locale:
-
-```text
-googleTtsForNvda/locale/vi/LC_MESSAGES/nvda.po
-googleTtsForNvda/doc/vi/readme.html
-googleTtsForNvda/locale/vi/languageSort.json
-```
-
-Vietnamese generated files are:
-
-```text
-googleTtsForNvda/locale/vi/LC_MESSAGES/nvda.mo
-googleTtsForNvda/locale/vi/manifest.ini
-```
-
-When Vietnamese text names standard dialog buttons, use the same labels NVDA users hear:
-
-- `OK`: `Đồng ý`
-- `Cancel`: `Hủy bỏ`
-- `Yes`: `Có`
-- `No`: `Không`
+---
 
 ## Checking and building
 
-After adding or changing user-facing source strings, update one translation from the current source template with:
+### Interactive Menu
 
-```powershell
-python build_i18n.py --update-po --language <language>
-```
-
-On WSL/Linux, use:
-
-```bash
-python3 build_i18n.py --update-po --language <language>
-```
-
-To update every existing add-on translation in one operation, use:
-
-```powershell
-python build_i18n.py --update-po --all-languages
-```
-
-```bash
-python3 build_i18n.py --update-po --all-languages
-```
-
-You may also repeat `--language` to update several specific locales without updating all of them:
-
-```powershell
-python build_i18n.py --update-po --language uk --language ru
-```
-
-This command regenerates `locale/nvda.pot`, keeps translations whose English source string still matches exactly, adds every new source string with an empty `msgstr`, refreshes source references, and removes obsolete entries, including old `#~` blocks. It does not build `nvda.mo` or a localized manifest because the contributor must translate the new empty strings first. The template's `Project-Id-Version` is read from `googleTtsForNvda/manifest.ini`.
-
-The update action requires GNU `msgmerge`. The script looks on `PATH` and in standard Poedit installation folders on Windows. If necessary, pass its full path explicitly:
-
-```powershell
-python build_i18n.py --update-po --language <language> --msgmerge "C:\Program Files\Poedit\GettextTools\bin\msgmerge.exe"
-```
-
-Fuzzy matching is intentionally disabled. A changed English source string is treated as a new untranslated string instead of reusing a translation that may no longer be correct.
-
-To regenerate only the source-string template for manual use in a translation editor, run:
-
-```powershell
-python build_i18n.py --extract-template
-```
-
-On WSL/Linux, use `python3` instead of `python`:
-
-```bash
-python3 build_i18n.py --extract-template
-```
-
-The generated template is written to:
-
-```text
-googleTtsForNvda/locale/nvda.pot
-```
-
-`nvda.pot` is intentionally ignored by Git, so it is not present in a fresh clone and should not be included in a pull request. When using a translation editor instead of `--update-po`, generate the template locally and use the editor's **Update from POT file** command to merge it into the existing `nvda.po`. Do not replace an existing translated `.po` file with the `.pot` file, because that would discard its translations.
-
-After editing a translation, check it first:
-
-```powershell
-python build_i18n.py --check --language <language>
-```
-
-```bash
-python3 build_i18n.py --check --language <language>
-```
-
-If your translation tool already saved synchronized `.po` and `.mo` files, this check is the normal use of `build_i18n.py` for the interface translation. If the `.mo` file or localized `manifest.ini` should be generated by the script, run:
-
-```powershell
-python build_i18n.py --language <language>
-```
-
-```bash
-python3 build_i18n.py --language <language>
-```
-
-In non-interactive mode, `--all-languages` updates, checks, or builds every language folder currently present in:
-
-```text
-googleTtsForNvda/locale
-```
-
-For Vietnamese specifically, replace `<language>` with `vi`.
-
-Translation work is intentionally separate from add-on packaging. `build.bat` and `build.sh` do not generate `nvda.pot`, check translations, or build localized files. This prevents add-on packaging from failing merely because another locale is still being updated. Translators should run `build_i18n.py` explicitly for their own locale; release maintainers should validate and build the required locales before running the package build script.
-
-For the interactive numbered menu, run:
+Run without arguments for an interactive numbered menu:
 
 ```powershell
 python build_i18n.py
 ```
 
-```bash
-python3 build_i18n.py
+```text
+Task:
+  1. Check or build UI translations (nvda.mo, manifest.ini)
+  2. Generate UI string template (locale\nvda.pot)
+  3. Update UI PO files from the template (locale\<lang>\LC_MESSAGES\nvda.po)
+  4. Check or build documentation translations (doc\<lang>\readme.html)
+  5. Generate documentation string template (doc\readme.pot)
+  6. Update documentation PO files from the template (doc\<lang>\readme.po)
+  7. Convert documentation HTML to Markdown (doc\<lang>\readme.html -> readme.md)
+  8. Convert documentation Markdown to HTML (doc\<lang>\readme.md -> readme.html)
 ```
 
-The menu opens by default when no arguments are provided. `python build_i18n.py --menu` is still accepted when you want to request it explicitly. The menu lists broad choices first: all add-on locales before individual locales, and default/all checks before individual check categories. It lets you choose check-only or build mode, generate only the source string template, or update either one locale PO or all locale PO files from the current template.
+---
+
+### Command-Line (CLI) Commands
+
+In all commands below:
+- Target a single language with `-l <language>` (e.g. `-l de`).
+- Target multiple languages with repeated flags (`-l de -l fr`).
+- Target all languages with `--all-languages`.
+
+#### UI translation commands
+
+```powershell
+python build_i18n.py --extract-template                  # Generate UI template (locale/nvda.pot)
+python build_i18n.py --update-po -l <language>           # Update UI PO from template
+python build_i18n.py --check -l <language>               # Validate UI translations without writing files
+python build_i18n.py --build-ui -l <language>            # Compile nvda.mo and generate manifest.ini
+python build_i18n.py -l <language>                       # Shorthand for --build-ui
+```
+
+#### Documentation translation commands
+
+```powershell
+python build_i18n.py --extract-doc-template              # Generate doc template (doc/readme.pot)
+python build_i18n.py --update-doc-po -l <language>       # Update doc PO from doc template
+python build_i18n.py --check-docs -l <language>          # Validate documentation syntax and tags
+python build_i18n.py --build-docs -l <language>          # Build readme.html (resolves PO -> MD -> HTML)
+python build_i18n.py --html-to-md -l <language>          # Convert readme.html -> readme.md
+python build_i18n.py --md-to-html -l <language>          # Convert readme.md -> readme.html
+```
+
+*Note on `--build-docs` priority:*
+1. Compiles `doc/<lang>/readme.po` if present.
+2. Converts `doc/<lang>/readme.md` if present.
+3. Validates existing `doc/<lang>/readme.html`.
+
+#### Custom tool paths
+
+If GNU gettext or NVDA locale folders are in non-standard locations:
+- `--msgmerge <path>`: Path to `msgmerge.exe`.
+- `--msgfmt <path>`: Path to `msgfmt.exe`.
+- `--nvda-locale-dir <path>`: Path to NVDA locale folder (can be repeated).
+
+Example:
+```powershell
+python build_i18n.py --update-po -l <language> --msgmerge "C:\Tools\msgmerge.exe" --msgfmt "C:\Tools\msgfmt.exe"
+```
+
+---
 
 ## Check categories
 
-Available checks:
+Filter validation checks using `--checks <comma-separated-checks>`:
 
-- `language`: verifies the language code exists in NVDA's locale folder, when available.
-- `manifest`: verifies translated manifest summary and description.
-- `docs`: verifies `doc/<language>/readme.html` exists.
-- `ui`: verifies all Python `_()` strings and manifest strings have translations. This is included in the default checks.
-- `placeholders`: verifies placeholders such as `{runtime}` and `{size:.1f}` match between `msgid` and `msgstr`.
-- `sort`: verifies optional `locale/<language>/languageSort.json` files are valid.
-- `obsolete`: reports active `msgid` entries in `nvda.po` that no longer exist in the current source strings.
+- `language`: Verifies the language code exists in NVDA's locale directory (when found).
+- `manifest`: Verifies `summary` and `description` are translated in `nvda.po` and match `manifest.ini`.
+- `docs`: Verifies documentation exists and RTL direction (`dir="rtl"`) is configured correctly.
+- `ui`: Verifies all Python `_()` strings and manifest entries have non-empty translations.
+- `placeholders`: Verifies HTML tags, links, and Python placeholders (`{runtime}`, `%s`) match between source and translation.
+- `sort`: Verifies optional `languageSort.json` syntax and schema.
+- `obsolete`: Flags active `msgid` entries in `.po` files no longer present in source templates.
+- `fuzzy`: Reports fuzzy translation entries (`#, fuzzy`) needing translator review.
+- `all`: Runs all available checks.
 
-By default, the script runs `language`, `manifest`, `docs`, `ui`, `placeholders`, `sort`, and `obsolete`. `--strict` is kept for compatibility; UI strings are already checked by default.
+**Defaults**:
+- UI check (`--check`): `language`, `manifest`, `docs`, `ui`, `placeholders`, `sort`, `obsolete`.
+- Doc check (`--check-docs`): `language`, `docs`, `placeholders`, `obsolete`.
 
 Examples:
-
 ```powershell
-python build_i18n.py --check --language vi --checks manifest
-python build_i18n.py --check --language vi --checks docs
-python build_i18n.py --check --language vi --checks ui
-python build_i18n.py --check --language vi --checks sort
-python build_i18n.py --check --language vi --checks obsolete
-python build_i18n.py --check --language vi --checks manifest,docs,ui
-python build_i18n.py --check --language vi --checks all
+python build_i18n.py --check -l <language> --checks manifest,ui
+python build_i18n.py --check -l <language> --checks placeholders,fuzzy
+python build_i18n.py --check-docs -l <language> --checks docs,placeholders
+python build_i18n.py --check -l <language> --checks all
 ```
 
-Strict mode is still accepted for translation review workflows. Missing `msgstr` entries are reported with the first source locations where each string appears:
-
-```powershell
-python build_i18n.py --check --strict
-python build_i18n.py --check --strict --language vi
-```
-
-The check fails when:
-
-- The selected add-on locale folder does not exist.
-- The language code is not present in NVDA's installed locale folder, when available.
-- The localized `locale/<language>/manifest.ini` file is missing in check-only mode.
-- The localized `doc/<language>/readme.html` file is missing.
-- A manifest translation is missing from `nvda.po`.
-- A current Python `_()` or manifest source string is missing from `nvda.po` or has an empty `msgstr`.
-- `nvda.po` contains an active `msgid` that no longer exists in the current Python `_()` strings or manifest strings.
-- Python-style placeholders such as `{runtime}` or `{package}` do not match between `msgid` and `msgstr`.
-- The optional `locale/<language>/languageSort.json` file is present but has invalid JSON or invalid sorting fields.
-- The `.po` file cannot be parsed.
-
-Poedit may keep old strings as commented `#~ msgid` entries. Those are ignored by this checker. Only active `msgid` entries are treated as obsolete source strings.
-
-Language codes are normalized, so `Vi` and `vi` both select `locale/vi`.
+---
 
 ## NVDA locale folders
 
-The script validates language codes against NVDA's installed locale folders when they exist:
+`build_i18n.py` automatically checks standard NVDA installation folders:
+- `C:\Program Files\NVDA\locale`
+- `C:\Program Files (x86)\NVDA\locale`
 
-```text
-C:\Program Files\NVDA\locale
-C:\Program Files (x86)\NVDA\locale
-```
-
-If NVDA is installed somewhere else, provide the locale folder explicitly:
-
+To validate against a custom location or across WSL/Linux (`/mnt/c/...`):
 ```powershell
-python build_i18n.py --check --strict --language vi --nvda-locale-dir "D:\NVDA\locale"
+python build_i18n.py --check -l <language> --nvda-locale-dir "D:\NVDA\locale"
 ```
 
-You can pass `--nvda-locale-dir` more than once when you need to validate against multiple NVDA installations.
-
-On WSL, NVDA itself is installed on the Windows side, not inside the Linux filesystem. WSL can usually still read it through the `/mnt/c` mount, so point `--nvda-locale-dir` at the Windows install from WSL:
-
-```bash
-python3 build_i18n.py --check --strict --language vi --nvda-locale-dir "/mnt/c/Program Files/NVDA/locale"
-```
-
-`build.sh` does not run the translation workflow, so pass `--nvda-locale-dir` explicitly when running `build_i18n.py` from WSL. If no readable NVDA locale folder is found, `build_i18n.py` prints `[WARN] NVDA locale folder was not found; language-code support check is skipped.` and continues without failing the translation check or build.
+If no NVDA locale folder is found, `build_i18n.py` prints an informational warning and skips language-code matching without failing the build.

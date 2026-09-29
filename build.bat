@@ -41,6 +41,11 @@ if exist "googleTtsForNvda\googleTtsForNvda.nvda-addon" (
     del /f /q "googleTtsForNvda\googleTtsForNvda.nvda-addon" 2>nul
     echo       Removed stale .nvda-addon from source tree.
 )
+if exist "googleTtsForNvda\doc" (
+    del /f /s /q "googleTtsForNvda\doc\*.mo" 2>nul
+    del /f /s /q "googleTtsForNvda\doc\*.po" 2>nul
+    del /f /s /q "googleTtsForNvda\doc\*.md" 2>nul
+)
 echo       Done.
 echo.
 

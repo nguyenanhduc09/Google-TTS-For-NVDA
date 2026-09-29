@@ -2,7 +2,7 @@
 
 Thanks for your interest in helping out! Whether you're fixing a bug, adding a feature, improving translations, or just cleaning up docs, every contribution counts.
 
-This guide covers what happens when you push code or open a pull request, and how to catch problems locally before CI does.
+This guide covers CI testing, how to verify changes locally, and what criteria are required for pull requests to be accepted.
 
 ---
 
@@ -107,6 +107,12 @@ All unit tests run **without NVDA installed**, making them fast, self-contained,
 
 ---
 
+## Contribution Acceptance Criteria
+
+We value pull requests from the community. A contribution can be accepted when the code runs reliably, fits the add-on's existing logic and interface, avoids introducing regressions in other add-on features, does not interfere with other NVDA add-ons or NVDA itself, does not weaken add-on security, and does not collect user data without permission.
+
+---
+
 ## Pull Request Checklist
 
 Before opening a PR, run through this:
@@ -118,6 +124,7 @@ Before opening a PR, run through this:
 5. **Code matches the existing style.** Ruff handles most of this, but also check naming conventions, docstrings, and comment style against nearby code.
 6. **User-facing strings use `_()` for translation** where applicable in NVDA UI code.
 7. **Hands-on testing performed.** Install and test the built add-on in a live NVDA session before submitting. Do not submit AI-generated code without testing it yourself.
+8. **Meets acceptance criteria.** Review your changes against the [Contribution Acceptance Criteria](#contribution-acceptance-criteria) above.
 
 ---
 
@@ -125,7 +132,7 @@ Before opening a PR, run through this:
 
 1. **CI runs automatically.** You'll see the workflow status directly on your PR page (a checkmark or red X).
 2. **Both Python versions must pass.** With `fail-fast: false`, both 3.11 and 3.12 run to completion even if one fails, so you'll see all issues at once.
-3. **Reviewers will check** that the workflow is green before approving.
+3. **Reviewers will verify** that the workflow is green and that the contribution meets all [acceptance criteria](#contribution-acceptance-criteria) before approving.
 4. **If CI fails**, read the logs from the failed job, fix it locally, and push again — CI re-runs on every new push.
 
 ---

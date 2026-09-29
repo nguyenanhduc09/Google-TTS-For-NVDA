@@ -1,6 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes an exhaustive standalone test suite comprising **436 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
+Google TTS For NVDA includes an exhaustive standalone test suite comprising **647 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
 
 All unit tests run **without importing NVDA** or requiring an active NVDA installation. Pure driver and plugin modules (`speech_processing.py`, `audio_math.py`, `voice_store.py`, `language_detector.py`, `language_utils.py`, `standby.py`, `watcher.py`, `updater.py`, etc.) are loaded directly in isolation via `test_support.py`, ensuring tests exercise the production implementation rather than mock AST copies.
 
@@ -38,8 +38,8 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | [`test_audio_math.py`](#test_audio_mathpy) | 6 | 1 | Non-linear rate mapping, pitch conversion, SeaNet rate capping, WSOLA parameters |
 | [`test_bridge_concurrency.py`](#test_bridge_concurrencypy) | 11 | 4 | Connection lock scope, safe engine reference capture, busy lock, cancellation |
 | [`test_bridge_helpers.py`](#test_bridge_helperspy) | 58 | 21 | Path traversal prevention, browser runtime normalization/availability, fallback order, profile-in-use exit codes, CDP error classification, process tree priority elevation & EcoQoS disablement, hidden startup flags, standard handle isolation |
-| [`test_build_i18n.py`](#test_build_i18npy) | 6 | 1 | POT translation template updating, locale selection, manifest version sync, obsolete entry purging |
-| [`test_build_i18n_helpers.py`](#test_build_i18n_helperspy) | 29 | 7 | PO parsing, format placeholder extraction, PO string escaping, language code normalization |
+| [`test_build_i18n.py`](#test_build_i18npy) | 35 | 2 | POT/PO translation updating, check/build integration, manifest version sync, obsolete entry purging, documentation builds |
+| [`test_build_i18n_helpers.py`](#test_build_i18n_helperspy) | 208 | 25 | PO parsing/compilation, placeholder and HTML tag verification, Markdown/HTML bidirectional conversion, documentation check/rebuild, RTL handling, table alignments |
 | [`test_dependency_isolation.py`](#test_dependency_isolationpy) | 8 | 1 | Vendored WebSocket isolation, relative import compliance, driver asset and library path anchoring |
 | [`test_generate_unicode_data_helpers.py`](#test_generate_unicode_data_helperspy) | 17 | 6 | UCD record parsing, script alias resolution, range merging, code generation helpers |
 | [`test_language_redirect.py`](#test_language_redirectpy) | 26 | 2 | Dialect redirects, root-language fallbacks, CLDR alias resolution, Chinese cross-variant matching |
@@ -56,7 +56,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | [`test_updater_security.py`](#test_updater_securitypy) | 77 | 15 | SHA-256 validation, size checks, path traversal defense, HTTPS enforcement, manifest parsing, versions |
 | [`test_voice_package_lifecycle.py`](#test_voice_package_lifecyclepy) | 18 | 6 | Catalog loading/sorting, package verification, removal, copying, full lifecycle, catalog validation |
 | [`test_watcher.py`](#test_watcherpy) | 17 | 4 | Win32 DirectoryChangeWatcher lifecycle, callbacks, edge cases, kernel-level directory watching |
-| **Total** | **436** | **103** | **Exhaustive standalone test suite** |
+| **Total** | **647** | **117** | **Exhaustive standalone test suite** |
 
 ---
 
@@ -127,28 +127,52 @@ Validates pure helper functions in `bridge.py`:
 - **`BrowserProcessManagerSpawnTests`**: Verifies that `BrowserProcessManager._start_browser_choice()` passes `stdin=subprocess.DEVNULL`, `stdout=subprocess.DEVNULL`, and `stderr=subprocess.DEVNULL` to `subprocess.Popen`, isolating child browser standard I/O handles from invalid or non-redirectable parent console handles.
 
 ### `test_build_i18n.py`
-*6 tests across 1 class*
+*35 tests across 2 classes*
 
-Covers localization build workflows in `build_i18n.py`:
-- **`TranslationTemplateUpdateTests`**:
-  - Verifies that `update` command accepts `--all` and multiple language codes.
+Covers localization build and validation workflows in `build_i18n.py`:
+- **`TranslationTemplateUpdateTests`** (6 tests):
+  - Verifies that `update` command accepts `--all-languages` and multiple language codes.
   - Verifies menu-driven locale selection for single or all locales.
   - Validates that POT template project version syncs dynamically from `manifest.ini`.
   - Verifies that obsolete PO message blocks are purged cleanly without corrupting active entries.
   - Verifies that newly merged source strings remain empty for translators.
   - Verifies rejection of non-empty translations for newly introduced source strings.
+- **`I18nBuildAndCheckTests`** (29 tests):
+  - Validates full UI catalog checking (`--check`), missing translation detection, placeholder mismatch detection, and HTML tag validation.
+  - Validates documentation checking (`--check-docs`), segment count matching, HTML syntax verification with lxml, and RTL documentation validation.
+  - Tests compilation of `.mo` files via `msgfmt` or pure-Python fallback, generation of localized `manifest.ini`, and documentation HTML compilation from PO or Markdown.
+  - Validates documentation template extraction (`--extract-doc-template`) and documentation PO updating (`--update-doc-po`).
+  - Verifies strict mode failure exit codes and graceful fallback behavior when external GNU gettext tools or Python Markdown packages are absent.
 
 ### `test_build_i18n_helpers.py`
-*29 tests across 7 classes*
+*208 tests across 25 classes*
 
 Tests pure helper functions in `build_i18n.py`:
 - **`ParsePoTests`**: Validates parsing of standard, multiline, untranslated, fuzzy, and context-specific (`msgctxt`) PO entries.
-- **`ExtractFormatPlaceholdersTests`**: Extracts Python format placeholders (`%s`, `{name}`) from strings for translation validation.
+- **`FormatSetTests`**: Extracts Python format placeholders (`%s`, `{name}`) from strings for translation validation.
 - **`NormalizeLanguageCodeTests`**: Normalizes language codes across ISO 639 formats and underscores/hyphens.
 - **`PoEscapeTests`**: Validates character escaping (backslashes, quotes, newlines, tabs) in PO format output.
 - **`PurgeObsoleteTests`**: Verifies removal of `#~` obsolete message blocks.
 - **`ManifestValuesTests`**: Validates reading of add-on metadata from `manifest.ini`.
 - **`MessagePreviewTests`**: Tests truncation and newline replacement for CLI progress messages.
+- **`FormatInterpolationTests`**: Tests detection of unnamed percent (`%s`, `%d`), named percent (`%(name)s`), brace format (`{name}`, `{0}`), and unnumbered brace format mismatches, with safe whitespace handling.
+- **`FuzzyPoTests`**: Tests parsing, extraction, and detection of fuzzy PO entries and flags.
+- **`DocumentationAndRtlTests`**: Tests detection of RTL languages (including `ar`, `he`, `fa`, `ur`, `ps`, `sd`), HTML attribute formatting, and RTL doc folder validation.
+- **`CheckHtmlTagInterpolationsTests`** (75 tests): Exhaustive testing of HTML tag validation in translations: dangerous tag rejection (`<script>`, `<iframe>`), inline style and event handler blocking, tag count balance, nesting order validation, void element handling, `<a>` href matching, and safe URL scheme enforcement (`javascript:`, `data:` rejection).
+- **`DocHtmlToMarkdownTests`**: Validates conversion of HTML documentation to Markdown, preserving headings, lists, tables with column alignments (`:---:`, `---:`), code blocks with language specifiers, definition lists (`<dl>`, `<dt>`, `<dd>`), blockquotes, and inline formatting.
+- **`SanitizeHrefTests`**: Validates URL sanitization for Markdown links.
+- **`FormatInlineMarkdownTests`**: Tests inline Markdown formatting for bold, italic, code, links, images, and HTML entities.
+- **`MarkdownToDocHtmlTests`**: Validates conversion of Markdown to accessible HTML documents with doctype, meta viewport, title, and RTL/LTR direction attributes.
+- **`ConvertHtmlAndMdFilesTests`**: Tests file-level bidirectional conversion between Markdown and HTML with lxml validation and fallback handling.
+- **`BuildDocForLanguageMarkdownTests`**: Verifies documentation build priority (PO > Markdown > existing HTML) and language-specific compilation.
+- **`CheckDocLanguageMarkdownTests`**: Tests documentation validation for missing, obsolete, fuzzy, syntax, and placeholder errors.
+- **`InteractiveOptionsMarkdownTests`**: Tests interactive menu selection and prompts for documentation workflows.
+- **`MainCliMarkdownTests`**: Tests CLI argument parsing, mutually exclusive flags, and validation for custom `--msgfmt` and `--msgmerge` paths.
+- **`DocBuildIntegrationTests`**: End-to-end integration tests for documentation building and PO extraction.
+- **`FallbackMarkdownTableTests`**: Tests table parsing, separator row alignments, uneven rows, and HTML table generation without external libraries.
+- **`DefinitionListTests`**: Tests definition list parsing and rendering in fallback Markdown converter.
+- **`PoSyntaxFallbackTests`**: Tests pure-Python PO syntax validation when `msgfmt` is absent.
+- **`DocListAndCheckImprovementsTests`**: Tests structural container tag handling (`DOC_STRUCTURAL_CONTAINER_TAGS`), nested lists/tables in container elements, and robust PO extraction.
 
 ### `test_dependency_isolation.py`
 *8 tests across 1 class*
