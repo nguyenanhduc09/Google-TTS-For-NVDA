@@ -4,23 +4,21 @@ This add-on uses standard gettext conventions for interface strings and supports
 
 ### Translation File Layout
 
-```text
-googleTtsForNvda/
-├── locale/
-│   ├── nvda.pot                                 # UI string template (generated)
-│   └── <language>/
-│       ├── LC_MESSAGES/
-│       │   ├── nvda.po                          # Source interface translations
-│       │   └── nvda.mo                          # Compiled binary catalog (generated)
-│       ├── manifest.ini                         # Translated add-on metadata (generated)
-│       └── languageSort.json                    # Optional visible language sorting
-└── doc/
-    ├── readme.pot                               # Documentation template (generated)
-    └── <language>/
-        ├── readme.html                          # User help guide (required for packaging)
-        ├── readme.po                            # Optional gettext documentation source
-        └── readme.md                            # Optional Markdown documentation source
-```
+- **googleTtsForNvda/**
+   - **locale/**
+      - **nvda.pot** — UI string template (generated)
+      - **<language>/**
+         - **LC_MESSAGES/**
+            - **nvda.po** — Source interface translations
+            - **nvda.mo** — Compiled binary catalog (generated)
+         - **manifest.ini** — Translated add-on metadata (generated)
+         - **languageSort.json** — Optional visible language sorting
+   - **doc/**
+      - **readme.pot** — Documentation template (generated)
+      - **<language>/**
+         - **readme.html** — User help guide (required for packaging)
+         - **readme.po** — Optional gettext documentation source
+         - **readme.md** — Optional Markdown documentation source
 
 Regenerate templates after adding or modifying user-facing strings or English documentation. See [Checking and building](#checking-and-building) for exact commands.
 
