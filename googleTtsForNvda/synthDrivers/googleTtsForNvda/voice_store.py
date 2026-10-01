@@ -8,6 +8,7 @@ import shutil
 import stat as stat_module
 import tempfile
 import threading
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -25,6 +26,9 @@ except Exception:
 
 
 ProgressCallback = Callable[[int | None, str], None]
+
+VOICE_PACKAGE_MAX_BYTES = 256 * 1024 * 1024
+DOWNLOAD_CHUNK_SIZE = 1024 * 256
 
 _verifiedPackageCache: dict[str, tuple[int, int]] = {}
 _persistentVerifiedPackageCache: dict[str, dict[str, object]] | None = None
@@ -368,6 +372,10 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
         return package_file(package)
     if not package.url:
         raise RuntimeError(_("No download link is available for voice package {package}.").format(package=package.id))
+    if urllib.parse.urlparse(package.url).scheme.lower() != "https":
+        raise RuntimeError(f"Voice package {package.id} must be downloaded over a secure HTTPS connection.")
+    if package.compressedSize > VOICE_PACKAGE_MAX_BYTES:
+        raise RuntimeError(f"Voice package {package.id} is larger than the supported download limit.")
     target = package_file(package)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".download")
@@ -376,20 +384,29 @@ def download_package(package: VoicePackage, progress: ProgressCallback | None = 
     if progress:
         progress(0, _("Downloading {package}.").format(package=package.id))
     request = urllib.request.Request(package.url, headers={"User-Agent": "NVDA Google TTS"})
-    with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as output:
-        total = int(response.headers.get("Content-Length") or package.compressedSize or 0)
-        downloaded = 0
-        lastPercent = -1
-        for chunk in iter(lambda: response.read(1024 * 256), b""):
-            if not chunk:
-                break
-            output.write(chunk)
-            downloaded += len(chunk)
-            if progress and total:
-                percent = min(99, int(downloaded * 100 / total))
-                if percent != lastPercent:
-                    lastPercent = percent
-                    progress(percent, _("Downloading {package}.").format(package=package.id))
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response, tmp.open("wb") as output:
+            total = int(response.headers.get("Content-Length") or package.compressedSize or 0)
+            if total > VOICE_PACKAGE_MAX_BYTES:
+                raise RuntimeError(f"Voice package {package.id} is larger than the supported download limit.")
+            downloaded = 0
+            lastPercent = -1
+            for chunk in iter(lambda: response.read(DOWNLOAD_CHUNK_SIZE), b""):
+                if not chunk:
+                    break
+                output.write(chunk)
+                downloaded += len(chunk)
+                if downloaded > VOICE_PACKAGE_MAX_BYTES:
+                    raise RuntimeError(f"Voice package {package.id} is larger than the supported download limit.")
+                if progress and total:
+                    percent = min(99, int(downloaded * 100 / total))
+                    if percent != lastPercent:
+                        lastPercent = percent
+                        progress(percent, _("Downloading {package}.").format(package=package.id))
+    except Exception:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
     if package.compressedSize and tmp.stat().st_size != package.compressedSize:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(

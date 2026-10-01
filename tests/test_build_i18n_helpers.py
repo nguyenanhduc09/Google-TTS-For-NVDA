@@ -2599,6 +2599,41 @@ class DocListAndCheckImprovementsTests(unittest.TestCase):
             self.assertIn('msgid "Hello world"', content)
             self.assertIn('msgstr ""', content)
 
+    def test_get_active_doc_markdown_extensions_caching(self) -> None:
+        first_call = build_i18n._get_active_doc_markdown_extensions()
+        second_call = build_i18n._get_active_doc_markdown_extensions()
+        self.assertEqual(len(first_call), len(second_call))
+        self.assertIsNot(first_call, second_call)
+        self.assertIsNotNone(build_i18n._RESOLVED_DOC_MARKDOWN_EXTENSIONS)
+        self.assertEqual(build_i18n._RESOLVED_DOC_MARKDOWN_EXTENSIONS, [e for e in first_call if isinstance(e, str)])
+
+    def test_check_po_with_msgfmt_passes_utf8_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            po_file = root / "test.po"
+            po_file.write_text(
+                'msgid ""\nmsgstr "Content-Type: text/plain; charset=UTF-8\\n"\n\nmsgid "a"\nmsgstr "b"\n',
+                encoding="utf-8",
+            )
+            fake_msgfmt = root / "fake_msgfmt.exe"
+            fake_msgfmt.touch()
+
+            captured_kwargs: dict[str, object] = {}
+
+            def fake_run(*args: object, **kwargs: object) -> object:
+                captured_kwargs.update(kwargs)
+                mock_res = mock.MagicMock()
+                mock_res.returncode = 0
+                mock_res.stderr = ""
+                return mock_res
+
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                errors = build_i18n._check_po_syntax_with_msgfmt(po_file, msgfmt_path=fake_msgfmt)
+                self.assertEqual(errors, [])
+                self.assertEqual(captured_kwargs.get("encoding"), "utf-8")
+                self.assertEqual(captured_kwargs.get("errors"), "replace")
+                self.assertTrue(captured_kwargs.get("text"))
+
 
 if __name__ == "__main__":
     unittest.main()

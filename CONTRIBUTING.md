@@ -50,7 +50,7 @@ The quickest way:
 ### Install the tools
 
 ```powershell
-pip install ruff mypy
+pip install ruff mypy markdown nh3 lxml
 ```
 
 You only need to do this once (or when the project updates its tool versions).

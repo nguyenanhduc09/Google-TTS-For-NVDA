@@ -1638,6 +1638,10 @@ class WasmTtsEngineBridge:
         with self._runtimeBusyLock:
             return self._runtimeBusy
 
+    def _set_runtime_busy(self, busy: bool) -> None:
+        with self._runtimeBusyLock:
+            self._runtimeBusy = busy
+
     def enable_cdp_domains(self, cancelEvent: threading.Event | None = None) -> None:
         self._cdp.request("Runtime.enable", timeout=15, cancelEvent=cancelEvent)
         self._cdp.request("Page.enable", timeout=15, cancelEvent=cancelEvent)
@@ -1839,8 +1843,7 @@ class WasmTtsEngineBridge:
                 fail_speech_event(detail)
 
         expression = f"window.googleTtsForNvdaSpeak({json.dumps(payload, ensure_ascii=False)})"
-        with self._runtimeBusyLock:
-            self._runtimeBusy = cancelEvent is not None
+        self._set_runtime_busy(True)
         try:
             response = self._cdp.request(
                 "Runtime.evaluate",
@@ -1859,8 +1862,7 @@ class WasmTtsEngineBridge:
         except CdpCancelled:
             raise
         finally:
-            with self._runtimeBusyLock:
-                self._runtimeBusy = False
+            self._set_runtime_busy(False)
         result = response.get("result", {}).get("result", {})
         if result.get("subtype") == "error":
             detail = str(result.get("description") or "Browser speech evaluation failed.")
@@ -1928,7 +1930,7 @@ class WasmTtsEngineBridge:
             log.debug("Could not stop Google TTS Chromium browser runtime.", exc_info=True)
 
     def cancel_current(self) -> None:
-        if self._runtimeBusy:
+        if self.runtime_busy:
             self.send_fast_stop()
 
 

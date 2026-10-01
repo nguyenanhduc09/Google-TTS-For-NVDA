@@ -1,8 +1,8 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes an exhaustive standalone test suite comprising **647 unit tests** across **20 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
+Google TTS For NVDA includes an exhaustive standalone test suite comprising **705 unit tests** in **134 test classes** across **21 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
 
-All unit tests run **without importing NVDA** or requiring an active NVDA installation. Pure driver and plugin modules (`speech_processing.py`, `audio_math.py`, `voice_store.py`, `language_detector.py`, `language_utils.py`, `standby.py`, `watcher.py`, `updater.py`, etc.) are loaded directly in isolation via `test_support.py`, ensuring tests exercise the production implementation rather than mock AST copies.
+All unit tests run **without importing NVDA** or requiring an active NVDA installation. Modules that import cleanly without NVDA (`speech_processing.py`, `audio_math.py`, `catalog.py`, `bridge.py`, `voice_store.py`, `language_detector.py`, `language_profiles.py`, `language_utils.py`, `unicode_data.py`, `watcher.py`) are loaded directly in isolation via `test_support.load_driver_module()`, so tests exercise the production implementation rather than mock AST copies. Modules that import NVDA at module level are handled explicitly: `updater.py` is loaded through a dedicated `importlib` loader in `test_updater_security.py` that avoids the NVDA import chain, and `test_standby_concurrency.py` reimplements the `_StandbyRuntimeManager` state fields in a local minimal manager because `standby.py` requires NVDA's `config` and `globalVars`.
 
 ---
 
@@ -36,27 +36,28 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | Test Module | Tests | Classes | Primary Focus Area |
 | :--- | :---: | :---: | :--- |
 | [`test_audio_math.py`](#test_audio_mathpy) | 6 | 1 | Non-linear rate mapping, pitch conversion, SeaNet rate capping, WSOLA parameters |
-| [`test_bridge_concurrency.py`](#test_bridge_concurrencypy) | 11 | 4 | Connection lock scope, safe engine reference capture, busy lock, cancellation |
+| [`test_bridge_concurrency.py`](#test_bridge_concurrencypy) | 13 | 4 | Connection lock scope, safe engine reference capture, busy lock, cancellation |
 | [`test_bridge_helpers.py`](#test_bridge_helperspy) | 58 | 21 | Path traversal prevention, browser runtime normalization/availability, fallback order, profile-in-use exit codes, CDP error classification, process tree priority elevation & EcoQoS disablement, hidden startup flags, standard handle isolation |
 | [`test_build_i18n.py`](#test_build_i18npy) | 35 | 2 | POT/PO translation updating, check/build integration, manifest version sync, obsolete entry purging, documentation builds |
-| [`test_build_i18n_helpers.py`](#test_build_i18n_helperspy) | 208 | 25 | PO parsing/compilation, placeholder and HTML tag verification, Markdown/HTML bidirectional conversion, documentation check/rebuild, RTL handling, table alignments |
-| [`test_dependency_isolation.py`](#test_dependency_isolationpy) | 8 | 1 | Vendored WebSocket isolation, relative import compliance, driver asset and library path anchoring |
-| [`test_generate_unicode_data_helpers.py`](#test_generate_unicode_data_helperspy) | 17 | 6 | UCD record parsing, script alias resolution, range merging, code generation helpers |
+| [`test_build_i18n_helpers.py`](#test_build_i18n_helperspy) | 210 | 25 | PO parsing/compilation, placeholder and HTML tag verification, Markdown/HTML bidirectional conversion, documentation check/rebuild, RTL handling, table alignments |
+| [`test_dependency_isolation.py`](#test_dependency_isolationpy) | 9 | 1 | Vendored WebSocket isolation, relative import compliance, driver asset and library path anchoring, bundled engine file declaration |
+| [`test_generate_unicode_data_helpers.py`](#test_generate_unicode_data_helperspy) | 36 | 10 | UCD record parsing, script alias resolution, range merging, code generation helpers, fail-closed engine version policy |
+| [`test_generate_voices_json_helpers.py`](#test_generate_voices_json_helperspy) | 27 | 7 | Dynamic engine version discovery, catalog version pinning, fail-closed engine mismatch abort |
 | [`test_language_redirect.py`](#test_language_redirectpy) | 26 | 2 | Dialect redirects, root-language fallbacks, CLDR alias resolution, Chinese cross-variant matching |
 | [`test_language_utils.py`](#test_language_utilspy) | 6 | 1 | Language tag normalization, NVDA special locale mappings, language display names |
 | [`test_performance.py`](#test_performancepy) | 17 | 5 | Segment flush thresholds, request coalescing, lead buffer, pause timings, adaptive packet sizing |
 | [`test_runtime_recovery.py`](#test_runtime_recoverypy) | 5 | 1 | Browser speech failure recovery, single retry policy before audio, standby release safety gating |
 | [`test_segmentation_benchmarks.py`](#test_segmentation_benchmarkspy) | 12 | 2 | Multilingual segmentation throughput benchmarks, cache warm-up passes, PCM processing speed |
 | [`test_segmentation_fuzz.py`](#test_segmentation_fuzzpy) | 13 | 2 | Unicode fuzz testing, sentence split monotonicity, invariant verification across scripts |
-| [`test_speech_processing.py`](#test_speech_processingpy) | 47 | 9 | Three pause modes, noise floor, chunk invariance, text segmentation, cache keys, sentence terminals, abbreviation removal verification, forced cut debug logging, URL and domain boundary splitting |
+| [`test_speech_processing.py`](#test_speech_processingpy) | 48 | 9 | Three pause modes, noise floor, chunk invariance, text segmentation, cache keys, sentence terminals, abbreviation removal verification, forced cut debug logging, URL and domain boundary splitting |
 | [`test_standby_concurrency.py`](#test_standby_concurrencypy) | 22 | 5 | Generation counter, cancelEvent propagation, bridge claim/release, clean termination |
 | [`test_support.py`](#test_supportpy) | — | — | Shared test infrastructure, isolated module loader, mock bridge/CDP/engine/process helpers |
 | [`test_synth_driver_helpers.py`](#test_synth_driver_helperspy) | 34 | 9 | Rate factor interpolation, break rate clamping, word dictionaries, config compat, NVDA logger formatting, fatal fallback, speech loop resilience, voice setting support |
 | [`test_unicode_data.py`](#test_unicode_datapy) | 10 | 1 | Unicode 17.0 / CLDR 48.2 script ranges, automatic language profile fallback, sentence terminals |
 | [`test_updater_security.py`](#test_updater_securitypy) | 77 | 15 | SHA-256 validation, size checks, path traversal defense, HTTPS enforcement, manifest parsing, versions |
-| [`test_voice_package_lifecycle.py`](#test_voice_package_lifecyclepy) | 18 | 6 | Catalog loading/sorting, package verification, removal, copying, full lifecycle, catalog validation |
+| [`test_voice_package_lifecycle.py`](#test_voice_package_lifecyclepy) | 24 | 7 | Catalog loading/sorting, package verification, removal, copying, download guards, full lifecycle, catalog validation |
 | [`test_watcher.py`](#test_watcherpy) | 17 | 4 | Win32 DirectoryChangeWatcher lifecycle, callbacks, edge cases, kernel-level directory watching |
-| **Total** | **647** | **117** | **Exhaustive standalone test suite** |
+| **Total** | **705** | **134** | **Exhaustive standalone test suite** |
 
 ---
 
@@ -81,24 +82,16 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 *6 tests across 1 class*
 
 Tests pure audio mathematics and speech option calculation helpers in `audio_math.py`:
-- **`AudioMathTests`**:
-  - `test_rate_to_chrome_mapping`: Verifies non-linear rate mapping curve from NVDA slider values (0–100) to Chrome WASM playback rates.
-  - `test_rate_to_chrome_with_rate_boost`: Validates rate calculation when rate boost is enabled.
-  - `test_pitch_to_chrome_mapping`: Verifies pitch conversion from NVDA pitch (0–100) to Chrome semitone adjustments (-10 to +10 semitones).
-  - `test_uses_protected_engine_rate_detection`: Verifies detection of SeaNet neural models that require rate protection.
-  - `test_build_speech_options_standard_package`: Validates speech option dictionary generation for standard voice packages.
-  - `test_build_speech_options_seanet_high_rate`: Validates speech option generation for SeaNet packages at high rates, ensuring the engine rate is capped while post-synthesis WSOLA scaling parameters are populated.
+- **`AudioMathTests`**: Verifies non-linear rate mapping (0–100 to WASM playback rate), rate boost calculation, pitch conversion (-10 to +10 semitones), SeaNet rate protection detection, and speech option generation for standard versus SeaNet packages at high rates.
 
 ### `test_bridge_concurrency.py`
-*11 tests across 4 classes*
+*13 tests across 4 classes*
 
 Verifies thread safety, synchronization, and race-condition mitigations in `bridge.py`:
 - **`EnsureConnectionLockScopeTests`**: Verifies that `ensure_connection()` releases the lock between fallback runtime iterations so background worker termination is never blocked, checks `cancelEvent` between fallback iterations, and verifies successful single-attempt connections.
 - **`EngineCaptureUnderLockTests`**: Verifies that `speak()`, `stop_runtime()`, `cancel_current()`, and `preload_voice()` capture local references to `self._engine` under `_connectionLock` before invoking methods, preventing `AttributeError` or stale references if another thread recycles or re-creates the engine.
-- **`RuntimeBusyLockTests`**: Verifies that the `runtime_busy` property reads engine busy state under its own lock, and safely returns `False` when no cancel event or engine is active.
-- **`EnsureConnectionCancellationTests`**:
-  - `test_cancelled_connection_does_not_terminate_process_manager`: Verifies that when connection establishment is cancelled (`CdpCancelled`), the unready CDP client WebSocket is closed but the running browser process is **not** terminated, preserving it for immediate reuse by concurrent or subsequent speech requests without connection refused errors (`WinError 10061`).
-  - `test_concurrent_ensure_connection_when_first_caller_is_cancelled`: Verifies serialized concurrent callers to `ensure_connection()`, ensuring that if the first caller is cancelled (e.g. background warm-up), the second caller (e.g. interactive speech) acquires the lock and successfully establishes CDP connectivity using the already-running browser.
+- **`RuntimeBusyLockTests`**: Verifies that the `runtime_busy` property reads engine busy state under its own lock, that `cancel_current()` sends a fast stop only while the engine is busy, and that `speak()` keeps the engine busy for the whole request even when no cancel event is supplied.
+- **`EnsureConnectionCancellationTests`**: Verifies that cancelled connection establishment (`CdpCancelled`) preserves the running browser process for immediate reuse without connection refused errors (`WinError 10061`), and ensures serialized concurrent callers successfully acquire the lock.
 
 ### `test_bridge_helpers.py`
 *58 tests across 21 classes*
@@ -145,7 +138,7 @@ Covers localization build and validation workflows in `build_i18n.py`:
   - Verifies strict mode failure exit codes and graceful fallback behavior when external GNU gettext tools or Python Markdown packages are absent.
 
 ### `test_build_i18n_helpers.py`
-*208 tests across 25 classes*
+*210 tests across 25 classes*
 
 Tests pure helper functions in `build_i18n.py`:
 - **`ParsePoTests`**: Validates parsing of standard, multiline, untranslated, fuzzy, and context-specific (`msgctxt`) PO entries.
@@ -175,7 +168,7 @@ Tests pure helper functions in `build_i18n.py`:
 - **`DocListAndCheckImprovementsTests`**: Tests structural container tag handling (`DOC_STRUCTURAL_CONTAINER_TAGS`), nested lists/tables in container elements, and robust PO extraction.
 
 ### `test_dependency_isolation.py`
-*8 tests across 1 class*
+*9 tests across 1 class*
 
 Guarantees isolation of bundled libraries and internal modules:
 - **`BundledDependencyIsolationTests`**:
@@ -184,20 +177,37 @@ Guarantees isolation of bundled libraries and internal modules:
   - Verifies that bundled WebSocket fallbacks preserve core connection and framing behavior.
   - Enforces package-relative imports across all driver internal modules.
   - Enforces package-relative imports across all global plugin internal modules.
-  - Verifies that pure driver modules (`speech_processing.py`, `audio_math.py`, etc.) contain zero NVDA imports.
+  - Verifies that `language_profiles.py` and `speech_processing.py` contain zero NVDA imports.
   - Verifies that CLD2 library candidates are anchored strictly to the driver directory.
   - Verifies that browser assets (`index.html`, `bridgeHarness.js`, WASM engine) are anchored strictly to add-on directories.
+  - Verifies that every file bundled in the selected WASM engine directory is declared in `REQUIRED_ENGINE_FILES`, and that every declared file exists.
 
 ### `test_generate_unicode_data_helpers.py`
-*17 tests across 6 classes*
+*36 tests across 10 classes*
 
-Validates pure code-generation helpers in `generate_unicode_data.py`:
+Validates pure code-generation helpers and the engine version policy in `generate_unicode_data.py`:
+- **`VersionSortKeyTests`**: Verifies numeric-aware engine version keys so `20260820.1` sorts after `20260625.1` and `20260820.10` after `20260820.1`.
+- **`NewestBundledEngineDirTests`**: Verifies dynamic discovery of the newest `WasmTtsEngine/<version>` directory, including a version directory whose upstream catalog has not been added yet (so the generator can never silently fall back to an older engine), ignoring non-version directories, returning `None` for a missing tree, and resolving the real repository engine tree.
+- **`EngineVersionAlignmentTests`**: Verifies the alignment messages for matching versions, a newer bundled engine (requires an `ENGINE_VERSION` bump), a newer configured engine (requires an engine bundle), and an unreadable or missing version.
+- **`ConfiguredVoicesJsonTests`**: Verifies that the bundled catalog resolves only when the newest engine matches `catalog.py`, and that mismatches, a missing upstream `voices.json`, and an unreadable `ENGINE_VERSION` all abort with `SystemExit`.
 - **`ParseUcdRecordsTests`**: Parses Unicode Character Database (UCD) property files for individual codepoints and ranges.
 - **`MergeRangesTests`**: Merges overlapping, adjacent, and unsorted codepoint ranges into minimal disjoint intervals.
 - **`ScriptAliasesTests`**: Resolves script aliases (e.g. `sc` property aliases, `Hans`/`Hant` to `Han`).
 - **`FormatRangesTests`**: Formats integer tuples into Python range tuple representations.
 - **`FormatCodepointsTests`**: Formats sorted codepoint collections.
 - **`RenderModuleTests`**: Verifies output generation of `unicode_data.py` including version header metadata.
+
+### `test_generate_voices_json_helpers.py`
+*27 tests across 7 classes*
+
+Covers the fail-closed engine version policy used by the online catalog generator (`generate_voices_json.py`):
+- **`VersionSortKeyTests`**: Verifies numeric-aware version keys so `20260820.1` sorts after `20260625.1` and `20260820.10` after `20260820.1`.
+- **`NewestBundledEngineDirTests`**: Verifies dynamic discovery of the newest `WasmTtsEngine/<version>` directory, including a version directory whose upstream catalog has not been added yet (so the generator can never silently fall back to an older engine), ignoring non-version directories, returning `None` for a missing tree, and resolving the real repository engine tree.
+- **`LatestEngineVoicesJsonTests`**: Verifies selection of the newest `WasmTtsEngine/<version>/voices.json`, ignoring directories without a catalog and non-directory entries, returning `None` for a missing or empty engine tree, and resolving the real repository engine tree.
+- **`CatalogEngineVersionTests`**: Verifies that the pinned `ENGINE_VERSION` is read from `catalog.py`, and that a missing catalog module returns an empty version instead of raising.
+- **`EngineVersionAlignmentTests`**: Verifies the alignment messages for matching versions, a newer bundled engine (requires an `ENGINE_VERSION` bump), a newer configured engine (requires an engine bundle), and an unreadable or missing version.
+- **`SelectEngineVoicesJsonTests`**: Verifies that the generator aborts with `SystemExit` when no bundled engine catalog exists, when the newest bundled engine differs from `catalog.py` `ENGINE_VERSION` in either direction, when the newest engine has no `voices.json`, and when the version cannot be read; that matching versions still select the repository catalog; and that an explicit `--voices-json` target skips the verification with a warning.
+- **`ParseArgsTests`**: Verifies the `--voices-json` command-line override and its default of no explicit catalog.
 
 ### `test_language_redirect.py`
 *26 tests across 2 classes*
@@ -280,7 +290,7 @@ Fuzz tests for speech text segmentation using pseudo-random Unicode streams:
   - `test_ellipsis_doesnt_over_split`: Asserts ellipsis character sequences do not produce runaway splits.
 
 ### `test_speech_processing.py`
-*47 tests across 9 classes*
+*48 tests across 9 classes*
 
 Comprehensive tests for PCM audio processing, text segmentation, caching, Unicode sentence boundaries, abbreviation validation, forced cut telemetry, and URL/domain boundary sentence splitting:
 - **`PcmSilenceShortenerTests`**: Validates the three pause modes (`shortenAll`, `shortenEndOnly`, `doNotShorten`), inclusive PCM noise floor detection, invariant behavior across arbitrary packet chunk boundaries, flush of incomplete detection blocks at stream finish, flush of audible blocks at hidden boundaries, chunking invariance across hidden boundaries, and rejection of invalid pause modes.
@@ -296,7 +306,7 @@ Comprehensive tests for PCM audio processing, text segmentation, caching, Unicod
 ### `test_standby_concurrency.py`
 *22 tests across 5 classes*
 
-Tests the background standby runtime manager (`_StandbyRuntimeManager` in `standby.py`):
+Tests the standby runtime manager concurrency invariants. Because `standby.py` imports NVDA's `config` and `globalVars` at module level, the tests exercise a `_MinimalManager` that mirrors the production `_StandbyRuntimeManager` state fields and lock patterns instead of importing the module:
 - **`GenerationCounterTests`**: Verifies generation counter increments on refresh, ensures worker generation mismatch cancels stale tasks, ensures worker generation match allows tasks to proceed, and verifies generation increments on bridge claim and release.
 - **`CancelEventTests`**: Verifies `cancelEvent` blocks worker execution when set, allows uncancelled workers to proceed, tests `clear_standby` setting and handling of cancel events, and verifies that launching a new refresh cancels existing background workers.
 - **`ClaimBridgeTests`**: Verifies `claim_bridge()` returns the standby bridge when catalog signatures match, returns `None` on signature mismatch, returns `None` after manager shutdown, and returns `None` when bridge is not fully ready.
@@ -364,13 +374,14 @@ Exhaustive security and validation tests for the add-on update manager (`updater
 - **`UpdateFileNameTests`**: Tests update file name construction and validation of `.nvda-addon` extensions.
 
 ### `test_voice_package_lifecycle.py`
-*18 tests across 6 classes*
+*24 tests across 7 classes*
 
 Validates the `.zvoice` package management lifecycle (`voice_store.py` and `catalog.py`):
 - **`CatalogLoadingTests`**: Tests JSON catalog parsing, package sorting by language then ID, package ID to language extraction, and engine compatibility checks.
 - **`PackageVerificationTests`**: Tests `is_package_installed` checking for non-existent files, valid files with matching SHA-256 and size, corrupt files with hash/size mismatches, and empty-hash handling.
 - **`PackageRemovalTests`**: Verifies atomic deletion of `.zvoice` files and graceful handling of already-deleted files.
 - **`PackageCopyTests`**: Verifies manual package import/copy into voice storage with strict size and SHA-256 validation.
+- **`PackageDownloadGuardTests`**: Verifies that `download_package()` refuses non-HTTPS catalog URLs, rejects declared and streamed sizes above `VOICE_PACKAGE_MAX_BYTES`, installs payloads that pass size and SHA-256 verification, and discards checksum mismatches without leaving partial `.download` files.
 - **`VoicePackageLifecycleTests`**: Tests the complete end-to-end install $\rightarrow$ verify $\rightarrow$ remove $\rightarrow$ verify cycle, and asserts that the verification cache is invalidated immediately upon package removal.
 - **`CatalogValidationTests`**: Verifies validation of multiple voice packages in a catalog and asserts that validation warnings from later packages are collected completely rather than skipped by early return.
 

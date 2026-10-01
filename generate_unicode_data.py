@@ -7,6 +7,7 @@ import argparse
 import ast
 import json
 import re
+import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
@@ -16,6 +17,18 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_ENGINE_ROOT = ROOT / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "WasmTtsEngine"
 DEFAULT_OUTPUT = ROOT / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "unicode_data.py"
 DEFAULT_CATALOG_MODULE = ROOT / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "catalog.py"
+
+ENGINE_ROOT_CANDIDATES = [
+    ROOT / "Google-TTS-For-NVDA" / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "WasmTtsEngine",
+    DEFAULT_ENGINE_ROOT,
+]
+
+CATALOG_MODULE_CANDIDATES = [
+    ROOT / "Google-TTS-For-NVDA" / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "catalog.py",
+    DEFAULT_CATALOG_MODULE,
+]
+
+ENGINE_VERSION_PATTERN = re.compile(r"^\d{8}(?:\.\d+)*$")
 
 _CLDR_LANGUAGE_FALLBACKS = {
     # CLDR treats Mandarin as a legacy alias of Chinese in likely-subtag data.
@@ -91,28 +104,104 @@ def _supported_locales(voicesJsonPath: Path) -> set[str]:
     return locales
 
 
-def _configured_voices_json() -> Path:
-    """Use the exact engine version selected by the production catalog module."""
-    tree = ast.parse(
-        DEFAULT_CATALOG_MODULE.read_text(encoding="utf-8-sig"),
-        filename=str(DEFAULT_CATALOG_MODULE),
+def _version_sort_key(version: str) -> tuple[tuple[int, int | str], ...]:
+    """Build a numeric-aware sort key so 20260820.1 sorts after 20260625.1."""
+    key: list[tuple[int, int | str]] = []
+    for token in re.findall(r"\d+|[A-Za-z]+", version):
+        if token.isdigit():
+            key.append((0, int(token)))
+        else:
+            key.append((1, token.lower()))
+    return tuple(key)
+
+
+def _resolved_engine_roots(engineRoots: Iterable[Path] | None) -> list[Path]:
+    return list(engineRoots) if engineRoots is not None else list(ENGINE_ROOT_CANDIDATES)
+
+
+def newest_bundled_engine_dir(engineRoots: Iterable[Path] | None = None) -> Path | None:
+    """Return the newest bundled engine version directory discovered under the engine roots."""
+    candidates: list[tuple[tuple[tuple[int, int | str], ...], str, Path]] = []
+    for engineRoot in _resolved_engine_roots(engineRoots):
+        if not engineRoot.is_dir():
+            continue
+        for directory in engineRoot.iterdir():
+            if directory.is_dir() and ENGINE_VERSION_PATTERN.match(directory.name):
+                candidates.append((_version_sort_key(directory.name), directory.name, directory))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1], str(item[2])))
+    return candidates[-1][2]
+
+
+def check_engine_version_alignment(bundledVersion: str, configuredVersion: str) -> str | None:
+    """Explain why the newest bundled engine and the production catalog module disagree, if they do."""
+    if not configuredVersion:
+        locations = ", ".join(str(candidate) for candidate in CATALOG_MODULE_CANDIDATES)
+        return f"Could not read ENGINE_VERSION from the production catalog module ({locations})."
+    if not bundledVersion:
+        return "No bundled WasmTtsEngine version directory was found."
+    if bundledVersion == configuredVersion:
+        return None
+    if _version_sort_key(bundledVersion) > _version_sort_key(configuredVersion):
+        return (
+            f"The newest bundled engine version ({bundledVersion}) is newer than catalog.py "
+            f"ENGINE_VERSION ({configuredVersion}). Bump ENGINE_VERSION to {bundledVersion} "
+            "before regenerating."
+        )
+    return (
+        f"catalog.py ENGINE_VERSION ({configuredVersion}) has no bundled engine directory: "
+        f"the newest bundled version is {bundledVersion}. Add the {configuredVersion} engine "
+        "bundle or fix ENGINE_VERSION."
     )
-    engineVersion: str | None = None
-    for node in tree.body:
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+
+
+def _configured_engine_version() -> str:
+    """Read ENGINE_VERSION from the production catalog module."""
+    for candidate in CATALOG_MODULE_CANDIDATES:
+        try:
+            tree = ast.parse(candidate.read_text(encoding="utf-8-sig"), filename=str(candidate))
+        except OSError:
             continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if not any(isinstance(target, ast.Name) and target.id == "ENGINE_VERSION" for target in targets):
-            continue
-        value = node.value
-        if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            engineVersion = value.value
-        break
-    if not engineVersion:
-        raise ValueError(f"Could not read ENGINE_VERSION from {DEFAULT_CATALOG_MODULE}")
-    voicesJsonPath = DEFAULT_ENGINE_ROOT / engineVersion / "voices.json"
+        for node in tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not any(isinstance(target, ast.Name) and target.id == "ENGINE_VERSION" for target in targets):
+                continue
+            value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                return value.value
+            break
+    return ""
+
+
+def _configured_voices_json(engineRoots: Iterable[Path] | None = None) -> Path:
+    """Verify the newest bundled engine against the production catalog module, then return its voices.json."""
+    engineDir = newest_bundled_engine_dir(engineRoots)
+    if engineDir is None:
+        roots = ", ".join(str(candidate) for candidate in _resolved_engine_roots(engineRoots))
+        print(
+            f"[ABORT] Error: no WasmTtsEngine <version> directory was found under: {roots}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    voicesJsonPath = engineDir / "voices.json"
     if not voicesJsonPath.is_file():
-        raise FileNotFoundError(f"Configured voices.json was not found at {voicesJsonPath}")
+        print(
+            f"[ABORT] Error: the newest bundled engine ({engineDir.name}) has no voices.json. "
+            "Add the upstream catalog to the engine bundle before regenerating.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    problem = check_engine_version_alignment(engineDir.name, _configured_engine_version())
+    if problem is not None:
+        print(f"[ABORT] Error: {problem}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Target engine catalog: {voicesJsonPath}")
     return voicesJsonPath
 
 
@@ -220,7 +309,11 @@ def main() -> int:
     parser.add_argument("--ucd-dir", type=Path, required=True)
     parser.add_argument("--likely-subtags", type=Path, required=True)
     parser.add_argument("--cldr-version", required=True)
-    parser.add_argument("--voices-json", type=Path)
+    parser.add_argument(
+        "--voices-json",
+        type=Path,
+        help="Explicit engine voices.json to read; skips the engine version verification.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
 
@@ -229,7 +322,21 @@ def main() -> int:
     propListPath = args.ucd_dir / "PropList.txt"
     ucdVersion = _ucd_version(scriptsPath)
     scriptAliases = _script_aliases(aliasesPath)
-    voicesJsonPath = args.voices_json or _configured_voices_json()
+    if args.voices_json is not None:
+        if not args.voices_json.is_file():
+            print(
+                f"[ABORT] Error: the explicit engine catalog was not found at {args.voices_json}",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"Target engine catalog (explicit): {args.voices_json}")
+        print(
+            "[WARN] Engine version verification was skipped for an explicit --voices-json target.",
+            file=sys.stderr,
+        )
+        voicesJsonPath = args.voices_json
+    else:
+        voicesJsonPath = _configured_voices_json()
     languageScripts = _supported_language_scripts(
         _supported_locales(voicesJsonPath),
         _likely_scripts(args.likely_subtags),

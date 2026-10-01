@@ -19,6 +19,13 @@ REQUIRED_ENGINE_FILES = (
     "offscreen_compiled.js",
     "streaming_worklet_processor.js",
     "voices.json",
+    "background_compiled.js",
+    "offscreen.html",
+    "wasm_tts_manifest_v3.json",
+    "_metadata/verified_contents.json",
+    "EIGEN_LICENSE",
+    "LICENSE",
+    "VOICE_CATALOG_NOTICE.txt",
 )
 # The bundled engine reports these package families as unavailable even when their .zvoice files verify.
 UNSUPPORTED_ENGINE_PACKAGE_ID_PARTS = ("locomel", "lemonbalm")

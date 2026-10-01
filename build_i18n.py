@@ -568,6 +568,8 @@ def _check_po_syntax_with_msgfmt(po_path: Path, msgfmt_path: Path | None = None)
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -1047,6 +1049,8 @@ def _compile_mo_file(
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if res.returncode == 0 and tmp_mo.is_file():
@@ -1859,25 +1863,39 @@ def _get_title_from_markdown(md_text: str) -> str:
     return ""
 
 
-def _generate_doc_html_body(md: str) -> str:
-    """Convert markdown text to sanitized HTML using markdown + nh3 pipeline."""
-    if not _MARKDOWN_AVAILABLE or markdown is None:
-        return _fallback_markdown_to_html_body(md)
+_RESOLVED_DOC_MARKDOWN_EXTENSIONS: list[str] | None = None
 
-    active_extensions: list[object] = []
-    for ext_name in _DOC_MARKDOWN_EXTENSIONS:
-        try:
-            markdown.markdown("", extensions=[ext_name])
-            active_extensions.append(ext_name)
-        except Exception:
-            continue
 
+def _get_active_doc_markdown_extensions() -> list[object]:
+    """Return active markdown extensions, validating available string extensions once and caching them."""
+    global _RESOLVED_DOC_MARKDOWN_EXTENSIONS
+    if _RESOLVED_DOC_MARKDOWN_EXTENSIONS is None:
+        resolved: list[str] = []
+        if _MARKDOWN_AVAILABLE and markdown is not None:
+            for ext_name in _DOC_MARKDOWN_EXTENSIONS:
+                try:
+                    markdown.markdown("", extensions=[ext_name])
+                    resolved.append(ext_name)
+                except Exception:
+                    continue
+        _RESOLVED_DOC_MARKDOWN_EXTENSIONS = resolved
+
+    active_extensions: list[object] = list(_RESOLVED_DOC_MARKDOWN_EXTENSIONS)
     try:
         from l2m4m import LaTeX2MathMLExtension
 
         active_extensions.append(LaTeX2MathMLExtension())
     except ImportError:
         pass
+    return active_extensions
+
+
+def _generate_doc_html_body(md: str) -> str:
+    """Convert markdown text to sanitized HTML using markdown + nh3 pipeline."""
+    if not _MARKDOWN_AVAILABLE or markdown is None:
+        return _fallback_markdown_to_html_body(md)
+
+    active_extensions = _get_active_doc_markdown_extensions()
 
     html_output = markdown.markdown(
         text=md,

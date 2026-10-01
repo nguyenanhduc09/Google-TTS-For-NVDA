@@ -10,10 +10,12 @@ and a temporary voice directory.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Literal
 from unittest.mock import patch
 
 from tests.test_support import load_driver_module
@@ -44,6 +46,23 @@ def _create_fake_zvoice(path: Path, content: bytes = b"fake zvoice data") -> Non
 def _sha256_of_bytes(data: bytes) -> str:
     """Compute SHA256 hex digest of bytes."""
     return hashlib.sha256(data).hexdigest()
+
+
+class _FakeHttpResponse:
+    """Minimal urlopen() context manager so download tests never touch the network."""
+
+    def __init__(self, payload: bytes, content_length: int | None = None) -> None:
+        self._stream = io.BytesIO(payload)
+        self.headers = {"Content-Length": str(len(payload) if content_length is None else content_length)}
+
+    def __enter__(self) -> _FakeHttpResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> Literal[False]:
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        return self._stream.read(size)
 
 
 class _FakePackage:
@@ -376,6 +395,130 @@ class PackageCopyTests(unittest.TestCase):
 
             with patch.object(voice_store, "voice_dir", return_value=voices_dir), self.assertRaises(RuntimeError):
                 voice_store.copy_existing_package(source, pkg)
+        finally:
+            import shutil
+
+            shutil.rmtree(voices_dir)
+
+
+# ---------------------------------------------------------------------------
+# Test 4b: Package download guards
+# ---------------------------------------------------------------------------
+
+
+class PackageDownloadGuardTests(unittest.TestCase):
+    """Verify download_package enforces HTTPS, the size limit, and package integrity."""
+
+    def test_rejects_non_https_download_url(self) -> None:
+        """Insecure download links are refused before any network access."""
+        voices_dir = _make_temp_voices_dir()
+        try:
+            pkg = _FakePackage(url="http://example.com/fake.zvoice")
+            with (
+                patch.object(voice_store, "voice_dir", return_value=voices_dir),
+                self.assertRaises(RuntimeError) as context,
+            ):
+                voice_store.download_package(pkg)
+            self.assertIn("HTTPS", str(context.exception))
+        finally:
+            import shutil
+
+            shutil.rmtree(voices_dir)
+
+    def test_rejects_declared_size_over_download_limit(self) -> None:
+        """A package whose catalog size exceeds the limit is refused before downloading."""
+        voices_dir = _make_temp_voices_dir()
+        try:
+            pkg = _FakePackage(compressed_size=voice_store.VOICE_PACKAGE_MAX_BYTES + 1)
+            with (
+                patch.object(voice_store, "voice_dir", return_value=voices_dir),
+                self.assertRaises(RuntimeError) as context,
+            ):
+                voice_store.download_package(pkg)
+            self.assertIn("larger", str(context.exception))
+        finally:
+            import shutil
+
+            shutil.rmtree(voices_dir)
+
+    def test_rejects_response_larger_than_limit(self) -> None:
+        """A Content-Length above the limit aborts the download and removes the partial file."""
+        voices_dir = _make_temp_voices_dir()
+        try:
+            pkg = _FakePackage()
+            response = _FakeHttpResponse(b"partial", content_length=voice_store.VOICE_PACKAGE_MAX_BYTES + 1)
+            with (
+                patch.object(voice_store, "voice_dir", return_value=voices_dir),
+                patch.object(voice_store.urllib.request, "urlopen", return_value=response),
+                self.assertRaises(RuntimeError),
+            ):
+                voice_store.download_package(pkg)
+            self.assertFalse((voices_dir / pkg.fileName).exists())
+            self.assertFalse((voices_dir / f"{pkg.id}.download").exists())
+        finally:
+            import shutil
+
+            shutil.rmtree(voices_dir)
+
+    def test_rejects_stream_over_limit_without_content_length(self) -> None:
+        """Streamed bytes over the limit are refused even when Content-Length is unusable."""
+        voices_dir = _make_temp_voices_dir()
+        try:
+            pkg = _FakePackage()
+            response = _FakeHttpResponse(b"x" * 64, content_length=0)
+            with (
+                patch.object(voice_store, "voice_dir", return_value=voices_dir),
+                patch.object(voice_store, "VOICE_PACKAGE_MAX_BYTES", 8),
+                patch.object(voice_store.urllib.request, "urlopen", return_value=response),
+                self.assertRaises(RuntimeError),
+            ):
+                voice_store.download_package(pkg)
+            self.assertFalse((voices_dir / f"{pkg.id}.download").exists())
+        finally:
+            import shutil
+
+            shutil.rmtree(voices_dir)
+
+    def test_download_verifies_and_installs_package(self) -> None:
+        """A verified download is installed into the voice directory."""
+        voices_dir = _make_temp_voices_dir()
+        try:
+            content = b"downloaded voice data"
+            pkg = _FakePackage(
+                sha256=_sha256_of_bytes(content),
+                compressed_size=len(content),
+            )
+            response = _FakeHttpResponse(content)
+            with (
+                patch.object(voice_store, "voice_dir", return_value=voices_dir),
+                patch.object(voice_store.urllib.request, "urlopen", return_value=response),
+            ):
+                result = voice_store.download_package(pkg)
+                self.assertEqual(content, result.read_bytes())
+                self.assertTrue(voice_store.is_package_installed(pkg))
+        finally:
+            import shutil
+
+            shutil.rmtree(voices_dir)
+
+    def test_download_rejects_checksum_mismatch(self) -> None:
+        """A payload with the right size but the wrong checksum is discarded."""
+        voices_dir = _make_temp_voices_dir()
+        try:
+            content = b"tampered voice data"
+            pkg = _FakePackage(
+                sha256="wrong" * 13,
+                compressed_size=len(content),
+            )
+            response = _FakeHttpResponse(content)
+            with (
+                patch.object(voice_store, "voice_dir", return_value=voices_dir),
+                patch.object(voice_store.urllib.request, "urlopen", return_value=response),
+                self.assertRaises(RuntimeError),
+            ):
+                voice_store.download_package(pkg)
+            self.assertFalse((voices_dir / pkg.fileName).exists())
+            self.assertFalse((voices_dir / f"{pkg.id}.download").exists())
         finally:
             import shutil
 

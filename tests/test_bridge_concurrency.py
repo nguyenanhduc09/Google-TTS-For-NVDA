@@ -14,10 +14,44 @@ import contextlib
 import threading
 import time
 import unittest
+from typing import Any
+from unittest import mock
 
 from tests.test_support import FakeCdpClient, FakeEngine, FakeProcessManager, load_driver_module, make_fake_bridge
 
 bridge = load_driver_module("bridge")
+
+
+class _RecordingStopEngine(bridge.WasmTtsEngineBridge):
+    """Engine that counts fast-stop requests instead of touching a browser."""
+
+    def __init__(self, cdp_client: Any, catalog: Any) -> None:
+        super().__init__(cdp_client, catalog)
+        self.stop_calls = 0
+
+    def send_fast_stop(self) -> None:
+        self.stop_calls += 1
+
+
+class _RecordingCdpClient(FakeCdpClient):
+    """CDP client that records the engine busy state while a request is in flight."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.engine: Any = None
+        self.busyDuringRequest: list[bool] = []
+
+    def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if self.engine is not None:
+            self.busyDuringRequest.append(self.engine.runtime_busy)
+        return super().request(method, params, *args, **kwargs)
+
 
 # Backward-compatible aliases for tests that use underscore-prefixed names
 _FakeCdpClient = FakeCdpClient
@@ -242,6 +276,51 @@ class RuntimeBusyLockTests(unittest.TestCase):
         cdp_client = bridge.CdpClient()
         engine = bridge.WasmTtsEngineBridge(cdp_client, bridge.VoiceCatalog.load())
         self.assertFalse(engine.runtime_busy)
+
+    def test_cancel_current_stops_the_engine_only_while_busy(self) -> None:
+        """cancel_current() reads the locked busy state before sending a fast stop."""
+        engine = _RecordingStopEngine(bridge.CdpClient(), bridge.VoiceCatalog.load())
+
+        engine.cancel_current()
+        self.assertEqual(0, engine.stop_calls)
+
+        engine._set_runtime_busy(True)
+        self.assertTrue(engine.runtime_busy)
+        engine.cancel_current()
+        self.assertEqual(1, engine.stop_calls)
+
+        engine._set_runtime_busy(False)
+        engine.cancel_current()
+        self.assertEqual(1, engine.stop_calls)
+
+    def test_speak_marks_engine_busy_without_cancel_event(self) -> None:
+        """speak() keeps the engine busy during the request even with cancelEvent=None."""
+        catalog = bridge.VoiceCatalog.load()
+        package = next(pkg for pkg in catalog.packages if bridge.is_package_supported_by_engine(pkg))
+        speaker = next(s for s in catalog.speakers if s.packageId == package.id)
+        cdp_client = _RecordingCdpClient()
+        engine = bridge.WasmTtsEngineBridge(cdp_client, catalog)
+        cdp_client.engine = engine
+        pcm: list[bytes] = []
+
+        with mock.patch.object(bridge.voice_store, "is_package_installed", return_value=True):
+            result = engine.speak(
+                "Hello",
+                {
+                    "voiceId": speaker.id,
+                    "voiceName": speaker.name,
+                    "lang": speaker.language,
+                    "rate": 1.0,
+                    "pitch": 1.0,
+                    "volume": 1.0,
+                },
+                pcm.append,
+                cancelEvent=None,
+            )
+
+        self.assertEqual([True], cdp_client.busyDuringRequest)
+        self.assertFalse(engine.runtime_busy)
+        self.assertFalse(result["done"])
 
 
 # ---------------------------------------------------------------------------

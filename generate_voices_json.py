@@ -4,8 +4,17 @@ Google TTS Voice Metadata Extractor and Catalog Generator
 Reads voice package metadata from google tts voices.json, updates existing entries,
 fetches speaker configurations for brand new voice packages, formats names cleanly,
 and updates voices.json with clean, merged, and deduplicated entries.
+
+The target catalog is the newest bundled ``WasmTtsEngine/<version>/voices.json``.
+The engine version is discovered from the tree and must match the production
+``catalog.py:ENGINE_VERSION``. An unreadable, unbundled, or disagreeing engine
+version aborts the run instead of writing a catalog that the add-on would not
+serve.
 """
 
+from __future__ import annotations
+
+import argparse
 import concurrent.futures
 import io
 import json
@@ -15,9 +24,12 @@ import threading
 import time
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
-import requests
+try:
+    import requests
+except Exception:  # pragma: no cover - online developer tool; tests import this module without requests.
+    requests = None  # type: ignore[assignment]
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,24 +40,17 @@ GOOGLE_TTS_JSON_CANDIDATES = [
     BASE_DIR / "google tts voices.json",
 ]
 
-# Find target voices.json
-VOICES_JSON_CANDIDATES = [
-    BASE_DIR
-    / "Google-TTS-For-NVDA"
-    / "googleTtsForNvda"
-    / "synthDrivers"
-    / "googleTtsForNvda"
-    / "WasmTtsEngine"
-    / "20260625.1"
-    / "voices.json",
-    BASE_DIR
-    / "googleTtsForNvda"
-    / "synthDrivers"
-    / "googleTtsForNvda"
-    / "WasmTtsEngine"
-    / "20260625.1"
-    / "voices.json",
+ENGINE_ROOT_CANDIDATES = [
+    BASE_DIR / "Google-TTS-For-NVDA" / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "WasmTtsEngine",
+    BASE_DIR / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "WasmTtsEngine",
 ]
+
+CATALOG_MODULE_CANDIDATES = [
+    BASE_DIR / "Google-TTS-For-NVDA" / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "catalog.py",
+    BASE_DIR / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "catalog.py",
+]
+
+ENGINE_VERSION_PATTERN = re.compile(r"^\d{8}(?:\.\d+)*$")
 
 # Concurrency & Request Settings
 MAX_WORKERS = 15
@@ -54,6 +59,140 @@ MAX_RETRIES = 2
 
 # Thread lock for console output
 output_lock = threading.Lock()
+
+
+def _version_sort_key(version: str) -> tuple[tuple[int, int | str], ...]:
+    """Build a numeric-aware sort key so 20260820.1 sorts after 20260625.1."""
+    key: list[tuple[int, int | str]] = []
+    for token in re.findall(r"\d+|[A-Za-z]+", version):
+        if token.isdigit():
+            key.append((0, int(token)))
+        else:
+            key.append((1, token.lower()))
+    return tuple(key)
+
+
+def _resolved_engine_roots(engineRoots: Iterable[Path] | None) -> list[Path]:
+    return list(engineRoots) if engineRoots is not None else list(ENGINE_ROOT_CANDIDATES)
+
+
+def newest_bundled_engine_dir(engineRoots: Iterable[Path] | None = None) -> Path | None:
+    """Return the newest bundled engine version directory discovered under the engine roots."""
+    candidates: list[tuple[tuple[tuple[int, int | str], ...], str, Path]] = []
+    for engineRoot in _resolved_engine_roots(engineRoots):
+        if not engineRoot.is_dir():
+            continue
+        for directory in engineRoot.iterdir():
+            if directory.is_dir() and ENGINE_VERSION_PATTERN.match(directory.name):
+                candidates.append((_version_sort_key(directory.name), directory.name, directory))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1], str(item[2])))
+    return candidates[-1][2]
+
+
+def latest_engine_voices_json(engineRoot: Path | None = None) -> Path | None:
+    """Return the voices.json of the newest bundled WasmTtsEngine version, if any."""
+    if engineRoot is None:
+        for candidate in ENGINE_ROOT_CANDIDATES:
+            if candidate.is_dir():
+                engineRoot = candidate
+                break
+    if engineRoot is None or not engineRoot.is_dir():
+        return None
+    candidates: list[tuple[tuple[tuple[int, int | str], ...], str, Path]] = []
+    for directory in engineRoot.iterdir():
+        if not directory.is_dir():
+            continue
+        voicesJson = directory / "voices.json"
+        if voicesJson.is_file():
+            candidates.append((_version_sort_key(directory.name), directory.name, voicesJson))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1], str(item[2])))
+    return candidates[-1][2]
+
+
+def catalog_engine_version() -> str:
+    """Read ENGINE_VERSION from the production catalog module so the tree can be compared with the add-on."""
+    for candidate in CATALOG_MODULE_CANDIDATES:
+        try:
+            text = candidate.read_text(encoding="utf-8-sig")
+        except OSError:
+            continue
+        match = re.search(r'(?m)^ENGINE_VERSION\s*=\s*["\']([^"\']+)["\']', text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def check_engine_version_alignment(bundledVersion: str, configuredVersion: str) -> str | None:
+    """Explain why the newest bundled engine and the production catalog module disagree, if they do."""
+    if not configuredVersion:
+        locations = ", ".join(str(candidate) for candidate in CATALOG_MODULE_CANDIDATES)
+        return f"Could not read ENGINE_VERSION from the production catalog module ({locations})."
+    if not bundledVersion:
+        return "No bundled WasmTtsEngine version directory was found."
+    if bundledVersion == configuredVersion:
+        return None
+    if _version_sort_key(bundledVersion) > _version_sort_key(configuredVersion):
+        return (
+            f"The newest bundled engine version ({bundledVersion}) is newer than catalog.py "
+            f"ENGINE_VERSION ({configuredVersion}). Bump ENGINE_VERSION to {bundledVersion} "
+            "before regenerating."
+        )
+    return (
+        f"catalog.py ENGINE_VERSION ({configuredVersion}) has no bundled engine directory: "
+        f"the newest bundled version is {bundledVersion}. Add the {configuredVersion} engine "
+        "bundle or fix ENGINE_VERSION."
+    )
+
+
+def select_engine_voices_json(
+    engineRoots: Iterable[Path] | None = None,
+    explicitVoicesJson: Path | None = None,
+) -> Path:
+    """Resolve the newest bundled engine catalog, aborting unless the engine version is verified."""
+    if explicitVoicesJson is not None:
+        if not explicitVoicesJson.is_file():
+            print(
+                f"[ABORT] Error: the explicit engine catalog was not found at {explicitVoicesJson}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"Target engine catalog (explicit): {explicitVoicesJson}")
+        print(
+            "[WARN] Engine version verification was skipped for an explicit --voices-json target.",
+            file=sys.stderr,
+        )
+        return explicitVoicesJson
+
+    engineDir = newest_bundled_engine_dir(engineRoots)
+    if engineDir is None:
+        roots = ", ".join(str(candidate) for candidate in _resolved_engine_roots(engineRoots))
+        print(
+            f"[ABORT] Error: no WasmTtsEngine <version> directory was found under: {roots}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    voicesJsonPath = engineDir / "voices.json"
+    if not voicesJsonPath.is_file():
+        print(
+            f"[ABORT] Error: the newest bundled engine ({engineDir.name}) has no voices.json. "
+            "Add the upstream catalog to the engine bundle before regenerating.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    problem = check_engine_version_alignment(engineDir.name, catalog_engine_version())
+    if problem is not None:
+        print(f"[ABORT] Error: {problem}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Target engine catalog: {voicesJsonPath}")
+    return voicesJsonPath
+
 
 # Comprehensive mapping of locale codes to Native Language Names
 NATIVE_LANGUAGE_NAMES: dict[str, str] = {
@@ -263,8 +402,29 @@ def fetch_new_package_speakers(
     return None
 
 
-def main():
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Regenerate the bundled engine voices.json from google tts voices.json."
+    )
+    parser.add_argument(
+        "--voices-json",
+        type=Path,
+        default=None,
+        help="Explicit engine voices.json to regenerate; skips the engine version verification.",
+    )
+    return parser.parse_args(argv)
+
+
+def main() -> None:
+    args = _parse_args()
     print("=== Google TTS Voice Catalog Generator ===")
+
+    if requests is None:
+        print(
+            "[ABORT] Error: the 'requests' package is required for this online catalog generator.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     source_json_path = None
     for cand in GOOGLE_TTS_JSON_CANDIDATES:
@@ -283,14 +443,7 @@ def main():
     source_packs = source_data.get("packs", [])
     print(f"Found {len(source_packs)} total packs in google tts voices.json.")
 
-    voices_json_path = None
-    for cand in VOICES_JSON_CANDIDATES:
-        if cand.exists():
-            voices_json_path = cand
-            break
-    if not voices_json_path:
-        # Default to first candidate if none exist
-        voices_json_path = VOICES_JSON_CANDIDATES[0]
+    voices_json_path = select_engine_voices_json(explicitVoicesJson=args.voices_json)
 
     # Load existing voices.json if present
     existing_entries: dict[str, dict[str, Any]] = {}

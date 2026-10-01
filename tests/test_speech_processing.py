@@ -651,6 +651,16 @@ class UnicodeSentenceTerminatorTests(unittest.TestCase):
             with self.subTest(char=f"U+{ord(char):04X}"):
                 self.assertFalse(is_term(char))
 
+    def test_empty_and_multichar_strings_do_not_raise_type_error(self) -> None:
+        is_term = self.processing.is_sentence_terminator_character
+        self.assertFalse(is_term(""))
+        self.assertFalse(is_term(".."))
+        self.assertFalse(is_term("abc"))
+        self.assertFalse(self.processing._is_soft_break_character(""))
+        self.assertFalse(self.processing._is_soft_break_character(".."))
+        self.assertEqual("", self.processing._unicode_name(""))
+        self.assertEqual("", self.processing._unicode_name("abc"))
+
 
 class CommonAbbreviationsIntegrityTests(unittest.TestCase):
     """Verify that no hardcoded abbreviation dictionary is retained in the synth driver."""

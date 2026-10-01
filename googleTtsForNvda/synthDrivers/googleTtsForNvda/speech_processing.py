@@ -482,11 +482,15 @@ def is_complete_speech_result(result: Any, *, expectedSegmentEnds: int = 0) -> b
 
 @lru_cache(maxsize=4096)
 def _unicode_name(character: str) -> str:
+    if len(character) != 1:
+        return ""
     return unicodedata.name(character, "")
 
 
 @lru_cache(maxsize=4096)
 def _is_sentence_terminator_character(character: str) -> bool:
+    if len(character) != 1:
+        return False
     return ord(character) in SENTENCE_TERMINAL_CODEPOINTS or character in TAILORED_SENTENCE_TERMINATORS
 
 
@@ -502,6 +506,8 @@ def is_sentence_terminator_character(character: str) -> bool:
 
 @lru_cache(maxsize=4096)
 def _is_soft_break_character(character: str) -> bool:
+    if len(character) != 1:
+        return False
     if character in SOFT_BREAK_CHARS:
         return True
     if character in ASCII_SENTENCE_TERMINATORS:
@@ -523,16 +529,22 @@ def _is_soft_break_character(character: str) -> bool:
 
 @lru_cache(maxsize=4096)
 def _is_colon_like_character(character: str) -> bool:
+    if len(character) != 1:
+        return False
     return character in ":：" or "COLON" in _unicode_name(character)
 
 
 @lru_cache(maxsize=4096)
 def _is_dash_like_character(character: str) -> bool:
+    if len(character) != 1:
+        return False
     return character in "\u2013\u2014" or "DASH" in _unicode_name(character)
 
 
 @lru_cache(maxsize=1024)
 def _is_sentence_trailing_closer(character: str) -> bool:
+    if len(character) != 1:
+        return False
     return (
         character in SENTENCE_TRAILING_CLOSERS
         or "\u2018" <= character <= "\u201f"
@@ -541,6 +553,8 @@ def _is_sentence_trailing_closer(character: str) -> bool:
 
 
 def _is_no_space_script_character(character: str) -> bool:
+    if len(character) != 1:
+        return False
     if character.isascii():
         return False
     codepoint = ord(character)

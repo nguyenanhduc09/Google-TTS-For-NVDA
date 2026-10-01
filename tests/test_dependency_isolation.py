@@ -143,6 +143,14 @@ class BundledDependencyIsolationTests(unittest.TestCase):
             with self.subTest(fileName=fileName):
                 self.assertTrue((catalog.ENGINE_DIR / fileName).is_file())
 
+    def test_bundled_engine_files_are_fully_declared(self) -> None:
+        """Every bundled engine file must be declared, and every declaration must exist."""
+        catalog = load_driver_module("catalog")
+        bundledFiles = sorted(
+            path.relative_to(catalog.ENGINE_DIR).as_posix() for path in catalog.ENGINE_DIR.rglob("*") if path.is_file()
+        )
+        self.assertEqual(sorted(catalog.REQUIRED_ENGINE_FILES), bundledFiles)
+
 
 if __name__ == "__main__":
     unittest.main()
