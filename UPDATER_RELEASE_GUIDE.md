@@ -9,7 +9,7 @@ version:
 
 ```text
 manifest.ini
-version = ...
+version = <version>
 changelog = ...
 ```
 
@@ -25,7 +25,7 @@ For a new version, set `baseVersion` to the same value as `manifest.ini` and res
 ```json
 {
   "schema": 1,
-  "baseVersion": "0.6",
+  "baseVersion": "<version>",
   "updateBuild": 1
 }
 ```
@@ -36,7 +36,7 @@ For a hotfix inside the same public version, keep `manifest.ini` unchanged and i
 ```json
 {
   "schema": 1,
-  "baseVersion": "0.5",
+  "baseVersion": "<version>",
   "updateBuild": 2
 }
 ```
@@ -45,7 +45,7 @@ Do not use `size` or `sha256` to decide whether a hotfix exists. The updater com
 `baseVersion` first and compares `updateBuild` only when the installed and remote
 `baseVersion` values are the same.
 
-The release publisher is responsible for the English `changelog` in the main `manifest.ini`.
+The release publisher is responsible for the English and Vietnamese `changelog` in the main `manifest.ini`.
 
 Localized changelogs are contributor-provided translation inputs. If translators provide them before the final package is built, include them in:
 
@@ -77,18 +77,12 @@ The file name should follow this format:
 googleTtsForNvda-<version>.nvda-addon
 ```
 
-Example:
-
-```text
-googleTtsForNvda-0.5.nvda-addon
-```
-
 The version in the file name must match the `version` value inside the package's `manifest.ini`.
-Hotfix builds do not change the file name. For example, `0.5 build 1` and `0.5 build 2`
+Hotfix builds do not change the file name. For example, `<version> build 1` and `<version> build 2`
 are both packaged as:
 
 ```text
-googleTtsForNvda-0.5.nvda-addon
+googleTtsForNvda-<version>.nvda-addon
 ```
 
 ## 3. Generate stable.json
@@ -134,7 +128,7 @@ When no package path is provided, the script scans the current directory recursi
 If you need to use a specific package, you can still pass it explicitly:
 
 ```powershell
-python make_update_manifest.py path\to\googleTtsForNvda-0.5.nvda-addon
+python make_update_manifest.py path\to\googleTtsForNvda-<version>.nvda-addon
 ```
 
 Use an absolute `--output` path only when you intentionally want to write the update manifest somewhere else. Relative `--output` paths are resolved from the directory containing the selected `.nvda-addon` package.
@@ -147,16 +141,10 @@ Create a GitHub Release using this tag format:
 v<version>
 ```
 
-Example:
-
-```text
-v0.5
-```
-
 Upload both files as release assets:
 
 ```text
-googleTtsForNvda-0.5.nvda-addon
+googleTtsForNvda-<version>.nvda-addon
 stable.json
 ```
 
@@ -180,7 +168,7 @@ After uploading the release assets, verify these links:
 
 ```text
 https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/latest/download/stable.json
-https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/download/v0.5/googleTtsForNvda-0.5.nvda-addon
+https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/download/v<version>/googleTtsForNvda-<version>.nvda-addon
 ```
 
 Check that `stable.json` contains the correct:
@@ -205,16 +193,14 @@ Generate `stable.json` from the final package that will be published.
 
 Avoid editing `stable.json` manually. If it must be edited, make sure `url`, `size`, and `sha256` exactly match the uploaded `.nvda-addon` file.
 
-The release version in `manifest.ini`, the `.nvda-addon` file name, the Git tag, and the URL inside `stable.json` must all match. The hotfix build number is tracked separately in `buildInfo.json` and `stable.json`. For example, version `0.5 build 2` uses:
+The release version in `manifest.ini`, the `.nvda-addon` file name, the Git tag, and the URL inside `stable.json` must all match. The hotfix build number is tracked separately in `buildInfo.json` and `stable.json`. For example, version `<version> build 2` uses:
 
 ```text
-manifest.ini: version = 0.5
-buildInfo.json: baseVersion = 0.5, updateBuild = 2
-package: googleTtsForNvda-0.5.nvda-addon
-tag: v0.5
-url: https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/download/v0.5/googleTtsForNvda-0.5.nvda-addon
+manifest.ini: version = <version>
+buildInfo.json: baseVersion = <version>, updateBuild = 2
+package: googleTtsForNvda-<version>.nvda-addon
+tag: v<version>
+url: https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/download/v<version>/googleTtsForNvda-<version>.nvda-addon
 ```
 
-When moving from `0.5` to `0.6`, update `manifest.ini` to `0.6`, set
-`buildInfo.json` to `baseVersion: "0.6"` and `updateBuild: 1`, build
-`googleTtsForNvda-0.6.nvda-addon`, and publish it under tag `v0.6`.
+When moving to a new version (for example, incrementing from `<version>` to `<new_version>`), update `manifest.ini` to `<new_version>`, set `buildInfo.json` to `baseVersion: "<new_version>"` and `updateBuild: 1`, build `googleTtsForNvda-<new_version>.nvda-addon`, and publish it under tag `v<new_version>`.

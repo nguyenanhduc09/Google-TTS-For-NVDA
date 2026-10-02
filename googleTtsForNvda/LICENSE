@@ -337,3 +337,38 @@ proprietary programs.  If your program is a subroutine library, you may
 consider it more useful to permit linking proprietary applications with the
 library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.
+
+==============================================================================
+Third-Party Software and Component Notices
+==============================================================================
+
+This add-on bundles or integrates several third-party open-source components,
+each governed by its respective license:
+
+1. Chromium WASM TTS Engine
+   - License: BSD 3-Clause "New" or "Revised" License
+   - Copyright (C) 2024 The Chromium Authors
+   - Location: synthDrivers/googleTtsForNvda/WasmTtsEngine/<ENGINE_VERSION>/LICENSE
+
+2. Eigen
+   - License: Apache License, Version 2.0
+   - Location: synthDrivers/googleTtsForNvda/WasmTtsEngine/<ENGINE_VERSION>/EIGEN_LICENSE
+
+3. Compact Language Detector 2 (CLD2)
+   - License: Apache License, Version 2.0
+   - Copyright (C) 2013-2014 Google Inc., CLD2Owners contributors
+   - Location: synthDrivers/googleTtsForNvda/cld2/LICENSE.txt
+
+4. websocket-client
+   - License: Apache License, Version 2.0
+   - Copyright (C) 2025 engn33r
+   - Location: synthDrivers/googleTtsForNvda/websocketClientRepo/LICENSE
+
+5. Google TTS Voice Catalog Metadata
+   - Notice: Google TTS Voice Catalog Notice
+   - Provenance: Metadata in voices.json is generated from Google Speech packages
+     (com.google.android.tts) to determine voice characteristics and dependencies.
+     Voice packages (.zvoice) are downloaded on demand directly from upstream
+     sources and are not distributed as part of this add-on repository.
+     All rights in third-party material and trademarks remain with their respective owners.
+   - Location: synthDrivers/googleTtsForNvda/WasmTtsEngine/<ENGINE_VERSION>/VOICE_CATALOG_NOTICE.txt
