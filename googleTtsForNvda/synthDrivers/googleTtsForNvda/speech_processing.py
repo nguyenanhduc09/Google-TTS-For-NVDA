@@ -14,7 +14,7 @@ from collections.abc import Iterator, Sequence
 from functools import lru_cache
 from typing import Any
 
-from .unicode_data import SENTENCE_TERMINAL_CODEPOINTS
+from .unicode_data import NORMALIZATION_TABLE, SCRIPT_RANGES, SENTENCE_TERMINAL_CODEPOINTS
 
 log = logging.getLogger(__name__)
 
@@ -112,36 +112,25 @@ NO_SPACE_SCRIPT_PROFILES = (
         (
             (0x3100, 0x312F),
             (0x31A0, 0x31BF),
-            (0x3400, 0x4DBF),
-            (0x4E00, 0x9FFF),
-            (0xF900, 0xFAFF),
-            (0x20000, 0x2A6DF),
-            (0x2A700, 0x2B73F),
-            (0x2B740, 0x2B81F),
-            (0x2B820, 0x2CEAF),
-            (0x2CEB0, 0x2EBEF),
-            (0x30000, 0x3134F),
+            *SCRIPT_RANGES.get("Han", ()),
         ),
         80,
     ),
     (
         (
-            (0x3040, 0x30FF),
-            (0x31F0, 0x31FF),
-            (0x1AFF0, 0x1AFFF),
-            (0x1B000, 0x1B16F),
-            (0xFF66, 0xFF9F),
+            *SCRIPT_RANGES.get("Hiragana", ()),
+            *SCRIPT_RANGES.get("Katakana", ()),
         ),
         80,
     ),
-    (((0x0E00, 0x0E7F),), 70),
+    (SCRIPT_RANGES.get("Thai", ((0x0E00, 0x0E7F),)), 70),
     (((0x0E80, 0x0EFF),), 70),
     (((0x1900, 0x194F),), 70),
     (((0x1950, 0x197F),), 70),
     (((0x1980, 0x19DF),), 70),
     (((0x1A00, 0x1A1F),), 70),
     (((0x1A20, 0x1AAF),), 70),
-    (((0x1780, 0x17FF),), 70),
+    (SCRIPT_RANGES.get("Khmer", ((0x1780, 0x17FF),)), 70),
     (((0x1000, 0x109F), (0xA9E0, 0xA9FF), (0xAA60, 0xAA7F)), 70),
     (((0x0F00, 0x0FFF),), 70),
     (((0x1700, 0x171F),), 70),
@@ -179,35 +168,12 @@ def _find_no_space_range(codepoint: int) -> tuple[int, int, int] | None:
 COMMON_ABBREVIATIONS: frozenset[str] = frozenset()
 
 # Precomputed translation table for high-speed one-pass string sanitization.
-# Maps all 25 non-standard Unicode whitespace characters and BMP Private Use Area
-# (Co) codepoints to standard ASCII spaces, normalizing whitespace
-# while preserving 1:1 character index alignments.
+# Inherits whitespace normalization directly from the official Unicode
+# NORMALIZATION_TABLE, mapping all non-standard Unicode whitespace variants and
+# BMP Private Use Area (Co) codepoints to standard ASCII spaces while
+# preserving 1:1 character index alignments.
 _SPEECH_SANITIZE_TABLE: dict[int, str] = {
-    0x000B: " ",
-    0x000C: " ",
-    0x001C: " ",
-    0x001D: " ",
-    0x001E: " ",
-    0x001F: " ",
-    0x0085: " ",
-    0x00A0: " ",
-    0x1680: " ",
-    0x2000: " ",
-    0x2001: " ",
-    0x2002: " ",
-    0x2003: " ",
-    0x2004: " ",
-    0x2005: " ",
-    0x2006: " ",
-    0x2007: " ",
-    0x2008: " ",
-    0x2009: " ",
-    0x200A: " ",
-    0x2028: " ",
-    0x2029: " ",
-    0x202F: " ",
-    0x205F: " ",
-    0x3000: " ",
+    cp: " " for cp, replacement in NORMALIZATION_TABLE.items() if replacement in (" ", "\n")
 }
 for _pua_codepoint in range(0xE000, 0xF900):
     _SPEECH_SANITIZE_TABLE[_pua_codepoint] = " "
@@ -1014,8 +980,20 @@ class TextSegmenter:
         return segmentLimit
 
     def _extend_cut_over_combining_marks(self, text: str, cut: int, maxCut: int) -> int:
-        while cut < maxCut and unicodedata.category(text[cut]).startswith("M"):
-            cut += 1
+        while cut < maxCut:
+            ch = text[cut]
+            cat = unicodedata.category(ch)
+            cp = ord(ch)
+            # Preserve Unicode combining marks, ZWJ sequences, variation selectors, keycaps, skin tone modifiers, and flag pairs
+            if (
+                cat.startswith("M")
+                or cp in (0x200D, 0xFE0E, 0xFE0F, 0x20E3)
+                or (0x1F3FB <= cp <= 0x1F3FF)
+                or (0x1F1E6 <= cp <= 0x1F1FF and cut > 0 and 0x1F1E6 <= ord(text[cut - 1]) <= 0x1F1FF)
+            ):
+                cut += 1
+            else:
+                break
         return cut
 
     def looks_like_url_token(self, text: str) -> bool:

@@ -401,5 +401,115 @@ class EnsureConnectionCancellationTests(unittest.TestCase):
         self.assertTrue(any(isinstance(e, bridge.CdpCancelled) for e in errors))
 
 
+class _FailingEngine:
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+        self.calls = 0
+        self.runtime_busy = False
+
+    def speak(self, *args: object, **kwargs: object) -> dict[str, object]:
+        self.calls += 1
+        raise self.error
+
+
+def _browser_speech_error(*, audioStarted: bool) -> BaseException:
+    return bridge._BrowserSpeechError(
+        "Could not speak",
+        "Browser harness reported a speech error",
+        audioStarted=audioStarted,
+    )
+
+
+def _runtime_bridge(engine: object) -> Any:
+    b = make_fake_bridge(engine=engine)
+    b.ensure_connection = lambda cancelEvent=None: None
+    return b
+
+
+class RuntimeRecoveryTests(unittest.TestCase):
+    """Verify runtime speech error recovery, retry policies, and standby safety."""
+
+    def test_no_audio_browser_error_retries_once_after_recycle(self) -> None:
+        failedEngine = _FailingEngine(_browser_speech_error(audioStarted=False))
+        successfulEngine = FakeEngine()
+        bridge_inst = _runtime_bridge(failedEngine)
+        recycleCalls = 0
+
+        def maybe_recycle_runtime(*, allowIdleRecycle: bool = True, checkMemory: bool = True) -> bool:
+            nonlocal recycleCalls
+            if not allowIdleRecycle:
+                return False
+            recycleCalls += 1
+            bridge_inst._engine = successfulEngine
+            bridge_inst._needsRecycle = False
+            return True
+
+        bridge_inst.maybe_recycle_runtime = maybe_recycle_runtime
+        result = bridge_inst.speak("text", {}, lambda _audio: None)
+
+        self.assertEqual({"success": True}, result)
+        self.assertEqual(1, failedEngine.calls)
+        self.assertEqual(1, successfulEngine.calls)
+        self.assertEqual(1, recycleCalls)
+
+    def test_partial_audio_browser_error_recycles_without_retry(self) -> None:
+        error = _browser_speech_error(audioStarted=True)
+        failedEngine = _FailingEngine(error)
+        successfulEngine = FakeEngine()
+        bridge_inst = _runtime_bridge(failedEngine)
+        recycleCalls = 0
+
+        def maybe_recycle_runtime(*, allowIdleRecycle: bool = True, checkMemory: bool = True) -> bool:
+            nonlocal recycleCalls
+            if not allowIdleRecycle:
+                return False
+            recycleCalls += 1
+            bridge_inst._engine = successfulEngine
+            bridge_inst._needsRecycle = False
+            return True
+
+        bridge_inst.maybe_recycle_runtime = maybe_recycle_runtime
+        with self.assertRaises(bridge._BrowserSpeechError):
+            bridge_inst.speak("text", {}, lambda _audio: None)
+
+        self.assertEqual(1, failedEngine.calls)
+        self.assertEqual(0, successfulEngine.calls)
+        self.assertEqual(1, recycleCalls)
+
+    def test_browser_error_is_never_retried_more_than_once(self) -> None:
+        failedEngine = _FailingEngine(_browser_speech_error(audioStarted=False))
+        bridge_inst = _runtime_bridge(failedEngine)
+        recycleCalls = 0
+
+        def maybe_recycle_runtime(*, allowIdleRecycle: bool = True, checkMemory: bool = True) -> bool:
+            nonlocal recycleCalls
+            if not allowIdleRecycle:
+                return False
+            recycleCalls += 1
+            bridge_inst._needsRecycle = False
+            return True
+
+        bridge_inst.maybe_recycle_runtime = maybe_recycle_runtime
+        with self.assertRaises(bridge._BrowserSpeechError):
+            bridge_inst.speak("text", {}, lambda _audio: None)
+
+        self.assertEqual(2, failedEngine.calls)
+        self.assertEqual(2, recycleCalls)
+
+    def test_only_healthy_connected_runtime_is_safe_for_standby(self) -> None:
+        bridge_inst = _runtime_bridge(FakeEngine())
+        bridge_inst._cdp_client.connected = True
+        self.assertTrue(bridge_inst.safe_for_standby_release())
+
+        bridge_inst._needsRecycle = True
+        self.assertFalse(bridge_inst.safe_for_standby_release())
+        bridge_inst._needsRecycle = False
+        bridge_inst._engine.runtime_busy = True
+        self.assertFalse(bridge_inst.safe_for_standby_release())
+        bridge_inst._engine.runtime_busy = False
+        bridge_inst._cdp_client.connected = False
+        self.assertFalse(bridge_inst.safe_for_standby_release())
+
+
 if __name__ == "__main__":
     unittest.main()

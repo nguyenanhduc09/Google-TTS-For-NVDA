@@ -195,13 +195,81 @@ class _Cld2Detector:
 _detector = _Cld2Detector()
 
 
-def detect_language(text: str, candidateLanguages: list[str]) -> str | None:
-    result = _detector.detect(text)
-    if result is None:
+def detect_language(
+    text: str,
+    candidateLanguages: list[str],
+    preferredLanguage: str | None = None,
+) -> str | None:
+    """Detect language for text restricted by candidate language hints and preferred language.
+
+    Applies Mathematical Alphanumeric normalization, candidate language prior hints,
+    preferred language routing for numbers/symbols, and Unicode script/diacritic analysis.
+    """
+    if not text:
         return None
-    if not result.isReliable or result.percent < _MIN_RELIABLE_PERCENT:
+    from .language_profiles import (
+        has_vietnamese_diacritics,
+        is_number_token,
+        is_symbol_or_emoji_token,
+        language_script_signal,
+        normalize_mathematical_alphanumeric,
+    )
+
+    normalizedText = normalize_mathematical_alphanumeric(text)
+    stripped = normalizedText.strip()
+    if not stripped:
         return None
-    return _candidate_for_language(result.language, candidateLanguages)
+
+    # Numbers and symbols/emojis strictly route to preferred language
+    if preferredLanguage and (is_number_token(stripped) or is_symbol_or_emoji_token(stripped)):
+        return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+
+    # CLD2 statistical detection
+    result = _detector.detect(normalizedText)
+    if result is not None:
+        candidate = _candidate_for_language(result.language, candidateLanguages)
+        if candidate is not None and (result.isReliable or result.percent >= 30):
+            return candidate
+        # Language hint recovery: CLD2 predicted a language outside the candidate list
+        # (e.g. ceb, gl, id, ms, la, pt on short Latin text without diacritics).
+        # Restrict the prior to the candidate language space.
+        candidateRoots = {_language_root(c) for c in candidateLanguages}
+        cldRoot = _language_root(result.language)
+        if cldRoot in ("ceb", "gl", "la", "id", "ms", "tl", "af", "es", "pt", "fr", "it", "de", "nl", "ro"):
+            if "vi" in candidateRoots and has_vietnamese_diacritics(normalizedText):
+                return _candidate_for_language("vi", candidateLanguages)
+            if "en" in candidateRoots and any(c.isalpha() and ord(c) < 128 for c in normalizedText):
+                return _candidate_for_language("en", candidateLanguages)
+            latinCands = [
+                c for c in candidateLanguages if _language_root(c) in ("en", "vi", "fr", "de", "es", "it", "pt")
+            ]
+            if len(latinCands) == 1:
+                return latinCands[0]
+
+    # Non-Latin script fallback via official Unicode script ranges
+    candidateRoots = {_language_root(c) for c in candidateLanguages}
+    scriptSignal = language_script_signal(normalizedText, candidateRoots)
+    if scriptSignal:
+        return _candidate_for_language(scriptSignal, candidateLanguages)
+
+    # Latin diacritics & plain Latin heuristics without hardcoded word dictionaries
+    if "vi" in candidateRoots and has_vietnamese_diacritics(normalizedText):
+        return _candidate_for_language("vi", candidateLanguages)
+    if "en" in candidateRoots and any(c.isalpha() and ord(c) < 128 for c in normalizedText):
+        return _candidate_for_language("en", candidateLanguages)
+
+    latinCandidates = [
+        c
+        for c in candidateLanguages
+        if _language_root(c) in ("en", "vi", "fr", "de", "es", "it", "pt", "nl", "pl", "cs")
+    ]
+    if len(latinCandidates) == 1:
+        return latinCandidates[0]
+
+    if preferredLanguage:
+        return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+
+    return None
 
 
 def _candidate_for_language(language: str, candidateLanguages: list[str]) -> str | None:

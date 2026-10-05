@@ -8,6 +8,7 @@ import ast
 import json
 import re
 import sys
+import unicodedata
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
@@ -253,6 +254,166 @@ def _format_codepoints(codepoints: Iterable[int], indent: str = "\t") -> str:
     return "\n".join(lines)
 
 
+def _format_normalization_table(table: dict[int, str], indent: str = "\t") -> str:
+    lines = []
+    for codepoint in sorted(table):
+        lines.append(f"{indent}0x{codepoint:04X}: {repr(table[codepoint])},")
+    return "\n".join(lines)
+
+
+def _build_normalization_table(
+    ucdDir: Path,
+    cldrCommonDir: Path | None = None,
+) -> dict[int, str]:
+    table: dict[int, str] = {}
+    propListPath = ucdDir / "PropList.txt"
+    if propListPath.is_file():
+        for start, end, prop in _parse_ucd_records(propListPath):
+            if prop == "White_Space":
+                for cp in range(start, end + 1):
+                    if cp < 0x80:
+                        continue
+                    if cp in (0x2028, 0x2029):
+                        table[cp] = "\n"
+                    else:
+                        table[cp] = " "
+            elif prop == "Bidi_Control":
+                for cp in range(start, end + 1):
+                    table[cp] = ""
+
+    table[0x200B] = " "
+    table[0xFEFF] = ""
+    for cp in (0x000B, 0x000C, 0x001C, 0x001D, 0x001E, 0x001F):
+        table[cp] = " "
+
+    unicodeDataPath = ucdDir / "UnicodeData.txt"
+    rawDecomps: dict[int, str] = {}
+    acceptedTags = {
+        "font",
+        "compat",
+        "wide",
+        "narrow",
+        "circle",
+        "square",
+        "super",
+        "sub",
+        "fraction",
+        "noBreak",
+        "initial",
+        "medial",
+        "final",
+        "isolated",
+        "small",
+        "vertical",
+    }
+    if unicodeDataPath.is_file():
+        for rawLine in unicodeDataPath.read_text(encoding="utf-8").splitlines():
+            line = rawLine.strip()
+            if not line:
+                continue
+            fields = line.split(";")
+            cp = int(fields[0], 16)
+            name = fields[1]
+            decomp = fields[5].strip()
+            if decomp.startswith("<"):
+                tagName, *codepointHexes = decomp.split()
+                tag = tagName[1:-1]
+                if tag in acceptedTags:
+                    rawDecomps[cp] = "".join(chr(int(h, 16)) for h in codepointHexes)
+            elif decomp and (0x2100 <= cp < 0x2150 or 0xFB1D <= cp < 0xFB50):
+                rawDecomps[cp] = "".join(chr(int(h, 16)) for h in decomp.split())
+
+            if name.startswith(
+                (
+                    "NEGATIVE CIRCLED LATIN CAPITAL LETTER ",
+                    "NEGATIVE SQUARED LATIN CAPITAL LETTER ",
+                    "SQUARED LATIN CAPITAL LETTER ",
+                )
+            ):
+                table[cp] = name.rsplit(" ", 1)[-1]
+
+    for cp, chars in rawDecomps.items():
+        current = chars
+        for _ in range(10):
+            nextStr = "".join(rawDecomps.get(ord(c), c) for c in current)
+            if nextStr == current:
+                break
+            current = nextStr
+        current = unicodedata.normalize("NFC", current)
+        if 0x249C <= cp <= 0x24B5:
+            table[cp] = chr(ord("a") + (cp - 0x249C))
+        elif 0x1F110 <= cp <= 0x1F129:
+            table[cp] = chr(ord("A") + (cp - 0x1F110))
+        elif cp not in table:
+            table[cp] = current
+
+    smallCapitals = {
+        0x0262: "g",
+        0x026A: "i",
+        0x0274: "n",
+        0x0276: "oe",
+        0x0280: "r",
+        0x028F: "y",
+        0x0299: "b",
+        0x029C: "h",
+        0x029F: "l",
+        0x1D00: "a",
+        0x1D01: "ae",
+        0x1D04: "c",
+        0x1D05: "d",
+        0x1D07: "e",
+        0x1D0A: "j",
+        0x1D0B: "k",
+        0x1D0C: "l",
+        0x1D0D: "m",
+        0x1D0E: "n",
+        0x1D0F: "o",
+        0x1D18: "p",
+        0x1D1B: "t",
+        0x1D1C: "u",
+        0x1D20: "v",
+        0x1D21: "w",
+        0x1D22: "z",
+        0xA730: "f",
+        0xA731: "s",
+        0xA7AF: "q",
+    }
+    table.update(smallCapitals)
+
+    squaredWords = {
+        0x1F18E: "AB",
+        0x1F18F: "WC",
+        0x1F191: "CL",
+        0x1F192: "COOL",
+        0x1F193: "FREE",
+        0x1F194: "ID",
+        0x1F195: "NEW",
+        0x1F196: "NG",
+        0x1F197: "OK",
+        0x1F198: "SOS",
+        0x1F199: "UP",
+        0x1F19A: "VS",
+        0x1F19B: "3D",
+    }
+    table.update(squaredWords)
+
+    if cldrCommonDir is not None:
+        charsXml = cldrCommonDir / "supplemental" / "characters.xml"
+        if charsXml.is_file():
+            tree = ET.parse(charsXml)
+            for charElem in tree.findall(".//character"):
+                val = charElem.attrib.get("value")
+                if not val or len(val) != 1:
+                    continue
+                cp = ord(val)
+                if cp in (0x00A9, 0x00AE, 0x2212, 0x2044, 0x2215):
+                    subs = [s.text for s in charElem.findall("substitute") if s.text]
+                    if subs:
+                        table[cp] = subs[0].strip()
+
+    return table
+
+
 def _render_module(
     *,
     ucdVersion: str,
@@ -260,6 +421,7 @@ def _render_module(
     languageScripts: dict[str, tuple[str, ...]],
     scriptRanges: dict[str, tuple[tuple[int, int], ...]],
     sentenceTerminals: set[int],
+    normalizationTable: dict[int, str] | None = None,
 ) -> str:
     lines = [
         '"""Generated Unicode data used by language detection and segmentation.',
@@ -298,9 +460,18 @@ def _render_module(
             "SENTENCE_TERMINAL_CODEPOINTS = frozenset((",
             _format_codepoints(sentenceTerminals),
             "))",
-            "",
         )
     )
+    if normalizationTable is not None:
+        lines.extend(
+            (
+                "",
+                "NORMALIZATION_TABLE: dict[int, str] = {",
+                _format_normalization_table(normalizationTable),
+                "}",
+            )
+        )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -309,6 +480,11 @@ def main() -> int:
     parser.add_argument("--ucd-dir", type=Path, required=True)
     parser.add_argument("--likely-subtags", type=Path, required=True)
     parser.add_argument("--cldr-version", required=True)
+    parser.add_argument(
+        "--cldr-common-dir",
+        type=Path,
+        help="Optional path to CLDR common directory for supplemental characters data.",
+    )
     parser.add_argument(
         "--voices-json",
         type=Path,
@@ -358,18 +534,26 @@ def main() -> int:
     if not sentenceTerminals:
         raise ValueError("UCD PropList.txt contains no Sentence_Terminal data")
 
+    cldrCommonDir = args.cldr_common_dir
+    if cldrCommonDir is None and args.likely_subtags.parent.name == "supplemental":
+        cldrCommonDir = args.likely_subtags.parent.parent
+
+    normalizationTable = _build_normalization_table(args.ucd_dir, cldrCommonDir)
+
     output = _render_module(
         ucdVersion=ucdVersion,
         cldrVersion=args.cldr_version,
         languageScripts=languageScripts,
         scriptRanges=scriptRanges,
         sentenceTerminals=sentenceTerminals,
+        normalizationTable=normalizationTable,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(output, encoding="utf-8", newline="\n")
     print(
         f"Wrote {args.output} for {len(languageScripts)} language roots, "
-        f"{len(scriptRanges)} scripts, and {len(sentenceTerminals)} sentence terminals."
+        f"{len(scriptRanges)} scripts, {len(sentenceTerminals)} sentence terminals, "
+        f"and {len(normalizationTable)} normalization codepoints."
     )
     return 0
 

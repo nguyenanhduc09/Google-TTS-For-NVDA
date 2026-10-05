@@ -22,7 +22,13 @@ from gui import guiHelper
 from logHandler import log
 from speech import speech as speechModule
 from speech.commands import LangChangeCommand
-from synthDrivers.googleTtsForNvda import language_detector, language_utils, standby, voice_store
+from synthDrivers.googleTtsForNvda import (
+    language_detector,
+    language_profiles,
+    language_utils,
+    standby,
+    voice_store,
+)
 from synthDrivers.googleTtsForNvda.bridge import (
     CONFIG_AUTO_LANGUAGE_CANDIDATES,
     CONFIG_AUTO_LANGUAGE_DETECTION,
@@ -783,22 +789,24 @@ def _auto_detect_language_for_speech_filter(synth: Any, text: str) -> str | None
         return None
     if len(candidates) == 1:
         return candidates[0]
-    detected = synth._detect_auto_language(text, candidates)
+    preferred = synth._auto_language_preferred(candidates, synth.voice)
+    detected = synth._detect_auto_language(text, candidates, preferred)
     if detected is not None:
         return detected
-    return synth._auto_language_preferred(candidates, synth.voice)
+    return preferred
 
 
 def _auto_language_for_process_text(synth: Any, _locale: str, text: str) -> str | None:
     candidates = synth._auto_language_candidates()
     if not candidates:
         return None
+    preferred = synth._auto_language_preferred(candidates, synth.voice) if len(candidates) >= 2 else None
     if len(candidates) >= 2:
-        detected = synth._detect_auto_language(text, candidates)
+        detected = synth._detect_auto_language(text, candidates, preferred)
         if detected is not None:
             return detected
-        return synth._auto_language_preferred(candidates, synth.voice)
-    return candidates[0]
+        return preferred
+    return candidates[0] if candidates else None
 
 
 def _auto_profile_variant_for_language(synth: Any, language: str | None) -> str | None:
@@ -1021,6 +1029,28 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any,
             continue
         if autoLanguageEnabled and isinstance(item, str) and item:
             try:
+                candidates = synth._auto_language_candidates()
+                preferred = synth._auto_language_preferred(candidates, synth.voice) if candidates else None
+            except Exception:
+                candidates = []
+                preferred = None
+
+            if candidates and preferred and len(candidates) > 1:
+                try:
+                    segments = language_profiles.segment_mixed_text(item, candidates, preferred)
+                except Exception:
+                    log.debug("Could not segment mixed text for Google TTS auto-language.", exc_info=True)
+                    segments = [(item, preferred)]
+
+                for segText, segLang in segments:
+                    targetLang = segLang or baseLanguage or preferred
+                    if targetLang is not None and not _same_language(currentAutoLanguage, targetLang):
+                        filtered.append(_google_lang_change_command(targetLang))
+                        currentAutoLanguage = targetLang
+                    filtered.append(segText)
+                continue
+
+            try:
                 targetLanguage = _auto_detect_language_for_speech_filter(synth, item)
             except Exception:
                 log.debug("Could not auto-detect Google TTS speech language.", exc_info=True)
@@ -1030,6 +1060,8 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any,
             if targetLanguage is not None and not _same_language(currentAutoLanguage, targetLanguage):
                 filtered.append(_google_lang_change_command(targetLanguage))
                 currentAutoLanguage = targetLanguage
+            filtered.append(language_profiles.normalize_mathematical_alphanumeric(item))
+            continue
         filtered.append(item)
     return filtered
 
@@ -1099,6 +1131,14 @@ def _patch_auto_language_voice_dictionary() -> None:
             synth = synthDriverHandler.getSynth()
             if getattr(synth, "name", "") != SYNTH_NAME or not synth._auto_language_detection_enabled():
                 return call_original_with_locale()
+            normalizedText = language_profiles.normalize_mathematical_alphanumeric(text)
+            if normalizedText != text:
+                text = normalizedText
+                if "text" in kwargs:
+                    kwargs = dict(kwargs, text=normalizedText)
+                elif len(argsList) > 1:
+                    argsList[1] = normalizedText
+                    args = tuple(argsList)
             targetLanguage = _auto_language_for_process_text(synth, locale, text)
             effectiveLocale = _nvda_locale_for_language(targetLanguage) or _nvda_locale_for_language(locale) or locale
             targetVariant = _auto_profile_variant_for_language(synth, targetLanguage or effectiveLocale)

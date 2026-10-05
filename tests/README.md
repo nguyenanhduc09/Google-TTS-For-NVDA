@@ -1,6 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes an exhaustive standalone test suite comprising **705 unit tests** in **134 test classes** across **21 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
+Google TTS For NVDA includes an exhaustive standalone test suite comprising **711 unit tests** in **134 test classes** across **17 test modules**, supplemented by shared test support infrastructure, a multilingual test corpus, static NVDA API contract verification, and an interactive manual release checklist.
 
 All unit tests run **without importing NVDA** or requiring an active NVDA installation. Modules that import cleanly without NVDA (`speech_processing.py`, `audio_math.py`, `catalog.py`, `bridge.py`, `voice_store.py`, `language_detector.py`, `language_profiles.py`, `language_utils.py`, `unicode_data.py`, `watcher.py`) are loaded directly in isolation via `test_support.load_driver_module()`, so tests exercise the production implementation rather than mock AST copies. Modules that import NVDA at module level are handled explicitly: `updater.py` is loaded through a dedicated `importlib` loader in `test_updater_security.py` that avoids the NVDA import chain, and `test_standby_concurrency.py` reimplements the `_StandbyRuntimeManager` state fields in a local minimal manager because `standby.py` requires NVDA's `config` and `globalVars`.
 
@@ -36,28 +36,24 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | Test Module | Tests | Classes | Primary Focus Area |
 | :--- | :---: | :---: | :--- |
 | [`test_audio_math.py`](#test_audio_mathpy) | 6 | 1 | Non-linear rate mapping, pitch conversion, SeaNet rate capping, WSOLA parameters |
-| [`test_bridge_concurrency.py`](#test_bridge_concurrencypy) | 13 | 4 | Connection lock scope, safe engine reference capture, busy lock, cancellation |
+| [`test_bridge_concurrency.py`](#test_bridge_concurrencypy) | 17 | 5 | Connection lock scope, safe engine reference capture, busy lock, cancellation, browser speech failure recovery & recycling |
 | [`test_bridge_helpers.py`](#test_bridge_helperspy) | 58 | 21 | Path traversal prevention, browser runtime normalization/availability, fallback order, profile-in-use exit codes, CDP error classification, process tree priority elevation & EcoQoS disablement, hidden startup flags, standard handle isolation |
 | [`test_build_i18n.py`](#test_build_i18npy) | 35 | 2 | POT/PO translation updating, check/build integration, manifest version sync, obsolete entry purging, documentation builds |
 | [`test_build_i18n_helpers.py`](#test_build_i18n_helperspy) | 210 | 25 | PO parsing/compilation, placeholder and HTML tag verification, Markdown/HTML bidirectional conversion, documentation check/rebuild, RTL handling, table alignments |
 | [`test_dependency_isolation.py`](#test_dependency_isolationpy) | 9 | 1 | Vendored WebSocket isolation, relative import compliance, driver asset and library path anchoring, bundled engine file declaration |
-| [`test_generate_unicode_data_helpers.py`](#test_generate_unicode_data_helperspy) | 36 | 10 | UCD record parsing, script alias resolution, range merging, code generation helpers, fail-closed engine version policy |
 | [`test_generate_voices_json_helpers.py`](#test_generate_voices_json_helperspy) | 27 | 7 | Dynamic engine version discovery, catalog version pinning, fail-closed engine mismatch abort |
-| [`test_language_redirect.py`](#test_language_redirectpy) | 26 | 2 | Dialect redirects, root-language fallbacks, CLDR alias resolution, Chinese cross-variant matching |
-| [`test_language_utils.py`](#test_language_utilspy) | 6 | 1 | Language tag normalization, NVDA special locale mappings, language display names |
-| [`test_performance.py`](#test_performancepy) | 17 | 5 | Segment flush thresholds, request coalescing, lead buffer, pause timings, adaptive packet sizing |
-| [`test_runtime_recovery.py`](#test_runtime_recoverypy) | 5 | 1 | Browser speech failure recovery, single retry policy before audio, standby release safety gating |
-| [`test_segmentation_benchmarks.py`](#test_segmentation_benchmarkspy) | 12 | 2 | Multilingual segmentation throughput benchmarks, cache warm-up passes, PCM processing speed |
+| [`test_language_profiles.py`](#test_language_profilespy) | 46 | 4 | Unified language subsystem: Language tag normalization, locale mapping, display names, dialect redirects, matching aliases, Unicode 17.0 / CLDR 48.2 normalization, token classification (currencies, SI units, time), candidate routing, mixed-text segmentation, and UTS #51 emoji preservation |
+| [`test_performance.py`](#test_performancepy) | 26 | 7 | Segment flush thresholds, request coalescing, lead buffer, pause timings, adaptive packet sizing, multilingual segmentation throughput benchmarks, and PCM silence shortener throughput |
 | [`test_segmentation_fuzz.py`](#test_segmentation_fuzzpy) | 13 | 2 | Unicode fuzz testing, sentence split monotonicity, invariant verification across scripts |
 | [`test_speech_processing.py`](#test_speech_processingpy) | 48 | 9 | Three pause modes, noise floor, chunk invariance, text segmentation, cache keys, sentence terminals, abbreviation removal verification, forced cut debug logging, URL and domain boundary splitting |
 | [`test_standby_concurrency.py`](#test_standby_concurrencypy) | 22 | 5 | Generation counter, cancelEvent propagation, bridge claim/release, clean termination |
 | [`test_support.py`](#test_supportpy) | — | — | Shared test infrastructure, isolated module loader, mock bridge/CDP/engine/process helpers |
 | [`test_synth_driver_helpers.py`](#test_synth_driver_helperspy) | 34 | 9 | Rate factor interpolation, break rate clamping, word dictionaries, config compat, NVDA logger formatting, fatal fallback, speech loop resilience, voice setting support |
-| [`test_unicode_data.py`](#test_unicode_datapy) | 10 | 1 | Unicode 17.0 / CLDR 48.2 script ranges, automatic language profile fallback, sentence terminals |
+| [`test_unicode_data.py`](#test_unicode_datapy) | 42 | 10 | Unified Unicode data pipeline: UCD record parsing, script aliases, range merging, normalization table rendering, engine version policy, Unicode 17.0 / CLDR 48.2 script ranges, sentence terminals, and profile script fallbacks |
 | [`test_updater_security.py`](#test_updater_securitypy) | 77 | 15 | SHA-256 validation, size checks, path traversal defense, HTTPS enforcement, manifest parsing, versions |
 | [`test_voice_package_lifecycle.py`](#test_voice_package_lifecyclepy) | 24 | 7 | Catalog loading/sorting, package verification, removal, copying, download guards, full lifecycle, catalog validation |
 | [`test_watcher.py`](#test_watcherpy) | 17 | 4 | Win32 DirectoryChangeWatcher lifecycle, callbacks, edge cases, kernel-level directory watching |
-| **Total** | **705** | **134** | **Exhaustive standalone test suite** |
+| **Total** | **711** | **134** | **Exhaustive standalone test suite** |
 
 ---
 
@@ -85,13 +81,14 @@ Tests pure audio mathematics and speech option calculation helpers in `audio_mat
 - **`AudioMathTests`**: Verifies non-linear rate mapping (0–100 to WASM playback rate), rate boost calculation, pitch conversion (-10 to +10 semitones), SeaNet rate protection detection, and speech option generation for standard versus SeaNet packages at high rates.
 
 ### `test_bridge_concurrency.py`
-*13 tests across 4 classes*
+*17 tests across 5 classes*
 
-Verifies thread safety, synchronization, and race-condition mitigations in `bridge.py`:
+Verifies thread safety, synchronization, race-condition mitigations, and runtime recovery policies in `bridge.py`:
 - **`EnsureConnectionLockScopeTests`**: Verifies that `ensure_connection()` releases the lock between fallback runtime iterations so background worker termination is never blocked, checks `cancelEvent` between fallback iterations, and verifies successful single-attempt connections.
 - **`EngineCaptureUnderLockTests`**: Verifies that `speak()`, `stop_runtime()`, `cancel_current()`, and `preload_voice()` capture local references to `self._engine` under `_connectionLock` before invoking methods, preventing `AttributeError` or stale references if another thread recycles or re-creates the engine.
 - **`RuntimeBusyLockTests`**: Verifies that the `runtime_busy` property reads engine busy state under its own lock, that `cancel_current()` sends a fast stop only while the engine is busy, and that `speak()` keeps the engine busy for the whole request even when no cancel event is supplied.
 - **`EnsureConnectionCancellationTests`**: Verifies that cancelled connection establishment (`CdpCancelled`) preserves the running browser process for immediate reuse without connection refused errors (`WinError 10061`), and ensures serialized concurrent callers successfully acquire the lock.
+- **`RuntimeRecoveryTests`**: Verifies browser-reported speech failure recovery and recycling policies: speech failures before audio emission (`audioStarted=False`) retry once with a fresh runtime, failures after audio has started (`audioStarted=True`) recycle without retry to prevent repeating speech, and only healthy connected runtimes are accepted for standby release.
 
 ### `test_bridge_helpers.py`
 *58 tests across 21 classes*
@@ -182,21 +179,6 @@ Guarantees isolation of bundled libraries and internal modules:
   - Verifies that browser assets (`index.html`, `bridgeHarness.js`, WASM engine) are anchored strictly to add-on directories.
   - Verifies that every file bundled in the selected WASM engine directory is declared in `REQUIRED_ENGINE_FILES`, and that every declared file exists.
 
-### `test_generate_unicode_data_helpers.py`
-*36 tests across 10 classes*
-
-Validates pure code-generation helpers and the engine version policy in `generate_unicode_data.py`:
-- **`VersionSortKeyTests`**: Verifies numeric-aware engine version keys so `20260820.1` sorts after `20260625.1` and `20260820.10` after `20260820.1`.
-- **`NewestBundledEngineDirTests`**: Verifies dynamic discovery of the newest `WasmTtsEngine/<version>` directory, including a version directory whose upstream catalog has not been added yet (so the generator can never silently fall back to an older engine), ignoring non-version directories, returning `None` for a missing tree, and resolving the real repository engine tree.
-- **`EngineVersionAlignmentTests`**: Verifies the alignment messages for matching versions, a newer bundled engine (requires an `ENGINE_VERSION` bump), a newer configured engine (requires an engine bundle), and an unreadable or missing version.
-- **`ConfiguredVoicesJsonTests`**: Verifies that the bundled catalog resolves only when the newest engine matches `catalog.py`, and that mismatches, a missing upstream `voices.json`, and an unreadable `ENGINE_VERSION` all abort with `SystemExit`.
-- **`ParseUcdRecordsTests`**: Parses Unicode Character Database (UCD) property files for individual codepoints and ranges.
-- **`MergeRangesTests`**: Merges overlapping, adjacent, and unsorted codepoint ranges into minimal disjoint intervals.
-- **`ScriptAliasesTests`**: Resolves script aliases (e.g. `sc` property aliases, `Hans`/`Hant` to `Han`).
-- **`FormatRangesTests`**: Formats integer tuples into Python range tuple representations.
-- **`FormatCodepointsTests`**: Formats sorted codepoint collections.
-- **`RenderModuleTests`**: Verifies output generation of `unicode_data.py` including version header metadata.
-
 ### `test_generate_voices_json_helpers.py`
 *27 tests across 7 classes*
 
@@ -209,10 +191,17 @@ Covers the fail-closed engine version policy used by the online catalog generato
 - **`SelectEngineVoicesJsonTests`**: Verifies that the generator aborts with `SystemExit` when no bundled engine catalog exists, when the newest bundled engine differs from `catalog.py` `ENGINE_VERSION` in either direction, when the newest engine has no `voices.json`, and when the version cannot be read; that matching versions still select the repository catalog; and that an explicit `--voices-json` target skips the verification with a warning.
 - **`ParseArgsTests`**: Verifies the `--voices-json` command-line override and its default of no explicit catalog.
 
-### `test_language_redirect.py`
-*26 tests across 2 classes*
+### `test_language_profiles.py`
+*46 tests across 4 classes*
 
-Tests dialect redirection and language matching in `language_detector.py`:
+Comprehensive tests for the unified language subsystem: tag normalization, locale mappings, dialect redirects, matching aliases, mathematical/enclosed normalization, token classification, candidate routing, mixed-text segmentation, and UTS #51 emoji preservation:
+- **`LanguageUtilsTests`**:
+  - `test_normalize_language`: Normalizes language tags with subtags (e.g. `en_US` $\rightarrow$ `en-us`).
+  - `test_normalize_language_code`: Normalizes language codes and removes invalid characters (`vi-VN`, `en-US`).
+  - `test_get_nvda_locale_special_cases`: Tests special-case mappings for NVDA locales (Traditional Chinese `zh_HK`/`zh_TW`, Arabic variants, Tagalog `fil-PH` $\rightarrow$ `tl`).
+  - `test_get_nvda_locale_prefixes`: Tests prefix-based locale resolution (`cmn-Hans-CN` $\rightarrow$ `zh_CN`).
+  - `test_resolve_nvda_locale_fallback_to_en`: Tests fallback to `en` when locale is empty or unrecognized.
+  - `test_get_language_display_name_with_custom_dict`: Tests localized display name resolution with custom dictionary overrides.
 - **`LanguageRedirectTests`**:
   - Explicit dialect redirects: French Canadian (`fr-CA` $\rightarrow$ `fr-FR`), Portuguese European (`pt-PT` $\rightarrow$ `pt-BR`), Spanish Spain (`es-ES` $\rightarrow$ `es-MX`), Austrian/Swiss German (`de-AT`/`de-CH` $\rightarrow$ `de-DE`), British/Australian English (`en-GB`/`en-AU` $\rightarrow$ `en-US`), Swiss Italian (`it-CH` $\rightarrow$ `it-IT`).
   - Fallback priorities: explicit dialect redirects take precedence over root-language fallback; root-language fallback applies when no explicit redirect exists.
@@ -222,55 +211,32 @@ Tests dialect redirection and language matching in `language_detector.py`:
   - CLDR alias matching: Filipino/Tagalog (`fil` $\leftrightarrow$ `tl`), Hebrew (`he` $\leftrightarrow$ `iw`).
   - Chinese script family matching: `zh-CN`, `zh-TW`, `zh-HK`, `zh-Hans`, `zh-Hant`.
   - Non-matching family rejection and underscore normalization.
-
-### `test_language_utils.py`
-*6 tests across 1 class*
-
-Tests shared language and locale normalization helpers in `language_utils.py`:
-- **`LanguageUtilsTests`**:
-  - `test_normalize_language`: Normalizes language tags with subtags (e.g. `en_US` $\rightarrow$ `en-US`).
-  - `test_normalize_language_code`: Normalizes language codes and removes invalid characters.
-  - `test_get_nvda_locale_special_cases`: Tests special-case mappings for NVDA locales (Traditional Chinese `zh_HK`/`zh_TW`, Arabic variants, Tagalog).
-  - `test_get_nvda_locale_prefixes`: Tests prefix-based locale resolution.
-  - `test_resolve_nvda_locale_fallback_to_en`: Tests fallback to `en` when locale is unrecognized.
-  - `test_get_language_display_name_with_custom_dict`: Tests localized display name resolution with custom dictionary overrides.
+- **`LanguageProfilesTests`**:
+  - `test_normalize_mathematical_alphanumerics_and_letterlike_symbols`: Normalizes mathematical bold, italic, sans-serif, double-struck, Greek/Arabic/Hebrew math, letterlike constants (Kelvin, Euler e, blackboard bold), and fullwidth ASCII characters into plain readable characters.
+  - `test_normalize_enclosed_small_capitals_and_compat_forms`: Normalizes phonetic small capitals, Latin small capitals, parenthesized letters, negative circled/squared letters, CLDR fallbacks, vulgar fractions, superscripts/subscripts, roman numerals, ligatures, halfwidth katakana, and non-breaking spaces.
+  - `test_token_classifiers_numbers_currencies_units_and_symbols`: Classifies numbers, all 64 official UCD 17.0 Category Sc currency symbols, CLDR active ISO 4217 currencies, international SI measurement units, international time formats (24h, 12h AM/PM, colloquial), math operators and dimensions (`1920x1080`, `5 × 10`, `10 ± 2`), as well as emojis and symbols.
+  - `test_detect_language_numbers_and_symbols_use_preferred_language`: Ensures pure numbers, currencies, and symbols strictly route to `preferredLanguage`.
+  - `test_detect_language_with_language_hint_recovery`: Recovers short phrases mispredicted by CLD2 outside the candidate list into user candidate language space.
+  - `test_cld2_to_candidate_language_matching`: Verifies symmetric mapping between CLD2 language codes/aliases and candidate voices.
+  - `test_segment_mixed_text_preserves_full_content`: Asserts that mixed text sub-sentence segmentation preserves the exact normalized string invariant.
+  - `test_segment_mixed_text_single_candidate`: Verifies that a single candidate language returns a single normalized segment without unnecessary splitting.
+  - `test_segment_mixed_text_respects_user_candidate_languages_order_without_bias`: Routes non-Latin script blocks (Cyrillic, Devanagari, Han, etc.) according to user-configured candidate language priority without hardcoded bias.
+  - `test_segment_mixed_text_numbers_currencies_units_and_time_clustering`: Ensures numbers clustered with currencies, units, time, dimensions, and ranges stay intact and route to `preferredLanguage`.
+  - `test_intact_emoji_sequences_and_keycaps_preservation`: Verifies that UTS #51 emojis (keycaps `1️⃣`, `2️⃣`, regional indicator flags, Fitzpatrick skin tones, and ZWJ sequences) remain completely intact across sub-sentence segmentation.
+  - `test_speech_sanitize_table_inherits_unicode_normalization_table`: Verifies that `_SPEECH_SANITIZE_TABLE` strictly inherits whitespace mapping and PUA scrubbing rules from the official Unicode `NORMALIZATION_TABLE` with 1:1 length preservation.
+  - `test_unicode_data_structural_integration`: Verifies that `NO_SPACE_SCRIPT_PROFILES` reuses official `SCRIPT_RANGES` and `_SCRIPT_TO_CANDIDATE_ROOTS` is dynamically inverted from `SUPPORTED_LANGUAGE_SCRIPTS`.
+  - `test_segmenter_preserves_emoji_zwj_and_modifiers`: Verifies that `TextSegmenter._extend_cut_over_combining_marks` prevents latency cut points from slicing through ZWJ joins and combining marks in emoji sequences.
 
 ### `test_performance.py`
-*17 tests across 5 classes*
+*26 tests across 7 classes*
 
-Verifies performance characteristics, timing constants, and optimization invariants via AST/source inspection and standalone simulations:
+Verifies performance characteristics, timing constants, optimization invariants, and throughput benchmarks for speech processing:
 - **`SegmentFlushThresholdTests`**: Verifies that `_FLUSH_GROUP_CHARS_THRESHOLD` (120 characters) controls intermediate flushes for `PAUSE_MODE_SHORTEN_ALL`, ensuring short texts remain in a single flush while long texts produce bounded multi-segment groups.
 - **`SpeechCoalescingTests`**: Verifies that a pre-set `cancelEvent` is detected immediately at the top of `_speak_text()`, completely bypassing CDP round-trips for already-cancelled utterances.
 - **`PcmLeadBufferPerformanceTests`**: Verifies `LIVE_MULTI_SEGMENT_LEAD_MS` is set to 80ms, ensuring lead buffering absorbs packet jitter without perceptible startup latency, and that `finish()` flushes remaining buffered audio cleanly.
 - **`PauseModePerformanceTests`**: Verifies optimized timing constants: sentence break pause (45ms), end-of-utterance pause (40ms), and preload resume delay (0.15s).
 - **`AdaptiveAudioPacketSizingTests`**: Verifies laddered packet sizing constants in `bridgeHarness.js` (first 120 samples / 5ms, early 1200 samples / 50ms, steady 2400 samples / 100ms, long-stream 3600 samples / 150ms) to ensure instant initial audio response while minimizing ongoing CDP serialization overhead.
-
-### `test_runtime_recovery.py`
-*5 tests across 1 class*
-
-Tests browser-reported speech failure recovery and recycling policies:
-- **`RuntimeRecoveryTests`**:
-  - `test_browser_speech_errors_require_runtime_recycle`: Verifies that browser-side speech errors set the urgent recycle flag.
-  - `test_no_audio_browser_error_retries_once_after_recycle`: Verifies that a speech failure occurring before any audio is emitted (`audioStarted=False`) retries exactly once with a fresh runtime.
-  - `test_partial_audio_browser_error_recycles_without_retry`: Verifies that a speech failure occurring after audio has already started emitting (`audioStarted=True`) recycles the runtime but **never** retries, preventing repeated or stuttered speech.
-  - `test_browser_error_is_never_retried_more_than_once`: Ensures speech requests are never retried more than once after recycling.
-  - `test_only_healthy_connected_runtime_is_safe_for_standby`: Ensures only a healthy, connected runtime with an idle engine and no pending recycle flag is accepted for standby release.
-
-### `test_segmentation_benchmarks.py`
-*12 tests across 2 classes*
-
-Performance benchmark tests for text segmentation and audio processing throughput:
-- **`SegmentationPerformanceTests`**: Runs isolated cache warm-up passes to eliminate cold-start measurement noise, then benchmarks sentence splitting and latency segmentation across:
-  - Latin text (1,000 and 5,000 characters)
-  - CJK text (1,000 characters)
-  - Thai text (1,000 characters)
-  - Arabic text (1,000 characters)
-  - Hindi / Devanagari text (1,000 characters)
-  - Mixed-script text (2,000 characters)
-  - Emoji-heavy text (1,000 characters)
-  - URL-heavy text (1,000 characters)
-  - Fast-first segment throughput (1,000 characters)
-  - Linear scaling validation across input lengths.
+- **`SegmentationPerformanceTests`**: Runs isolated cache warm-up passes to eliminate cold-start measurement noise, then benchmarks sentence splitting and latency segmentation across Latin (1,000 and 5,000 characters), CJK (1,000 characters), Thai (1,000 characters), Arabic (1,000 characters), Hindi / Devanagari (1,000 characters), Mixed-script (2,000 characters), Emoji-heavy (1,000 characters), URL-heavy (1,000 characters), Fast-first segment throughput (1,000 characters), and linear scaling validation across input lengths.
 - **`PcmProcessingThroughputTests`**: Verifies that the PCM silence shortener processes audio substantially faster than real-time playback speed.
 
 ### `test_segmentation_fuzz.py`
@@ -338,11 +304,11 @@ Tests pure helper functions extracted from the SynthDriver (`__init__.py`):
   - `test_nvda_load_settings_initializes_valid_voice_id`: Simulates NVDA's `SynthDriver.loadSettings()` voice initialization behavior, verifying that when `isSupported("voice")` is `True`, `changeVoice` receives a valid voice ID instead of `None`.
 
 ### `test_unicode_data.py`
-*10 tests across 1 class*
+*42 tests across 10 classes*
 
-Verifies generated Unicode script metadata and sentence terminal definitions:
+Comprehensive tests for the Unicode data pipeline, validating pure code-generation helpers, the fail-closed engine catalog verification in `generate_unicode_data.py`, and runtime script/normalization tables in `unicode_data.py`:
 - **`UnicodeDataTests`**:
-  - Verifies that generated UCD (17.0) and CLDR (48.2) versions are pinned.
+  - Verifies that generated UCD (`17.0.0`) and CLDR (`48.2`) versions are pinned.
   - Verifies that every language root in the bundled `voices.json` has official script data.
   - Verifies that language script ranges are composed strictly from their mapped scripts.
   - Verifies that script ranges are sorted, non-overlapping, and minimal.
@@ -352,6 +318,19 @@ Verifies generated Unicode script metadata and sentence terminal definitions:
   - Verifies that language profile fallback rejects missing or non-matching scripts.
   - Verifies that the official Unicode sentence-terminal property table is complete.
   - Verifies that sentence-terminal tailoring is minimal and disjoint from official tables.
+  - Verifies that `NORMALIZATION_TABLE` is present ($\ge 3900$ entries) and identical to `_MATH_ALPHANUMERIC_TRANSLATION_TABLE`.
+  - Verifies that normalization covers spaces, zero-width chars, and bidi/format controls.
+  - Verifies that normalization covers small capitals, circled/squared letters, and CLDR fallbacks.
+  - Verifies that normalization preserves standard precomposed accented letters.
+- **`ConfiguredVoicesJsonTests`**: Verifies that the bundled catalog resolves only when the newest engine matches `catalog.py`, and that mismatches or unreadable versions abort with `SystemExit`.
+- **`ParseUcdRecordsTests`**: Parses Unicode Character Database (UCD) property files for individual codepoints and ranges.
+- **`MergeRangesTests`**: Merges overlapping, adjacent, and unsorted codepoint ranges into minimal disjoint intervals.
+- **`ScriptAliasesTests`**: Resolves script aliases (e.g. `sc` property aliases, `Hans`/`Hant` to `Han`).
+- **`FormatRangesTests`**: Formats integer tuples into Python range tuple representations.
+- **`FormatCodepointsTests`**: Formats sorted codepoint collections.
+- **`FormatNormalizationTableTests`**: Formats the character normalization dictionary into cleanly indented Python dict syntax.
+- **`BuildNormalizationTableTests`**: Tests building character normalization tables from mock UCD and CLDR supplemental character fallback sources.
+- **`RenderModuleTests`**: Verifies source code generation of `unicode_data.py` including version headers and table formatting.
 
 ### `test_updater_security.py`
 *77 tests across 15 classes*

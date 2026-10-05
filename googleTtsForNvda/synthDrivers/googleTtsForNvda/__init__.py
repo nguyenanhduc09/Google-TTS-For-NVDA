@@ -56,6 +56,9 @@ from .language_profiles import (
 from .language_profiles import (
     language_token_signal as _language_token_signal,
 )
+from .language_profiles import (
+    normalize_mathematical_alphanumeric as _normalize_mathematical_alphanumeric,
+)
 from .speech_processing import (
     DEFAULT_TEXT_SEGMENTER as _TEXT_SEGMENTER,
 )
@@ -870,10 +873,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             elif itemType is IndexCommand:
                 pendingIndexes.append((item.index, textCharCount))
             elif itemType is LangChangeCommand:
+                if not self._auto_language_detection_enabled():
+                    continue
                 googleLanguage = getattr(item, _GOOGLE_TTS_LANG_CHANGE_ATTR, _MISSING_GOOGLE_TTS_LANGUAGE)
                 if googleLanguage is _MISSING_GOOGLE_TTS_LANGUAGE:
-                    if not self._auto_language_detection_enabled():
-                        continue
                     googleLanguage = getattr(item, "lang", None)
                 yield from flush_text()
                 if cancelEvent.is_set():
@@ -1077,8 +1080,11 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         # the CDP round-trip, skip it entirely to avoid wasting browser resources.
         if cancelEvent.is_set():
             return
+        text = _normalize_mathematical_alphanumeric(text)
         originalText = text
-        originalHiddenSegments = list(hiddenSegments or [])
+        originalHiddenSegments = (
+            [_normalize_mathematical_alphanumeric(seg) for seg in hiddenSegments] if hiddenSegments else []
+        )
         indexes = indexes or []
         leadingIndexes = [index for index, charOffset in indexes if charOffset <= 0]
         remainingIndexes = [(index, charOffset) for index, charOffset in indexes if charOffset > 0]
@@ -1550,8 +1556,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         pitch: int,
         volume: int,
     ) -> dict[str, Any]:
+        text = _normalize_mathematical_alphanumeric(text)
         # Unmarked commands can be NVDA's normalized copies of Google profile commands.
-        # External NVDA/app language changes are stripped earlier by the speech filter.
+        # External NVDA/app language changes are ignored by _speech_chunks when disabled.
         if not self._auto_language_detection_enabled():
             return self._speech_profile(activeVoice, rate, rateBoost, pitch, volume)
         candidateLanguages = self._auto_language_candidates()
@@ -1591,9 +1598,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 pitch,
                 volume,
             )
-        detectedLanguage = self._detect_auto_language(text, candidateLanguages)
+        preferredLanguage = self._auto_language_preferred(candidateLanguages, activeVoice)
+        detectedLanguage = self._detect_auto_language(text, candidateLanguages, preferredLanguage)
         if detectedLanguage is None:
-            detectedLanguage = self._auto_language_preferred(candidateLanguages, activeVoice)
+            detectedLanguage = preferredLanguage
         return self._auto_language_profile(
             detectedLanguage,
             activeVoice,
@@ -1769,8 +1777,17 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 return candidate
         return ""
 
-    def _detect_auto_language(self, text: str, candidateLanguages: list[str]) -> str | None:
-        cldLanguage = language_detector.detect_language(text, candidateLanguages)
+    def _detect_auto_language(
+        self,
+        text: str,
+        candidateLanguages: list[str],
+        preferredLanguage: str | None = None,
+    ) -> str | None:
+        cldLanguage = language_detector.detect_language(
+            text,
+            candidateLanguages,
+            preferredLanguage=preferredLanguage,
+        )
         if cldLanguage is not None:
             return cldLanguage
         candidateByRoot: dict[str, str] = {}

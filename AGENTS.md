@@ -25,11 +25,11 @@ Technical code map indexing the codebase architecture, modules, classes, functio
       - **cld2.dll** — Generic fallback dynamic library
       - **LICENSE.txt** — CLD2 Apache-2.0 license copy
       - **README.txt** — Vendoring documentation and build instructions
-    - **language_detector.py** — CLD2-backed language detection with dynamic DLL loading, aliases, and redirects
-    - **language_profiles.py** — Pure Unicode-script fallback language detection and token script analysis
+    - **language_detector.py** — CLD2-backed language detection, candidate priors, number/symbol routing, Unicode script signals
+    - **language_profiles.py** — Mathematical alphanumeric normalization, token classification, number clustering, mixed-text segmentation, UTS #51 emoji preservation
     - **language_utils.py** — Language normalization, NVDA special locale mappings, localized display names
-    - **speech_processing.py** — `TextSegmenter`, Unicode sentence boundary detection, `PcmSilenceShortener`, `PcmLeadBuffer`
-    - **unicode_data.py** — Pre-generated Unicode 17.0 / CLDR 48.2 script ranges and sentence terminals
+    - **speech_processing.py** — `TextSegmenter`, Unicode sentence boundary detection, `PcmSilenceShortener`, `PcmLeadBuffer`, combining mark & emoji sequence cut protection
+    - **unicode_data.py** — Pre-generated Unicode 17.0 / CLDR 48.2 script ranges, sentence terminals, and normalization table
     - **voice_store.py** — Voice package download, copy, verify, remove, persistent verification cache
     - **web/** — Headless Chromium bridge environment
       - **index.html** — Shell document loaded in headless Chromium browser runtime
@@ -62,17 +62,12 @@ Technical code map indexing the codebase architecture, modules, classes, functio
     - **<locale>/readme.html** — Localized user documentation
   - **locale/** — Localized interface catalogs
     - **<locale>/** — Interface catalogs (`LC_MESSAGES/nvda.po`, `nvda.mo`, `manifest.ini`, `languageSort.json`)
-- **tests/** — Automated test suite and validation runners
-  - **README.md** — Unit test index, architecture, benchmark procedures, and running instructions
-  - **NVDA_CHROMIUM_MANUAL_CHECKLIST.md** — Manual test checklist for interactive NVDA runtime validation
-  - **check_nvda_api_contracts.py** — Static AST contract runner checking NVDA API compatibility across releases
-  - **segmentation_corpus.json** — Test corpus for multi-language sentence boundary segmentation validation
-  - **test_*.py** — Standalone unit test suites covering all components
+- **tests/** — Automated test suite, benchmark suite, and validation runners (see [tests/README.md](file:///c:/Users/hungv/Documents/Codex/Google-TTS-For-NVDA/tests/README.md) for full test index, architecture, and running instructions)
 - **build.bat** — Windows batch build script (clean, lint, compile gettext/manifests/docs, package `.nvda-addon`)
 - **build.sh** — Linux/WSL POSIX build script mirroring `build.bat`
 - **build_i18n.py** — Localization CLI tool (POT/PO extraction, merge, syntax validation, Markdown/HTML doc generation)
 - **generate_voices_json.py** — Upstream voice catalog scraper and generator from ChromeOS/Google textproto
-- **generate_unicode_data.py** — Unicode 17.0 and CLDR 48.2 script ranges and sentence terminals table generator
+- **generate_unicode_data.py** — Unicode 17.0 and CLDR 48.2 script ranges, sentence terminals, and normalization table generator
 - **make_update_manifest.py** — Release update manifest generator creating `stable.json` for internal updater
 - **UPDATER_RELEASE_GUIDE.md** — Release instructions for versioning, hotfix increments, and manifest generation
 - **CONTRIBUTING.md** — Contribution, PR guidelines, build instructions, and developer workflows
@@ -141,10 +136,8 @@ Technical code map indexing the codebase architecture, modules, classes, functio
   - `googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py`: NVDA Settings dialog panel under Voice / Google TTS category (`GoogleTtsSettingsPanel.makeSettings()`, `GoogleTtsSettingsPanel.onSave()`).
   - `googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py`: Integrates into NVDA Tools menu and registers input gestures for Voice Manager and Settings dialogs (`GlobalPlugin.terminate()`, `GlobalPlugin.on_open_voice_manager()`, `GlobalPlugin.script_openVoiceManager()`, `GlobalPlugin.script_openSettings()`, `GlobalPlugin.__gestures`).
 
-- **NVDA Static API Compatibility**:
-  - `tests/check_nvda_api_contracts.py`: AST contract runner verifying compatibility with NVDA core APIs across releases without requiring a running NVDA instance (`discover_trees()`, `check_tree()`, `SourceTree`, `CategoryResult`).
-  - `tests/NVDA_CHROMIUM_MANUAL_CHECKLIST.md`: Interactive manual testing checklist for add-on releases.
-  - Detailed test suite documentation and runner commands are indexed in `tests/README.md`.
+- **Static API Contracts & Testing**:
+  - AST contract validation across NVDA releases, interactive manual release checklist, and unit test documentation are indexed in [tests/README.md](file:///c:/Users/hungv/Documents/Codex/Google-TTS-For-NVDA/tests/README.md).
 
 ---
 
@@ -231,12 +224,13 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 
 - **Latency Text Segmentation (`TextSegmenter`)**:
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/speech_processing.py`: Progressive segmentation splitting text into latency-optimized chunks so audio synthesis starts immediately while subsequent chunks are processed in the background:
-    - Text sanitization: `sanitize_speech_text()`, `_SPEECH_SANITIZE_TABLE` removes non-printable and disruptive characters.
+    - Text sanitization: `sanitize_speech_text()`, `_SPEECH_SANITIZE_TABLE` inherits whitespace mapping directly from the official Unicode `NORMALIZATION_TABLE` in `unicode_data.py`, converting all non-standard Unicode whitespace variants and BMP PUA codepoints to standard ASCII spaces with 1:1 character index preservation.
     - Segmentation logic: `split_text_for_latency()`, `iter_text_segments_for_latency()`, `iter_indexed_text_segments()`, `spoken_bridge_segments()`.
+    - Combining marks & emoji preservation: `_extend_cut_over_combining_marks()` extends segment cuts over Unicode combining marks (`category M*`), Zero-Width Joiners (`ZWJ` `0x200D`), variation selectors (`0xFE0E`, `0xFE0F`), keycap enclosing marks (`0x20E3`), skin tone modifiers (`0x1F3FB`-`0x1F3FF`), and regional indicator flag pairs (`0x1F1E6`-`0x1F1FF`) to guarantee emoji and grapheme cluster integrity across chunk splits.
     - Fast first segment: cuts the initial phrase quickly (`FAST_FIRST_SEGMENT_MIN_CHARS`, `FAST_FIRST_SEGMENT_MAX_CHARS`, `FAST_FIRST_SEGMENT_TRIGGER_CHARS`, `FAST_FIRST_PUNCTUATION_FREE_TRIGGER_CHARS`) to achieve sub-100ms time-to-speech.
     - Soft phrase cuts: splits at clause boundaries such as commas, semicolons, colons, dashes (`SOFT_PHRASE_SEGMENT_MIN_CHARS`, `SOFT_PHRASE_SEGMENT_MAX_CHARS`, `_find_soft_phrase_cut()`, `_is_contextual_soft_phrase_cut()`).
     - Sentence boundaries: splits at full stops and sentence terminators (`find_sentence_splits()`, `is_sentence_terminator_character()`, `COMMON_ABBREVIATIONS`).
-    - Script boundary handling: handles scripts without space separators such as CJK (`_find_no_space_script_cut()`, `_is_no_space_script_character()`, `NO_SPACE_SCRIPT_SIGNAL_MIN_CHARS`, `NO_SPACE_SCRIPT_SIGNAL_MIN_RATIO`).
+    - Script boundary handling: handles scripts without space separators such as CJK, Thai, Khmer via `NO_SPACE_SCRIPT_PROFILES` reusing official `SCRIPT_RANGES` from `unicode_data.py` (`_find_no_space_script_cut()`, `_is_no_space_script_character()`, `NO_SPACE_SCRIPT_SIGNAL_MIN_CHARS`, `NO_SPACE_SCRIPT_SIGNAL_MIN_RATIO`).
     - Forced latency limits: prevents runaway long utterances without natural breaks (`_iter_forced_latency_segments()`, `FORCED_SEGMENT_MIN_CHARS`, `FORCED_SEGMENT_HARD_MAX_CHARS`).
     - Token analysis: `looks_like_url_token()`, `should_pause_after_segment()`, `_period_is_numeric_separator()`.
   - `googleTtsForNvda/synthDrivers/googleTtsForNvda/__init__.py` segmentation integration: `_iter_speech_chunks()`, `_split_text_for_latency()`, `_sanitize_speech_text()`, `_spoken_bridge_segments()`, `_should_pause_after_segment()`.
@@ -322,21 +316,26 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 
 - **CLD2 Language Detector (`language_detector.py`)**:
   - Architecture-specific dynamic loading: `_Cld2Detector._load_library()` loads `cld2_x64.dll` (64-bit NVDA) or `cld2_x86.dll` (32-bit NVDA) from vendored `cld2/` folder.
-  - Language detection: `detect_language()` runs Compact Language Detector 2 on text, returning `DetectionResult` with primary language and confidence percentage (`_MIN_RELIABLE_PERCENT`).
+  - Language detection: `detect_language(text, candidateLanguages, preferredLanguage=None)` runs Compact Language Detector 2 on text, returning `DetectionResult` with primary language and confidence percentage (`_MIN_RELIABLE_PERCENT`). Normalizes mathematical alphanumerics, routes standalone numbers (`is_number_token()`) and symbols/emojis (`is_symbol_or_emoji_token()`) strictly to `preferredLanguage`, performs candidate prior recovery for mispredicted short words, falls back to official Unicode script ranges (`language_script_signal()`), and analyzes Latin diacritics (`has_vietnamese_diacritics()`).
   - Aliases & redirects: `_LANGUAGE_ALIASES`, `_CHINESE_LANGUAGE_ROOTS`, and `_LANGUAGE_REDIRECTS` normalize language codes (e.g., mapping Cantonese/Taiwanese variants or dialect redirects).
-  - Language matching: `language_matches()`, `language_match_keys()`, `_language_family()`, `_language_root()`.
+  - Language matching: `language_matches()`, `language_match_keys()`, `_language_family()`, `_language_root()`, `_candidate_for_language()`.
 
-- **Pure Unicode-Script Fallback (`language_profiles.py`)**:
-  - Script ranges analysis: `script_ranges_for_language_root()`, `token_has_character_in_ranges()`, `language_script_signal()` categorize text tokens by Unicode scripts (Latin, Cyrillic, Greek, Arabic, Hebrew, Devanagari, Thai, Han, Hangul, Hiragana/Katakana) when text is too short for CLD2.
+- **Unified Language Profiles & Mixed-Text Segmentation (`language_profiles.py`)**:
+  - Mathematical & enclosed normalization: `normalize_mathematical_alphanumeric(text: str) -> str` normalizes Unicode 17.0 mathematical bold, italic, sans-serif, fraktur, double-struck alphanumerics, letterlike constants, phonetic/enclosed small capitals, parenthesized letters, negative circled/squared letters, and CLDR supplemental character substitutes via pre-generated `NORMALIZATION_TABLE`.
+  - Token classification & number clustering: `is_number_token()`, `is_symbol_or_emoji_token()`, `classify_token()` classifies numbers, all 64 official UCD Category Sc currency symbols, active ISO 4217 currencies, international SI units, time formats (24h, 12h AM/PM, colloquial), dimensions, and math operators, ensuring numbers clustered with currencies, units, and time stay intact and route to `preferredLanguage`.
+  - Mixed-text segmentation: `segment_mixed_text(text, candidateLanguages, preferredLanguage)` segments sentences with mixed scripts into language-tagged chunks, routing non-Latin scripts according to user candidate language priority without hardcoded bias via dynamic `_SCRIPT_TO_CANDIDATE_ROOTS`, resolving Latin text between candidates, attaching neutral punctuation, coalescing adjacent chunks, and preserving intact UTS #51 emoji sequences (keycaps, flags, skin tone modifiers, ZWJ sequences).
+  - Script analysis: `SUPPORTED_LANGUAGE_SCRIPTS`, `SCRIPT_RANGES`, `_SCRIPT_TO_CANDIDATE_ROOTS` imported from `unicode_data.py`; `script_ranges_for_language_root()`, `token_has_character_in_ranges()`, `language_script_signal()`, `has_vietnamese_diacritics()`.
 
 - **Synth-Side Language Selection (`synthDrivers/googleTtsForNvda/__init__.py`)**:
   - Auto-language resolution: `_detect_auto_language()`, `_auto_detect_profile_for_text()`, `_auto_language_candidates()`, `_auto_language_preferred()`, `_language_token_signal()`.
+  - Mathematical alphanumeric normalization: normalized in `_speak_text()` and `_speech_options()`.
   - Voice selection per language: `_voice_for_language()`, `_voice_matches_language()`, `_auto_language_profile()`, `_auto_language_profile_for_language()`.
+  - Language change command filtering: `_speech_chunks()` ignores `LangChangeCommand` objects when automatic language detection is disabled.
 
 - **NVDA Speech Filter & Spelling Overlays (`globalPlugins/googleTtsForNvda/__init__.py`)**:
-  - Speech sequence filtering: `_register_auto_language_speech_filter()`, `_filter_auto_language_speech_sequence()` splits NVDA speech sequences by language boundaries.
-  - Per-language voice dictionaries: `_patch_auto_language_voice_dictionary()`, `process_text_with_auto_voice_dictionary()` applies per-language dictionary rules.
-  - Spelling character context: `_auto_profile_character_settings_for_language()`, `get_spelling_speech_with_auto_profile()`, `should_use_spelling_functionality_with_auto_profile()` ensures spelling characters use the correct localized speech rules.
+  - Speech sequence filtering: `_register_auto_language_speech_filter()`, `_filter_auto_language_speech_sequence()`: passes `speechSequence` through untouched when automatic language profiles are disabled so NVDA can handle language reporting and symbol dictionaries according to NVDA preferences; when enabled, invokes `language_profiles.segment_mixed_text()` when multiple candidate languages are configured to split mixed sentences and inject `_google_lang_change_command` at sub-sentence boundaries; normalizes mathematical alphanumerics on strings passed through the filter.
+  - Per-language voice dictionaries: `_patch_auto_language_voice_dictionary()`, `process_text_with_auto_voice_dictionary()` normalizes mathematical alphanumerics and applies per-language dictionary rules.
+  - Spelling character context: `_auto_profile_character_settings_for_language()`, `get_spelling_speech_with_auto_profile()`, `should_use_spelling_functionality_with_auto_profile()` ensures spelling characters use localized speech rules.
 
 - **Language Normalization & Display Names (`language_utils.py`)**:
   - Normalization: `normalize_language()`, `normalize_language_code()`, `normalize_language_key()`.
@@ -413,8 +412,10 @@ Technical code map indexing the codebase architecture, modules, classes, functio
   - Formatting helpers: `get_native_language_name()`, `format_speaker_name()`, `NATIVE_LANGUAGE_NAMES`.
 
 - **Unicode Data Generator (`generate_unicode_data.py`)**:
-  - Parsing UCD & CLDR: fetches and parses Unicode Character Database (UCD) 17.0 and CLDR 48.2 script metadata (`_parse_ucd_records()`, `_supported_language_scripts()`).
-  - Code generation: generates `synthDrivers/googleTtsForNvda/unicode_data.py` containing script ranges (`SCRIPT_RANGES`, `LANGUAGE_SCRIPT_RANGES`) and sentence terminals (`SENTENCE_TERMINAL_CODEPOINTS`).
+  - Parsing UCD & CLDR: fetches and parses Unicode Character Database (UCD) 17.0 (`Scripts.txt`, `PropertyValueAliases.txt`, `PropList.txt`, `UnicodeData.txt`) and CLDR 48.2 (`likelySubtags.xml`, `characters.xml`) via `_parse_ucd_records()`, `_supported_language_scripts()`, `_likely_scripts()`.
+  - Normalization table builder: `_build_normalization_table()` extracts mathematical alphanumerics, enclosed characters, small capitals, squared words, and CLDR supplemental character substitutes into `NORMALIZATION_TABLE`.
+  - Code generation: generates `synthDrivers/googleTtsForNvda/unicode_data.py` containing `UNICODE_VERSION`, `CLDR_VERSION`, `SUPPORTED_LANGUAGE_SCRIPTS`, `SCRIPT_RANGES`, `LANGUAGE_SCRIPT_RANGES`, `SENTENCE_TERMINAL_CODEPOINTS`, and `NORMALIZATION_TABLE`.
+  - Engine version policy: fail-closed validation checking newest bundled engine against `catalog.py:ENGINE_VERSION` (`check_engine_version_alignment()`, `_configured_voices_json()`).
 
 - **Translation & Localization Tool (`build_i18n.py`)**:
   - POT/PO extraction & merge: `_translatable_source_messages()`, `_write_pot()`, `_run_msgmerge()`, `_verify_merged_po()`.
