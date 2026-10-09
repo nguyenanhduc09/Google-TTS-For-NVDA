@@ -14,7 +14,12 @@ from collections.abc import Iterator, Sequence
 from functools import lru_cache
 from typing import Any
 
-from .unicode_data import NORMALIZATION_TABLE, SCRIPT_RANGES, SENTENCE_TERMINAL_CODEPOINTS
+from .unicode_data import (
+    COMBINING_MARK_RANGES,
+    NORMALIZATION_TABLE,
+    SCRIPT_RANGES,
+    SENTENCE_TERMINAL_CODEPOINTS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -66,18 +71,21 @@ FAST_FIRST_PREFERRED_SOFT_CHARS = 55
 FAST_FIRST_PREFERRED_WHITESPACE_CHARS = 68
 
 SOFT_BREAK_CHARS = (
-    ",;:\uff0c\u3001\uff1b\uff1a\u2014\u2013"
+    ",;:\uff0c\u3001\uff1b\uff1a\u2014\u2013\u2015\u2e3a\u2e3b"
     "\u0387"
+    "\u055d\u05c0\u05c3"
     "\u060c\u061b"
-    "\u055d"
-    "\u0f0b\u0f0c"
-    "\u1363\u1364\u1365\u1366"
-    "\u17d6"
-    "\u104a"
-    "\ua9c8"
+    "\u0f0b\u0f0c\u0f0d\u0f0e"
+    "\u104a\u10fb"
+    "\u1361\u1363\u1364\u1365\u1366"
+    "\u17d6\u17d8"
+    "\ua9c7\ua9c8\ua9c9"
+    "\ufe10\ufe11\ufe13\ufe14\ufe50\ufe51\ufe54\ufe55\uff64"
 )
 ASCII_SENTENCE_TERMINATORS = ".!?"
-SENTENCE_TRAILING_CLOSERS = "'\")]}”’」』）》〉»\u2018-\u201f\u3009\u300b\u300d\u300f\u3011\uff09\uff3d\uff5d"
+SENTENCE_TRAILING_CLOSERS = (
+    "'\"”’‘‛“‟)]}»«›‹」』）》〉〕〗〙〛】〞〟｣｠⦆\u3009\u300b\u300d\u300f\u3011\ufd3f\uff09\uff3d\uff5d"
+)
 # UCD Sentence_Terminal deliberately excludes some locale-specific or ambiguous
 # sentence endings. Keep only supported-language/common tailoring here.
 TAILORED_SENTENCE_TERMINATORS = set("\u037e\u0df4\u0e5a\u0e5b\u2026\u22ef")
@@ -97,7 +105,15 @@ UNICODE_INITIAL_PUNCTUATION_NAME_PARTS = (
     "INITIAL QUESTION MARK",
     "INITIAL EXCLAMATION MARK",
 )
-NON_BREAKING_SOFT_PUNCTUATION = set("'\"`´’ʼʻʹʺ_-#@&/\\\u00b7\u05f3\u05f4\u2010\u2011\u2027\u30fb\uff65")
+NON_BREAKING_SOFT_PUNCTUATION = set(
+    "'\"`´’ʼʻʹʺ_-#@&/\\*%"
+    "\u00a7\u00b7\u05be\u05f3\u05f4"
+    "\u0609\u060a\u060d\u066a\u066b\u066c"
+    "\u104c\u104d\u104e\u104f"
+    "\u2010\u2011\u2020\u2021\u2027\u2030\u2031"
+    "\u30fb\ufe5f\ufe60\ufe61\ufe63\ufe68\ufe6a\ufe6b"
+    "\uff02\uff03\uff05\uff06\uff07\uff0a\uff0d\uff0f\uff20\uff3c\uff3f\uff65"
+)
 NON_BREAKING_SOFT_PUNCTUATION_NAME_PARTS = (
     "APOSTROPHE",
     "QUOTATION MARK",
@@ -106,6 +122,8 @@ NON_BREAKING_SOFT_PUNCTUATION_NAME_PARTS = (
     "SOLIDUS",
     "SLASH",
     "MIDDLE DOT",
+    "ABBREVIATION",
+    "MAQAF",
 )
 NO_SPACE_SCRIPT_PROFILES = (
     (
@@ -156,6 +174,9 @@ _FLATTENED_NO_SPACE_RANGES: tuple[tuple[int, int, int], ...] = tuple(
 _FLATTENED_NO_SPACE_STARTS: tuple[int, ...] = tuple(start for start, _end, _limit in _FLATTENED_NO_SPACE_RANGES)
 
 
+_COMBINING_MARK_STARTS: tuple[int, ...] = tuple(start for start, _ in COMBINING_MARK_RANGES)
+
+
 def _find_no_space_range(codepoint: int) -> tuple[int, int, int] | None:
     idx = bisect.bisect_right(_FLATTENED_NO_SPACE_STARTS, codepoint) - 1
     if idx >= 0:
@@ -165,10 +186,27 @@ def _find_no_space_range(codepoint: int) -> tuple[int, int, int] | None:
     return None
 
 
+def _is_combining_mark(codepoint: int) -> bool:
+    if codepoint < 0x0300:
+        return False
+    idx = bisect.bisect_right(_COMBINING_MARK_STARTS, codepoint) - 1
+    if idx >= 0:
+        start, end = COMBINING_MARK_RANGES[idx]
+        if start <= codepoint <= end:
+            return True
+    return unicodedata.category(chr(codepoint)).startswith("M")
+
+
+def _is_word_character(character: str) -> bool:
+    if not character:
+        return False
+    return character.isalnum() or _is_combining_mark(ord(character))
+
+
 COMMON_ABBREVIATIONS: frozenset[str] = frozenset()
 
-# Precomputed translation table for high-speed one-pass string sanitization.
-# Inherits whitespace normalization directly from the official Unicode
+# Precomputed translation table for single-pass string sanitization.
+# Inherits whitespace normalization directly from the Unicode
 # NORMALIZATION_TABLE, mapping all non-standard Unicode whitespace variants and
 # BMP Private Use Area (Co) codepoints to standard ASCII spaces while
 # preserving 1:1 character index alignments.
@@ -504,18 +542,28 @@ def _is_colon_like_character(character: str) -> bool:
 def _is_dash_like_character(character: str) -> bool:
     if len(character) != 1:
         return False
-    return character in "\u2013\u2014" or "DASH" in _unicode_name(character)
+    return character in "\u05be\u2013\u2014\u2015" or "DASH" in _unicode_name(character)
 
 
 @lru_cache(maxsize=1024)
 def _is_sentence_trailing_closer(character: str) -> bool:
     if len(character) != 1:
         return False
-    return (
-        character in SENTENCE_TRAILING_CLOSERS
-        or "\u2018" <= character <= "\u201f"
-        or unicodedata.category(character) in {"Pe", "Pf"}
-    )
+    return character in SENTENCE_TRAILING_CLOSERS or unicodedata.category(character) in {"Pe", "Pf"}
+
+
+def _strip_surrounding_wrappers(token: str, extraChars: str = "") -> str:
+    start = 0
+    end = len(token)
+    while start < end and (
+        token[start] in extraChars or unicodedata.category(token[start]) in {"Ps", "Pe", "Pi", "Pf"}
+    ):
+        start += 1
+    while end > start and (
+        token[end - 1] in extraChars or unicodedata.category(token[end - 1]) in {"Ps", "Pe", "Pi", "Pf"}
+    ):
+        end -= 1
+    return token[start:end]
 
 
 def _is_no_space_script_character(character: str) -> bool:
@@ -593,9 +641,20 @@ class TextSegmenter:
         return spokenSegments
 
     def _needs_spoken_segment_space(self, previousCharacter: str, nextCharacter: str) -> bool:
-        if not previousCharacter.isalnum() or not nextCharacter.isalnum():
+        if not _is_word_character(previousCharacter) or not _is_word_character(nextCharacter):
             return False
         return not (_is_no_space_script_character(previousCharacter) or _is_no_space_script_character(nextCharacter))
+
+    def needs_index_boundary_space(self, previousCharacter: str, nextCharacter: str) -> bool:
+        if not previousCharacter or not nextCharacter:
+            return False
+        if previousCharacter.isspace() or nextCharacter.isspace():
+            return False
+        if _is_no_space_script_character(previousCharacter) or _is_no_space_script_character(nextCharacter):
+            return False
+        if 0x3000 <= ord(previousCharacter) <= 0x303F or 0xFF00 <= ord(previousCharacter) <= 0xFFEF:
+            return False
+        return not (0x3000 <= ord(nextCharacter) <= 0x303F or 0xFF00 <= ord(nextCharacter) <= 0xFFEF)
 
     def find_sentence_splits(self, text: str) -> list[int]:
         splits: list[int] = []
@@ -620,7 +679,7 @@ class TextSegmenter:
                 continue
             if self._sentence_terminator_stays_with_token(text, terminatorStart, terminatorEnd, terminator):
                 continue
-            if terminator in ASCII_SENTENCE_TERMINATORS + ";":
+            if terminator in ASCII_SENTENCE_TERMINATORS:
                 if not trailingWhitespace:
                     continue
             else:
@@ -648,7 +707,7 @@ class TextSegmenter:
         if self._period_is_numeric_separator(text, periodIndex):
             return True
         wordStart = periodIndex - 1
-        while wordStart >= 0 and text[wordStart].isalnum():
+        while wordStart >= 0 and _is_word_character(text[wordStart]):
             wordStart -= 1
         wordBefore = text[wordStart + 1 : periodIndex].lower()
         if len(wordBefore) == 1 and wordBefore.isalpha() and wordBefore.isascii():
@@ -660,7 +719,7 @@ class TextSegmenter:
             tokenBeforePeriod = text[tokenStart + 1 : periodIndex]
             if self.looks_like_url_token(tokenBeforePeriod) or "://" in tokenBeforePeriod:
                 return False
-            cleanToken = tokenBeforePeriod.strip("()[]{}'\"“”«»`‘’,")
+            cleanToken = _strip_surrounding_wrappers(tokenBeforePeriod, "()[]{}'\"“”«»`‘’,")
             parts = cleanToken.split(".")
             return not any(len(part) > 2 for part in parts)
         return False
@@ -797,7 +856,11 @@ class TextSegmenter:
                 if cut is None and len(remaining) > SOFT_PHRASE_SEGMENT_MAX_CHARS:
                     cut = self._find_forced_latency_cut(remaining, SOFT_PHRASE_SEGMENT_MAX_CHARS)
             if cut is None:
-                cut = min(len(remaining), FORCED_SEGMENT_HARD_MAX_CHARS)
+                cut = self._extend_cut_over_combining_marks(
+                    remaining,
+                    min(len(remaining), FORCED_SEGMENT_HARD_MAX_CHARS),
+                    len(remaining),
+                )
             segment = remaining[:cut].strip()
             if segment:
                 yield segment
@@ -915,13 +978,17 @@ class TextSegmenter:
                     if text[index] in urlBreakCharacters:
                         cut = index + 1
                         break
-        if cut is None and text[maxLength - 1].isalnum() and text[maxLength].isalnum():
+        if cut is None and _is_word_character(text[maxLength - 1]) and _is_word_character(text[maxLength]):
             wordEnd = min(len(text), FORCED_SEGMENT_HARD_MAX_CHARS)
             for index in range(maxLength, wordEnd):
-                if not text[index].isalnum():
+                if not _is_word_character(text[index]):
                     cut = index
                     break
-        finalCut = cut if cut is not None else maxLength
+        finalCut = self._extend_cut_over_combining_marks(
+            text,
+            cut if cut is not None else maxLength,
+            min(len(text), max(maxLength, FORCED_SEGMENT_HARD_MAX_CHARS) + NO_SPACE_SCRIPT_COMBINING_LOOKAHEAD),
+        )
         log.debug(
             "Forced segment cut: textLength=%d, cutIndex=%d, maxLength=%d.",
             len(text),
@@ -982,13 +1049,15 @@ class TextSegmenter:
     def _extend_cut_over_combining_marks(self, text: str, cut: int, maxCut: int) -> int:
         while cut < maxCut:
             ch = text[cut]
-            cat = unicodedata.category(ch)
             cp = ord(ch)
-            # Preserve Unicode combining marks, ZWJ sequences, variation selectors, keycaps, skin tone modifiers, and flag pairs
+            # Preserve UCD 17.0 combining marks, ZWNJ/ZWJ sequences, variation selectors, keycaps, tags, skin tone modifiers, and flag pairs
             if (
-                cat.startswith("M")
-                or cp in (0x200D, 0xFE0E, 0xFE0F, 0x20E3)
+                _is_combining_mark(cp)
+                or cp in (0x200C, 0x200D, 0xFE0E, 0xFE0F, 0x20E3)
                 or (0x1F3FB <= cp <= 0x1F3FF)
+                or (0xE0020 <= cp <= 0xE007F)
+                or (0xE0100 <= cp <= 0xE01EF)
+                or (cut > 0 and ord(text[cut - 1]) == 0x200D)
                 or (0x1F1E6 <= cp <= 0x1F1FF and cut > 0 and 0x1F1E6 <= ord(text[cut - 1]) <= 0x1F1FF)
             ):
                 cut += 1
@@ -997,20 +1066,35 @@ class TextSegmenter:
         return cut
 
     def looks_like_url_token(self, text: str) -> bool:
-        if any(character.isspace() for character in text):
+        if not text or any(character.isspace() for character in text):
             return False
-        lower = text.lower()
-        return (
-            "://" in text
-            or "/" in text
-            or "\\" in text
-            or ("@" in text and "." in text[text.find("@") :])
-            or lower.startswith("www.")
-            or lower.startswith("http.")
-            or lower.startswith("https.")
-            or lower.startswith("mailto:")
-            or lower.startswith("ftp.")
-        )
+        if "://" in text or "/" in text or "\\" in text:
+            return True
+        if "@" in text and "." in text[text.find("@") :]:
+            return True
+        if ":" in text:
+            scheme, rest = text.split(":", 1)
+            if (
+                len(scheme) >= 2
+                and scheme[0].isalpha()
+                and scheme.isascii()
+                and all(ch.isalnum() or ch in "+-." for ch in scheme)
+                and bool(rest)
+            ):
+                return True
+        clean = _strip_surrounding_wrappers(text, "()[]{}'\"“”«»`‘’.,;!?")
+        if "." in clean:
+            parts = clean.split(".")
+            if (
+                len(parts) >= 2
+                and all(bool(p) and p.isascii() and all(ch.isalnum() or ch in "-_" for ch in p) for p in parts)
+                and len(parts[-1]) >= 2
+                and parts[-1].isalpha()
+                and parts[-1].islower()
+                and any(len(p) >= 3 for p in parts)
+            ):
+                return True
+        return False
 
     def _is_forced_soft_break(self, text: str, index: int) -> bool:
         character = text[index - 1]
@@ -1027,12 +1111,19 @@ class TextSegmenter:
             scheme = text[schemeStart + 1 : index - 1]
             if scheme and scheme[0].isalpha() and text[index : index + 2] == "//":
                 return False
-        return not (_is_dash_like_character(character) and before.isalnum() and after.isalnum())
+        return not (_is_dash_like_character(character) and _is_word_character(before) and _is_word_character(after))
 
     def _is_contextual_soft_phrase_cut(self, text: str, index: int) -> bool:
         if index <= 0 or index > len(text):
             return False
-        return _is_soft_break_character(text[index - 1]) and self._is_forced_soft_break(text, index)
+        character = text[index - 1]
+        if character in ASCII_SENTENCE_TERMINATORS:
+            return (
+                index < len(text)
+                and text[index].isspace()
+                and not self._sentence_terminator_stays_with_token(text, index - 1, index, character)
+            )
+        return _is_soft_break_character(character) and self._is_forced_soft_break(text, index)
 
     def should_pause_after_segment(self, segment: str) -> bool:
         stripped = segment.rstrip()

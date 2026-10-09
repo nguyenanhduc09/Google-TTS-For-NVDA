@@ -116,7 +116,7 @@ def open_synthesizer_dialog(
     parent: wx.Window | None = None,
     title: str | None = None,
 ) -> bool:
-    """Open NVDA's Select Synthesizer dialog cleanly across NVDA versions."""
+    """Open NVDA's Select Synthesizer dialog across NVDA versions."""
     import gui
     from logHandler import log
 

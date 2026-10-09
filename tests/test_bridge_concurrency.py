@@ -346,7 +346,7 @@ class EnsureConnectionCancellationTests(unittest.TestCase):
         self.assertFalse(pm._terminated, "Process manager should not be terminated on cancellation")
 
     def test_concurrent_ensure_connection_when_first_caller_is_cancelled(self) -> None:
-        """When a concurrent warmup caller is cancelled, the speech caller still connects cleanly."""
+        """When a concurrent warmup caller is cancelled, the speech caller still connects."""
         pm = _FakeProcessManager(urls=["ws://ok:1"])
         cdp = _FakeCdpClient()
         bridge_instance = _make_bridge(cdp_client=cdp, process_manager=pm)

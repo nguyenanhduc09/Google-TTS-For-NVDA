@@ -206,7 +206,7 @@ class AdaptiveAudioPacketSizingTests(unittest.TestCase):
         early_count = _read_harness_constant("earlyAudioPacketCount")
         steady_count = _read_harness_constant("steadyAudioPacketCount")
 
-        # First packet: 120 samples (5ms at 24kHz) for instant initial response
+        # First packet: 120 samples (5ms at 24kHz) for initial response
         self.assertEqual(120, first_samples)
         # Early packets: 1200 samples (50ms at 24kHz) for initial 3 packets
         self.assertEqual(1200, early_samples)
@@ -298,7 +298,7 @@ class SegmentationPerformanceTests(unittest.TestCase):
 
     def test_url_heavy_1000_chars_latency_segments(self) -> None:
         """1000 chars with many URLs should segment in <10ms."""
-        text = "Visit https://example.com/docs/v1.2/index.html?zoom=1.5 now. " * 17  # ~1000 chars
+        text = "Visit https://example.com/docs/v1.2/index.html?scale=1.5 now. " * 17  # ~1000 chars
         avg_ms = self._measure_latency_segments(text, False) * 1000
         self.assertLess(avg_ms, 10.0, f"Latency segments took {avg_ms:.1f}ms for 1000 URL chars")
 

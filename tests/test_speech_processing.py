@@ -725,8 +725,8 @@ class UrlAndDomainBoundaryTests(unittest.TestCase):
             ("Truy cập https://google.com. Sau đó nhấn Enter.", 29),
             ("Open www.example.org. Then continue.", 22),
             ("Truy cập google.com. Sau đó tiếp tục.", 21),
-            ("Read news on vnexpress.net. Check later.", 28),
-            ("Check bbc.co.uk. Then reply.", 17),
+            ("Read news on example.net. Check later.", 26),
+            ("Check example.co.uk. Then reply.", 21),
         ]
         for text, expected_split in cases:
             with self.subTest(text=text):
@@ -737,6 +737,39 @@ class UrlAndDomainBoundaryTests(unittest.TestCase):
         self.assertEqual(self.segmenter.find_sentence_splits("I visited the U.S.A. last year."), [])
         self.assertEqual(self.segmenter.find_sentence_splits("He has a B.Sc. degree in math."), [])
         self.assertEqual(self.segmenter.find_sentence_splits("For e.g. this example."), [])
+
+    def test_sentence_trailing_closers_do_not_consume_hyphen_or_opening_low_quotes(self) -> None:
+        for ch in ("-", "\u201a", "\u201e", "(", "[", "{"):
+            with self.subTest(ch=ch):
+                self.assertFalse(self.processing._is_sentence_trailing_closer(ch))
+        for ch in ('"', "'", ")", "]", "}", "»", "›", "\u2019", "\u201d", "”", "』", "】"):
+            with self.subTest(ch=ch):
+                self.assertTrue(self.processing._is_sentence_trailing_closer(ch))
+        self.assertEqual(self.segmenter.find_sentence_splits("Hello. „Guten Tag.“ Weiter geht es."), [7, 20])
+        self.assertEqual(self.segmenter.find_sentence_splits("Hello.-World"), [])
+
+    def test_merged_short_sentences_prefer_sentence_terminator_in_soft_phrase_cut(self) -> None:
+        first_sentence = (
+            "This first sentence has just over one hundred characters so it merges with the following sentence here."
+        )
+        second_sentence = (
+            "The second sentence continues for a much longer distance without any early comma until after two "
+            "hundred characters in total, then finishes."
+        )
+        text = f"{first_sentence} {second_sentence}"
+        self.assertEqual(len(first_sentence), self.segmenter._find_soft_phrase_cut(text, False))
+        segments = self.segmenter.split_text_for_latency(text)
+        self.assertGreaterEqual(len(segments), 2)
+        self.assertEqual(first_sentence, segments[0])
+
+    def test_needs_index_boundary_space(self) -> None:
+        self.assertTrue(self.segmenter.needs_index_boundary_space("e", "S"))
+        self.assertTrue(self.segmenter.needs_index_boundary_space(".", "S"))
+        self.assertTrue(self.segmenter.needs_index_boundary_space(".", '"'))
+        self.assertFalse(self.segmenter.needs_index_boundary_space(" ", "S"))
+        self.assertFalse(self.segmenter.needs_index_boundary_space("e", " "))
+        self.assertFalse(self.segmenter.needs_index_boundary_space("好", "世"))
+        self.assertFalse(self.segmenter.needs_index_boundary_space("。", "世"))
 
 
 if __name__ == "__main__":

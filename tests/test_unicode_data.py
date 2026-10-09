@@ -223,7 +223,8 @@ class UnicodeDataTests(unittest.TestCase):
 
     def test_normalization_table_is_present_and_consistent(self) -> None:
         norm_table = self.data["NORMALIZATION_TABLE"]
-        self.assertGreaterEqual(len(norm_table), 3900)
+        self.assertGreaterEqual(len(norm_table), 3880)
+        self.assertTrue(all(not unicodedata.category(chr(cp)).startswith("P") for cp in norm_table))
         self.assertIs(
             self.language_profiles._MATH_ALPHANUMERIC_TRANSLATION_TABLE,
             self.language_profiles.NORMALIZATION_TABLE,
@@ -270,6 +271,49 @@ class UnicodeDataTests(unittest.TestCase):
         # Standard accented letters must not be stripped or decomposed
         for char in "áàảãạéèẻẽẹíìỉĩịóòỏõọúùủũụđñüöä":
             self.assertNotIn(ord(char), norm_table)
+
+    def test_ucd_17_combining_currency_emoji_and_cldr_currencies(self) -> None:
+        combining_ranges = self.data["COMBINING_MARK_RANGES"]
+        currency_ranges = self.data["CURRENCY_SYMBOL_RANGES"]
+        emoji_ranges = self.data["EMOJI_PICTOGRAPHIC_RANGES"]
+        cldr_currencies = self.data["CLDR_ACTIVE_CURRENCIES"]
+
+        self.assertGreaterEqual(len(combining_ranges), 320)
+        self.assertTrue(_contains(combining_ranges, 0x0300))  # Combining grave accent (Mn)
+        self.assertTrue(_contains(combining_ranges, 0x093E))  # Devanagari vowel sign AA (Mc)
+        self.assertTrue(_contains(combining_ranges, 0x20E3))  # Combining enclosing keycap (Me)
+
+        self.assertGreaterEqual(len(currency_ranges), 20)
+        for cp in (0x0024, 0x20AB, 0x20AC, 0x20BF):  # $, ₫, €, ₿
+            self.assertTrue(_contains(currency_ranges, cp))
+
+        self.assertGreaterEqual(len(emoji_ranges), 150)
+        for cp in (0x1F600, 0x1F389, 0x1FA70):  # 😀, 🎉, 🩰
+            self.assertTrue(_contains(emoji_ranges, cp))
+
+        self.assertGreaterEqual(len(cldr_currencies), 170)
+        for code in ("USD", "EUR", "VND", "JPY", "GBP", "KRW"):
+            self.assertIn(code, cldr_currencies)
+
+        cldr_units = self.data["CLDR_UNIT_SYMBOLS"]
+        self.assertGreaterEqual(len(cldr_units), 600)
+        for unit in ("kg", "km/h", "GB", "TB", "GHz", "kWh", "mAh", "Mbps", "px", "°C", "‰", "‱"):
+            self.assertIn(unit, cldr_units)
+        for non_unit_word in ("cup", "day", "in", "as", "or", "at", "to", "for"):
+            self.assertNotIn(non_unit_word, cldr_units)
+
+        latin_exemplars = self.data["LATIN_LANGUAGE_EXEMPLARS"]
+        self.assertGreaterEqual(len(latin_exemplars), 30)
+        for root in ("vi", "de", "es", "fr", "pl", "tr", "ro", "is", "hu", "cs", "sk", "lt", "lv"):
+            self.assertIn(root, latin_exemplars)
+            self.assertTrue(latin_exemplars[root])
+            self.assertTrue(all(ord(ch) > 0x007F for ch in latin_exemplars[root]))
+        self.assertIn("đ", latin_exemplars["vi"])
+        self.assertIn("ệ", latin_exemplars["vi"])
+        self.assertIn("ß", latin_exemplars["de"])
+        self.assertIn("ñ", latin_exemplars["es"])
+        self.assertIn("ł", latin_exemplars["pl"])
+        self.assertIn("ğ", latin_exemplars["tr"])
 
 
 def _write_engine(root: Path, version: str, *, voices: bool = True) -> Path:

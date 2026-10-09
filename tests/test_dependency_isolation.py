@@ -151,6 +151,18 @@ class BundledDependencyIsolationTests(unittest.TestCase):
         )
         self.assertEqual(sorted(catalog.REQUIRED_ENGINE_FILES), bundledFiles)
 
+    def test_global_plugin_imports_speech_module_alias(self) -> None:
+        """Global plugin __init__.py must import speech as speechModule for auto voice dictionary patching."""
+        pluginInit = GLOBAL_PLUGIN_DIR / "__init__.py"
+        tree = ast.parse(pluginInit.read_text(encoding="utf-8-sig"), filename=str(pluginInit))
+        importedAliases = {
+            alias.asname or alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+        }
+        self.assertIn("speechModule", importedAliases)
+
 
 if __name__ == "__main__":
     unittest.main()

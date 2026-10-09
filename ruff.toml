@@ -8,9 +8,11 @@ exclude = [
     "googleTtsForNvda/synthDrivers/googleTtsForNvda/web",
 ]
 
+builtins = ["_", "ngettext", "pgettext", "npgettext"]
+
 [lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
-ignore = ["W191", "E101", "E501", "F821", "UP035", "SIM102", "B904"]
+ignore = ["W191", "E101", "E501", "UP035", "SIM102", "B904"]
 
 [lint.per-file-ignores]
 "__init__.py" = ["F401"]

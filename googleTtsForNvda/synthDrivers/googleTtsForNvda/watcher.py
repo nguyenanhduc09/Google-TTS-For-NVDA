@@ -75,14 +75,18 @@ class DirectoryChangeWatcher:
             self._thread = thread
             thread.start()
 
-    def stop(self, timeout: float | None = 5.0) -> None:
-        """Stop the watcher thread and wait for it to finish."""
+    def signal_stop(self) -> None:
+        """Signal the watcher thread to stop without waiting for it to exit."""
         with self._lock:
             self._stopRequested.set()
             self._signal_stop_locked()
+
+    def stop(self, timeout: float | None = 5.0) -> None:
+        """Stop the watcher thread and wait for it to finish."""
+        self.signal_stop()
         with self._lock:
             thread = self._thread
-        if thread is not None:
+        if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=timeout)
             if thread.is_alive():
                 log.warning(f"DirectoryChangeWatcher thread did not terminate within {timeout} seconds.")

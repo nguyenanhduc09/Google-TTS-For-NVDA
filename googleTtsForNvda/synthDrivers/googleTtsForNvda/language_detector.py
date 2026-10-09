@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import functools
 import threading
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +22,7 @@ MISSING_GOOGLE_TTS_LANGUAGE: object = object()
 
 _DLL_DIR = Path(__file__).with_name("cld2")
 _DLL_NAMES = ("cld2_x64.dll", "cld2.dll") if ctypes.sizeof(ctypes.c_void_p) == 8 else ("cld2_x86.dll", "cld2.dll")
-_MIN_RELIABLE_PERCENT = 50
+_MIN_RELIABLE_PERCENT = 30
 _LANGUAGE_ALIASES = {
     "ar": {"ar-xa"},
     "ar-xa": {"ar"},
@@ -30,16 +31,32 @@ _LANGUAGE_ALIASES = {
     "cmn-tw": {"zh-hant", "zh-tw"},
     "fil": {"tl", "fil-ph"},
     "fil-ph": {"fil", "tl"},
+    "gom": {"kok", "kok-in"},
     "he": {"iw", "he-il"},
     "he-il": {"he", "iw"},
+    "id": {"in", "id-id"},
+    "in": {"id", "id-id"},
     "iw": {"he", "he-il"},
     "jv": {"jw", "jv-id"},
     "jv-id": {"jv", "jw"},
     "jw": {"jv", "jv-id"},
+    "kok": {"gom", "kok-in"},
+    "kok-in": {"kok", "gom"},
+    "mni": {"mni-in", "mni-mtei"},
+    "mni-mtei": {"mni", "mni-in"},
     "nb": {"no", "nn", "nb-no"},
     "nb-no": {"nb", "no", "nn"},
     "nn": {"nb", "nb-no", "no"},
     "no": {"nb", "nb-no", "nn"},
+    "or": {"ory", "or-in"},
+    "ory": {"or", "or-in"},
+    "pa": {"pan", "pa-in"},
+    "pan": {"pa", "pa-in"},
+    "sat": {"sat-in", "sat-olck"},
+    "sat-olck": {"sat", "sat-in"},
+    "sr": {"sr-rs", "sr-cyrl", "sr-latn"},
+    "sr-cyrl": {"sr", "sr-rs"},
+    "sr-latn": {"sr", "sr-rs"},
     "tl": {"fil", "fil-ph"},
     "yue": {"yue-hk"},
     "yue-hk": {"yue", "zh-hant", "zh-hk"},
@@ -126,6 +143,8 @@ class _Cld2Detector:
         library = self._load_library()
         if library is None:
             return None
+        if not text.isascii():
+            text = unicodedata.normalize("NFC", text)
         encodedText = text.encode("utf-8", "replace")
         if not encodedText:
             return None
@@ -203,65 +222,92 @@ def detect_language(
     """Detect language for text restricted by candidate language hints and preferred language.
 
     Applies Mathematical Alphanumeric normalization, candidate language prior hints,
-    preferred language routing for numbers/symbols, and Unicode script/diacritic analysis.
+    preferred language routing for single characters and spelling clauses, and Unicode script/diacritic analysis.
     """
     if not text:
         return None
     from .language_profiles import (
-        has_vietnamese_diacritics,
-        is_number_token,
-        is_symbol_or_emoji_token,
+        _LATIN_NON_ASCII_EXEMPLARS,
+        get_character_script,
+        has_language_words,
+        is_single_grapheme_token,
+        is_spelling_only_text,
         language_script_signal,
+        latin_exemplar_signal,
         normalize_mathematical_alphanumeric,
     )
+    from .unicode_data import SUPPORTED_LANGUAGE_SCRIPTS
 
     normalizedText = normalize_mathematical_alphanumeric(text)
     stripped = normalizedText.strip()
     if not stripped:
         return None
 
-    # Numbers and symbols/emojis strictly route to preferred language
-    if preferredLanguage and (is_number_token(stripped) or is_symbol_or_emoji_token(stripped)):
-        return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+    candidateRoots = list(dict.fromkeys(_language_root(c) for c in candidateLanguages))
+
+    # Single character reading and alphabet spelling clauses route to preferred language
+    if preferredLanguage:
+        if is_single_grapheme_token(stripped):
+            scriptSignal = language_script_signal(stripped, candidateRoots)
+            prefRoot = _language_root(preferredLanguage)
+            if scriptSignal and scriptSignal != prefRoot:
+                return _candidate_for_language(scriptSignal, candidateLanguages)
+            if not stripped.isascii():
+                exemplarSignal = latin_exemplar_signal(stripped, candidateRoots)
+                if (
+                    exemplarSignal
+                    and exemplarSignal != prefRoot
+                    and stripped.lower() not in _LATIN_NON_ASCII_EXEMPLARS.get(prefRoot, frozenset())
+                ):
+                    return _candidate_for_language(exemplarSignal, candidateLanguages)
+            return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+        if is_spelling_only_text(stripped):
+            return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+
+    # Text without language words (e.g. pure numbers, units, currencies, times, symbols, or emojis)
+    # has no intrinsic language signal: return preferredLanguage fallback if provided, or None.
+    if not has_language_words(stripped):
+        if preferredLanguage:
+            return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+        return None
 
     # CLD2 statistical detection
     result = _detector.detect(normalizedText)
     if result is not None:
         candidate = _candidate_for_language(result.language, candidateLanguages)
-        if candidate is not None and (result.isReliable or result.percent >= 30):
+        if candidate is not None and (result.isReliable or result.percent >= _MIN_RELIABLE_PERCENT):
             return candidate
         # Language hint recovery: CLD2 predicted a language outside the candidate list
         # (e.g. ceb, gl, id, ms, la, pt on short Latin text without diacritics).
         # Restrict the prior to the candidate language space.
-        candidateRoots = {_language_root(c) for c in candidateLanguages}
         cldRoot = _language_root(result.language)
-        if cldRoot in ("ceb", "gl", "la", "id", "ms", "tl", "af", "es", "pt", "fr", "it", "de", "nl", "ro"):
-            if "vi" in candidateRoots and has_vietnamese_diacritics(normalizedText):
-                return _candidate_for_language("vi", candidateLanguages)
+        hasLatinChars = any(get_character_script(ord(c)) == "Latin" for c in normalizedText if c.isalpha())
+        if hasLatinChars or "Latin" in SUPPORTED_LANGUAGE_SCRIPTS.get(cldRoot, ()):
+            exemplarWinner = latin_exemplar_signal(normalizedText, candidateRoots)
+            if exemplarWinner:
+                return _candidate_for_language(exemplarWinner, candidateLanguages)
             if "en" in candidateRoots and any(c.isalpha() and ord(c) < 128 for c in normalizedText):
                 return _candidate_for_language("en", candidateLanguages)
             latinCands = [
-                c for c in candidateLanguages if _language_root(c) in ("en", "vi", "fr", "de", "es", "it", "pt")
+                c for c in candidateLanguages if "Latin" in SUPPORTED_LANGUAGE_SCRIPTS.get(_language_root(c), ())
             ]
             if len(latinCands) == 1:
                 return latinCands[0]
 
-    # Non-Latin script fallback via official Unicode script ranges
-    candidateRoots = {_language_root(c) for c in candidateLanguages}
+    # Non-Latin script fallback via Unicode script ranges
     scriptSignal = language_script_signal(normalizedText, candidateRoots)
     if scriptSignal:
         return _candidate_for_language(scriptSignal, candidateLanguages)
 
-    # Latin diacritics & plain Latin heuristics without hardcoded word dictionaries
-    if "vi" in candidateRoots and has_vietnamese_diacritics(normalizedText):
-        return _candidate_for_language("vi", candidateLanguages)
+    # Latin exemplar & plain Latin heuristics derived from CLDR exemplar sets
+    exemplarWinner = latin_exemplar_signal(normalizedText, candidateRoots)
+    if exemplarWinner:
+        return _candidate_for_language(exemplarWinner, candidateLanguages)
     if "en" in candidateRoots and any(c.isalpha() and ord(c) < 128 for c in normalizedText):
         return _candidate_for_language("en", candidateLanguages)
 
     latinCandidates = [
-        c
-        for c in candidateLanguages
-        if _language_root(c) in ("en", "vi", "fr", "de", "es", "it", "pt", "nl", "pl", "cs")
+        c for c in candidateLanguages if "Latin" in SUPPORTED_LANGUAGE_SCRIPTS.get(_language_root(c), ())
     ]
     if len(latinCandidates) == 1:
         return latinCandidates[0]

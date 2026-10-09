@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate compact runtime Unicode tables from official UCD and CLDR files."""
+"""Generate runtime Unicode tables from UCD and CLDR files."""
 
 from __future__ import annotations
 
@@ -261,6 +261,378 @@ def _format_normalization_table(table: dict[int, str], indent: str = "\t") -> st
     return "\n".join(lines)
 
 
+def _format_string_tuple(values: Iterable[str], indent: str = "\t") -> str:
+    items = [repr(value) for value in sorted(set(values))]
+    lines = []
+    for index in range(0, len(items), 10):
+        lines.append(indent + ", ".join(items[index : index + 10]) + ",")
+    return "\n".join(lines)
+
+
+def _format_string_dict(mapping: dict[str, str], indent: str = "\t") -> str:
+    lines = []
+    for key in sorted(mapping):
+        lines.append(f"{indent}{repr(key)}: {repr(mapping[key])},")
+    return "\n".join(lines)
+
+
+def _extract_unicode_data_category_ranges(
+    ucdDir: Path,
+    categories: set[str],
+) -> tuple[tuple[int, int], ...]:
+    unicodeDataPath = ucdDir / "UnicodeData.txt"
+    if not unicodeDataPath.is_file():
+        return ()
+    ranges: list[tuple[int, int]] = []
+    rangeStart: int | None = None
+    for rawLine in unicodeDataPath.read_text(encoding="utf-8").splitlines():
+        line = rawLine.strip()
+        if not line:
+            continue
+        fields = line.split(";")
+        cp = int(fields[0], 16)
+        name = fields[1].strip()
+        category = fields[2].strip()
+        if category not in categories:
+            rangeStart = None
+            continue
+        if name.endswith(", First>"):
+            rangeStart = cp
+        elif name.endswith(", Last>") and rangeStart is not None:
+            ranges.append((rangeStart, cp))
+            rangeStart = None
+        else:
+            ranges.append((cp, cp))
+    return _merge_ranges(ranges)
+
+
+def _extract_combining_mark_ranges(ucdDir: Path) -> tuple[tuple[int, int], ...]:
+    return _extract_unicode_data_category_ranges(ucdDir, {"Mn", "Mc", "Me"})
+
+
+def _extract_currency_symbol_ranges(ucdDir: Path) -> tuple[tuple[int, int], ...]:
+    return _extract_unicode_data_category_ranges(ucdDir, {"Sc"})
+
+
+def _extract_emoji_pictographic_ranges(ucdDir: Path) -> tuple[tuple[int, int], ...]:
+    emojiDataPath = ucdDir / "emoji" / "emoji-data.txt"
+    if not emojiDataPath.is_file():
+        return ()
+    excludedCodepoints = {0x00A9, 0x00AE, 0x2122}
+    ranges: list[tuple[int, int]] = []
+    for start, end, prop in _parse_ucd_records(emojiDataPath):
+        if prop not in {"Extended_Pictographic", "Emoji_Presentation"}:
+            continue
+        for cp in range(start, end + 1):
+            if cp < 0x80 or cp in excludedCodepoints:
+                continue
+            ranges.append((cp, cp))
+    return _merge_ranges(ranges)
+
+
+def _expand_cldr_validity_token(token: str) -> list[str]:
+    if "~" not in token:
+        return [token] if token else []
+    prefix, endChar = token.split("~", 1)
+    if not prefix or len(endChar) != 1:
+        return []
+    startChar = prefix[-1]
+    stem = prefix[:-1]
+    return [f"{stem}{chr(cp)}" for cp in range(ord(startChar), ord(endChar) + 1)]
+
+
+def _extract_cldr_active_currencies(cldrCommonDir: Path | None) -> tuple[str, ...]:
+    if cldrCommonDir is None:
+        return ()
+    codes: set[str] = set()
+    validityPath = cldrCommonDir / "validity" / "currency.xml"
+    if validityPath.is_file():
+        tree = ET.parse(validityPath)
+        for elem in tree.findall(".//id[@type='currency'][@idStatus='regular']"):
+            if elem.text:
+                for token in elem.text.split():
+                    for expanded in _expand_cldr_validity_token(token.strip()):
+                        if len(expanded) == 3 and expanded.isalpha() and expanded != "XXX":
+                            codes.add(expanded.upper())
+    supplementalPath = cldrCommonDir / "supplemental" / "supplementalData.xml"
+    if supplementalPath.is_file():
+        tree = ET.parse(supplementalPath)
+        for elem in tree.findall(".//currencyData/region/currency"):
+            if "to" in elem.attrib:
+                continue
+            isoCode = (elem.attrib.get("iso4217") or "").strip().upper()
+            if len(isoCode) == 3 and isoCode.isalpha() and isoCode != "XXX":
+                codes.add(isoCode)
+    return tuple(sorted(codes))
+
+
+def _parse_cldr_exemplar_set(rawText: str) -> set[str]:
+    text = rawText.strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip()
+    out: set[str] = set()
+    index = 0
+    length = len(text)
+    while index < length:
+        if text[index].isspace():
+            index += 1
+            continue
+        if text[index] == "{":
+            endIndex = text.find("}", index + 1)
+            if endIndex == -1:
+                break
+            seq = unicodedata.normalize("NFC", text[index + 1 : endIndex])
+            for ch in seq:
+                if ord(ch) > 0x7F and unicodedata.category(ch).startswith("L"):
+                    folded = ch.lower() if len(ch.lower()) == 1 else ch
+                    out.add(folded)
+            index = endIndex + 1
+            continue
+        if text[index] == "\\":
+            if index + 5 < length and text[index + 1] == "u":
+                hexDigits = text[index + 2 : index + 6]
+                try:
+                    ch = chr(int(hexDigits, 16))
+                    index += 6
+                except ValueError:
+                    ch = text[index + 1]
+                    index += 2
+            elif index + 9 < length and text[index + 1] == "U":
+                hexDigits = text[index + 2 : index + 10]
+                try:
+                    ch = chr(int(hexDigits, 16))
+                    index += 10
+                except ValueError:
+                    ch = text[index + 1]
+                    index += 2
+            elif index + 1 < length:
+                ch = text[index + 1]
+                index += 2
+            else:
+                break
+        else:
+            ch = text[index]
+            index += 1
+        ch = unicodedata.normalize("NFC", ch)
+        for char in ch:
+            if ord(char) > 0x7F and unicodedata.category(char).startswith("L"):
+                folded = char.lower() if len(char.lower()) == 1 else char
+                out.add(folded)
+    return out
+
+
+def _extract_latin_language_exemplars(
+    cldrCommonDir: Path | None,
+    languageScripts: dict[str, tuple[str, ...]],
+) -> dict[str, str]:
+    if cldrCommonDir is None:
+        return {}
+    mainDir = cldrCommonDir / "main"
+    if not mainDir.is_dir():
+        return {}
+    latinRoots = sorted(root for root, scripts in languageScripts.items() if "Latin" in scripts)
+    exemplars: dict[str, str] = {}
+    for root in latinRoots:
+        candidateFiles = ["sr_Latn.xml", "sr.xml"] if root == "sr" else [f"{root}.xml"]
+        if root == "nb":
+            candidateFiles.append("no.xml")
+        chars: set[str] = set()
+        for fileName in candidateFiles:
+            xmlPath = mainDir / fileName
+            if not xmlPath.is_file():
+                continue
+            tree = ET.parse(xmlPath)
+            for elem in tree.findall(".//characters/exemplarCharacters"):
+                if elem.attrib.get("type") is None and elem.text:
+                    chars |= _parse_cldr_exemplar_set(elem.text)
+            if chars:
+                break
+        if chars:
+            exemplars[root] = "".join(sorted(chars))
+    return exemplars
+
+
+def _extract_cldr_unit_symbols(cldrCommonDir: Path | None) -> tuple[str, ...]:
+    if cldrCommonDir is None:
+        return ()
+    mainDir = cldrCommonDir / "main"
+    suppDir = cldrCommonDir / "supplemental"
+    metricUnits: set[str] = set()
+    metricPrefixableUnits: set[str] = set()
+    digitalUnits: set[str] = set()
+    unitsXmlPath = suppDir / "units.xml"
+    if unitsXmlPath.is_file():
+        tree = ET.parse(unitsXmlPath)
+        for elem in tree.findall(".//convertUnits/convertUnit"):
+            baseUnit = (elem.attrib.get("source") or "").strip()
+            systems = set((elem.attrib.get("systems") or "").split())
+            unitFamily = (elem.attrib.get("baseUnit") or "").strip()
+            if not baseUnit:
+                continue
+            if "metric" in systems:
+                metricUnits.add(baseUnit)
+                if "prefixable" in systems:
+                    metricPrefixableUnits.add(baseUnit)
+            if unitFamily == "bit":
+                digitalUnits.add(baseUnit)
+
+    siPrefixes: dict[str, str] = {}
+    binaryPrefixes: dict[str, str] = {}
+    rootSymbolsByType: dict[str, set[str]] = defaultdict(set)
+    unitSymbolsByType: dict[str, set[str]] = defaultdict(set)
+    perPatterns: set[str] = set()
+    squarePatterns: set[str] = set()
+    cubicPatterns: set[str] = set()
+
+    for xmlName in ("root.xml", "en.xml"):
+        xmlPath = mainDir / xmlName
+        if not xmlPath.is_file():
+            continue
+        tree = ET.parse(xmlPath)
+        for lengthElem in tree.findall(".//units/unitLength"):
+            lengthType = lengthElem.attrib.get("type")
+            if lengthType not in ("short", "narrow"):
+                continue
+            for comp in lengthElem.findall("compoundUnit"):
+                compType = comp.attrib.get("type") or ""
+                if compType == "per":
+                    for pat in comp.findall("compoundUnitPattern"):
+                        if pat.text and "{0}" in pat.text and "{1}" in pat.text:
+                            perPatterns.add(pat.text.strip())
+                elif compType == "power2":
+                    for pat in comp.findall("compoundUnitPattern1"):
+                        if pat.text and "{0}" in pat.text:
+                            squarePatterns.add(pat.text.strip())
+                elif compType == "power3":
+                    for pat in comp.findall("compoundUnitPattern1"):
+                        if pat.text and "{0}" in pat.text:
+                            cubicPatterns.add(pat.text.strip())
+                elif compType.startswith("10p"):
+                    for pat in comp.findall("unitPrefixPattern"):
+                        if pat.text and "{0}" in pat.text:
+                            prefix = pat.text.replace("{0}", "").strip()
+                            if prefix and prefix.isalpha():
+                                siPrefixes[compType] = prefix
+                elif compType.startswith("1024p"):
+                    for pat in comp.findall("unitPrefixPattern"):
+                        if pat.text and "{0}" in pat.text:
+                            prefix = pat.text.replace("{0}", "").strip()
+                            if prefix and prefix.isalpha():
+                                binaryPrefixes[compType] = prefix
+            for unitElem in lengthElem.findall("unit"):
+                unitType = unitElem.attrib.get("type") or ""
+                unitShortName = unitType.split("-", 1)[1] if "-" in unitType else unitType
+                if unitType == "length-inch":
+                    continue
+                nameParts = set(unitShortName.split("-"))
+                for pat in unitElem.findall("unitPattern"):
+                    if not pat.text or "{0}" not in pat.text:
+                        continue
+                    rawSym = unicodedata.normalize("NFC", pat.text.replace("{0}", "").strip())
+                    if not rawSym or " " in rawSym or "." in rawSym or "-" in rawSym:
+                        continue
+                    if not any(ch.isalpha() or ch in "°ΩΩµμ%‰‱" for ch in rawSym):
+                        continue
+                    if len(rawSym) > 8:
+                        continue
+                    if (
+                        unitShortName not in metricUnits
+                        and unitShortName not in digitalUnits
+                        and len(rawSym) > 2
+                        and (
+                            rawSym.lower() in nameParts
+                            or rawSym.lower().rstrip("s") in nameParts
+                            or any(part in rawSym.lower() for part in nameParts if len(part) >= 3)
+                        )
+                    ):
+                        continue
+                    unitSymbolsByType[unitShortName].add(rawSym)
+                    if xmlName == "root.xml":
+                        rootSymbolsByType[unitShortName].add(rawSym)
+
+    allSymbols: set[str] = set()
+    for symbols in unitSymbolsByType.values():
+        allSymbols |= symbols
+
+    commonSiPrefixes = {
+        prefix
+        for key, prefix in siPrefixes.items()
+        if key in {"10p-1", "10p-2", "10p-3", "10p-6", "10p-9", "10p-12", "10p2", "10p3", "10p6", "10p9", "10p12"}
+    }
+    for baseUnit in metricPrefixableUnits:
+        for baseSym in rootSymbolsByType.get(baseUnit, ()):
+            if len(baseSym) <= 3 and (baseSym.isalpha() or baseSym in ("Ω", "Ω")):
+                for prefix in commonSiPrefixes:
+                    allSymbols.add(f"{prefix}{baseSym}")
+                    if prefix == "μ":
+                        allSymbols.add(f"u{baseSym}")
+                    if baseSym in ("Ω", "Ω"):
+                        allSymbols.add(f"{prefix}Ω")
+                        allSymbols.add(f"{prefix}Ω")
+
+    for digitalBase in digitalUnits:
+        for baseSym in unitSymbolsByType.get(digitalBase, ()):
+            if len(baseSym) <= 4 and baseSym.isalpha():
+                for prefix in binaryPrefixes.values():
+                    allSymbols.add(f"{prefix}{baseSym}")
+                for prefix in ("k", "K", "M", "G", "T", "P"):
+                    allSymbols.add(f"{prefix}{baseSym}")
+                    if len(baseSym) == 1:
+                        allSymbols.add(f"{prefix}{baseSym}ps")
+                        allSymbols.add(f"{prefix}{baseSym}/s")
+                if len(baseSym) == 1:
+                    allSymbols.add(f"{baseSym}ps")
+                    allSymbols.add(f"{baseSym}/s")
+    for unitShortName, syms in rootSymbolsByType.items():
+        if unitShortName.endswith(("bit", "byte")):
+            for sym in syms:
+                if len(sym) <= 3 and sym.isalpha() and sym[-1] in ("b", "B"):
+                    allSymbols.add(f"{sym}ps")
+                    allSymbols.add(f"{sym}/s")
+                    allSymbols.add(f"{sym[-1]}ps")
+                    allSymbols.add(f"{sym[-1]}/s")
+                    if sym[0] == "k":
+                        allSymbols.add(f"K{sym[1:]}ps")
+                        allSymbols.add(f"K{sym[1:]}/s")
+
+    for hourSym in rootSymbolsByType.get("hour", ()):
+        for energyBase in ("watt", "ampere"):
+            for baseSym in rootSymbolsByType.get(energyBase, ()):
+                allSymbols.add(f"{baseSym}{hourSym}")
+                for prefix in ("m", "k", "M", "G", "T"):
+                    allSymbols.add(f"{prefix}{baseSym}{hourSym}")
+
+    for lengthBase in ("meter", "centimeter", "millimeter", "kilometer"):
+        for sym in list(rootSymbolsByType.get(lengthBase, ())):
+            for pat in squarePatterns:
+                allSymbols.add(unicodedata.normalize("NFC", pat.replace("{0}", sym)))
+                allSymbols.add(f"{sym}2")
+            for pat in cubicPatterns:
+                allSymbols.add(unicodedata.normalize("NFC", pat.replace("{0}", sym)))
+                allSymbols.add(f"{sym}3")
+
+    for numUnit in ("meter", "kilometer", "mile", "gram", "milligram", "kilogram", "liter", "milliliter"):
+        for denUnit in ("second", "hour", "liter", "cubic-meter"):
+            for numSym in unitSymbolsByType.get(numUnit, ()):
+                for denSym in rootSymbolsByType.get(denUnit, ()):
+                    for pat in perPatterns:
+                        compound = unicodedata.normalize("NFC", pat.replace("{0}", numSym).replace("{1}", denSym))
+                        if " " not in compound and len(compound) <= 10:
+                            allSymbols.add(compound)
+
+    for sym in list(allSymbols):
+        if "Ω" in sym:
+            allSymbols.add(sym.replace("Ω", "Ω"))
+        if "Ω" in sym:
+            allSymbols.add(sym.replace("Ω", "Ω"))
+        if "μ" in sym:
+            allSymbols.add(sym.replace("μ", "µ"))
+        if "µ" in sym:
+            allSymbols.add(sym.replace("µ", "μ"))
+
+    return tuple(sorted(allSymbols))
+
+
 def _build_normalization_table(
     ucdDir: Path,
     cldrCommonDir: Path | None = None,
@@ -314,8 +686,9 @@ def _build_normalization_table(
             fields = line.split(";")
             cp = int(fields[0], 16)
             name = fields[1]
+            category = fields[2].strip()
             decomp = fields[5].strip()
-            if decomp.startswith("<"):
+            if decomp.startswith("<") and not category.startswith("P"):
                 tagName, *codepointHexes = decomp.split()
                 tag = tagName[1:-1]
                 if tag in acceptedTags:
@@ -331,6 +704,21 @@ def _build_normalization_table(
                 )
             ):
                 table[cp] = name.rsplit(" ", 1)[-1]
+            elif name.startswith("LATIN LETTER SMALL CAPITAL "):
+                suffix = name.removeprefix("LATIN LETTER SMALL CAPITAL ")
+                if len(suffix) in (1, 2) and suffix.isalpha():
+                    table[cp] = suffix.lower()
+                elif suffix == "L WITH STROKE":
+                    table[cp] = "l"
+                elif suffix == "REVERSED N":
+                    table[cp] = "n"
+            elif 0x1F18E <= cp <= 0x1F19B and name.startswith(("NEGATIVE SQUARED ", "SQUARED ")):
+                table[cp] = (
+                    name.removeprefix("NEGATIVE ")
+                    .removeprefix("SQUARED ")
+                    .removesuffix(" WITH EXCLAMATION MARK")
+                    .replace("THREE D", "3D")
+                )
 
     for cp, chars in rawDecomps.items():
         current = chars
@@ -346,56 +734,6 @@ def _build_normalization_table(
             table[cp] = chr(ord("A") + (cp - 0x1F110))
         elif cp not in table:
             table[cp] = current
-
-    smallCapitals = {
-        0x0262: "g",
-        0x026A: "i",
-        0x0274: "n",
-        0x0276: "oe",
-        0x0280: "r",
-        0x028F: "y",
-        0x0299: "b",
-        0x029C: "h",
-        0x029F: "l",
-        0x1D00: "a",
-        0x1D01: "ae",
-        0x1D04: "c",
-        0x1D05: "d",
-        0x1D07: "e",
-        0x1D0A: "j",
-        0x1D0B: "k",
-        0x1D0C: "l",
-        0x1D0D: "m",
-        0x1D0E: "n",
-        0x1D0F: "o",
-        0x1D18: "p",
-        0x1D1B: "t",
-        0x1D1C: "u",
-        0x1D20: "v",
-        0x1D21: "w",
-        0x1D22: "z",
-        0xA730: "f",
-        0xA731: "s",
-        0xA7AF: "q",
-    }
-    table.update(smallCapitals)
-
-    squaredWords = {
-        0x1F18E: "AB",
-        0x1F18F: "WC",
-        0x1F191: "CL",
-        0x1F192: "COOL",
-        0x1F193: "FREE",
-        0x1F194: "ID",
-        0x1F195: "NEW",
-        0x1F196: "NG",
-        0x1F197: "OK",
-        0x1F198: "SOS",
-        0x1F199: "UP",
-        0x1F19A: "VS",
-        0x1F19B: "3D",
-    }
-    table.update(squaredWords)
 
     if cldrCommonDir is not None:
         charsXml = cldrCommonDir / "supplemental" / "characters.xml"
@@ -421,6 +759,12 @@ def _render_module(
     languageScripts: dict[str, tuple[str, ...]],
     scriptRanges: dict[str, tuple[tuple[int, int], ...]],
     sentenceTerminals: set[int],
+    combiningMarkRanges: tuple[tuple[int, int], ...] | None = None,
+    currencySymbolRanges: tuple[tuple[int, int], ...] | None = None,
+    emojiPictographicRanges: tuple[tuple[int, int], ...] | None = None,
+    cldrActiveCurrencies: tuple[str, ...] | None = None,
+    cldrUnitSymbols: tuple[str, ...] | None = None,
+    latinLanguageExemplars: dict[str, str] | None = None,
     normalizationTable: dict[int, str] | None = None,
 ) -> str:
     lines = [
@@ -462,6 +806,60 @@ def _render_module(
             "))",
         )
     )
+    if combiningMarkRanges is not None:
+        lines.extend(
+            (
+                "",
+                "COMBINING_MARK_RANGES: tuple[tuple[int, int], ...] = (",
+                _format_ranges(combiningMarkRanges, indent="\t"),
+                ")",
+            )
+        )
+    if currencySymbolRanges is not None:
+        lines.extend(
+            (
+                "",
+                "CURRENCY_SYMBOL_RANGES: tuple[tuple[int, int], ...] = (",
+                _format_ranges(currencySymbolRanges, indent="\t"),
+                ")",
+            )
+        )
+    if emojiPictographicRanges is not None:
+        lines.extend(
+            (
+                "",
+                "EMOJI_PICTOGRAPHIC_RANGES: tuple[tuple[int, int], ...] = (",
+                _format_ranges(emojiPictographicRanges, indent="\t"),
+                ")",
+            )
+        )
+    if cldrActiveCurrencies is not None:
+        lines.extend(
+            (
+                "",
+                "CLDR_ACTIVE_CURRENCIES: tuple[str, ...] = (",
+                _format_string_tuple(cldrActiveCurrencies, indent="\t"),
+                ")",
+            )
+        )
+    if cldrUnitSymbols is not None:
+        lines.extend(
+            (
+                "",
+                "CLDR_UNIT_SYMBOLS: tuple[str, ...] = (",
+                _format_string_tuple(cldrUnitSymbols, indent="\t"),
+                ")",
+            )
+        )
+    if latinLanguageExemplars is not None:
+        lines.extend(
+            (
+                "",
+                "LATIN_LANGUAGE_EXEMPLARS: dict[str, str] = {",
+                _format_string_dict(latinLanguageExemplars, indent="\t"),
+                "}",
+            )
+        )
     if normalizationTable is not None:
         lines.extend(
             (
@@ -538,6 +936,12 @@ def main() -> int:
     if cldrCommonDir is None and args.likely_subtags.parent.name == "supplemental":
         cldrCommonDir = args.likely_subtags.parent.parent
 
+    combiningMarkRanges = _extract_combining_mark_ranges(args.ucd_dir)
+    currencySymbolRanges = _extract_currency_symbol_ranges(args.ucd_dir)
+    emojiPictographicRanges = _extract_emoji_pictographic_ranges(args.ucd_dir)
+    cldrActiveCurrencies = _extract_cldr_active_currencies(cldrCommonDir)
+    cldrUnitSymbols = _extract_cldr_unit_symbols(cldrCommonDir)
+    latinLanguageExemplars = _extract_latin_language_exemplars(cldrCommonDir, languageScripts)
     normalizationTable = _build_normalization_table(args.ucd_dir, cldrCommonDir)
 
     output = _render_module(
@@ -546,6 +950,12 @@ def main() -> int:
         languageScripts=languageScripts,
         scriptRanges=scriptRanges,
         sentenceTerminals=sentenceTerminals,
+        combiningMarkRanges=combiningMarkRanges,
+        currencySymbolRanges=currencySymbolRanges,
+        emojiPictographicRanges=emojiPictographicRanges,
+        cldrActiveCurrencies=cldrActiveCurrencies,
+        cldrUnitSymbols=cldrUnitSymbols,
+        latinLanguageExemplars=latinLanguageExemplars,
         normalizationTable=normalizationTable,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -553,6 +963,12 @@ def main() -> int:
     print(
         f"Wrote {args.output} for {len(languageScripts)} language roots, "
         f"{len(scriptRanges)} scripts, {len(sentenceTerminals)} sentence terminals, "
+        f"{len(combiningMarkRanges)} combining mark ranges, "
+        f"{len(currencySymbolRanges)} currency symbol ranges, "
+        f"{len(emojiPictographicRanges)} emoji pictographic ranges, "
+        f"{len(cldrActiveCurrencies)} active currencies, "
+        f"{len(cldrUnitSymbols)} unit symbols, "
+        f"{len(latinLanguageExemplars)} Latin exemplar sets, "
         f"and {len(normalizationTable)} normalization codepoints."
     )
     return 0

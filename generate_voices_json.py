@@ -2,8 +2,8 @@
 Google TTS Voice Metadata Extractor and Catalog Generator
 =========================================================
 Reads voice package metadata from google tts voices.json, updates existing entries,
-fetches speaker configurations for brand new voice packages, formats names cleanly,
-and updates voices.json with clean, merged, and deduplicated entries.
+fetches speaker configurations for new voice packages, formats speaker names,
+and writes merged, deduplicated entries to voices.json.
 
 The target catalog is the newest bundled ``WasmTtsEngine/<version>/voices.json``.
 The engine version is discovered from the tree and must match the production
@@ -194,7 +194,7 @@ def select_engine_voices_json(
     return voicesJsonPath
 
 
-# Comprehensive mapping of locale codes to Native Language Names
+# Mapping of locale codes to native language names
 NATIVE_LANGUAGE_NAMES: dict[str, str] = {
     "en-au": "Australian English",
     "en-us": "US English",
@@ -502,27 +502,24 @@ def main() -> None:
     print(f"Fetching speaker metadata for {len(new_packages_to_fetch)} new packages concurrently...\n")
 
     if new_packages_to_fetch:
-        with requests.Session() as session:
-            session.headers.update(
-                {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-                }
-            )
-            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_pkg = {
-                    executor.submit(fetch_new_package_speakers, session, pkg, merged_map): pkg
-                    for pkg in new_packages_to_fetch
-                }
-                for future in concurrent.futures.as_completed(future_to_pkg):
-                    pkg = future_to_pkg[future]
-                    speakers = future.result()
-                    if speakers:
-                        merged_map[pkg["id"]]["speakers"] = speakers
-                    else:
-                        print(f"[WARN] Removing {pkg['id']} due to missing speakers.")
-                        merged_map.pop(pkg["id"], None)
+        with (
+            requests.Session() as session,
+            concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor,
+        ):
+            future_to_pkg = {
+                executor.submit(fetch_new_package_speakers, session, pkg, merged_map): pkg
+                for pkg in new_packages_to_fetch
+            }
+            for future in concurrent.futures.as_completed(future_to_pkg):
+                pkg = future_to_pkg[future]
+                speakers = future.result()
+                if speakers:
+                    merged_map[pkg["id"]]["speakers"] = speakers
+                else:
+                    print(f"[WARN] Removing {pkg['id']} due to missing speakers.")
+                    merged_map.pop(pkg["id"], None)
 
-    # Sort neatly by language code (locale) and then by package ID
+    # Sort by language code (locale) and then by package ID
     sorted_entries = sorted(merged_map.values(), key=lambda x: (x["id"].split("-x-")[0].lower(), x["id"].lower()))
 
     # Save updated content directly to voices.json

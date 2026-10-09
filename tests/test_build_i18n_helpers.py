@@ -799,7 +799,7 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
 
             # en has 3 paragraphs; vi was translated when en had only p1 and p3 (p2 is newly added to en)
             en_html.write_text(
-                "<!DOCTYPE html><html><body><p>First paragraph with <kbd>Ctrl+1</kbd>.</p><p>Brand new middle paragraph.</p><p>Third paragraph with <kbd>Ctrl+3</kbd>.</p></body></html>",
+                "<!DOCTYPE html><html><body><p>First paragraph with <kbd>Ctrl+1</kbd>.</p><p>Added middle paragraph.</p><p>Third paragraph with <kbd>Ctrl+3</kbd>.</p></body></html>",
                 encoding="utf-8",
             )
             vi_html.write_text(
@@ -816,7 +816,7 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
             self.assertEqual(
                 "Đoạn thứ ba với <kbd>Ctrl+3</kbd>.", catalog.get("Third paragraph with <kbd>Ctrl+3</kbd>.")
             )
-            self.assertEqual("", catalog.get("Brand new middle paragraph."))
+            self.assertEqual("", catalog.get("Added middle paragraph."))
 
     def test_write_translated_manifest_falls_back_on_empty(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1448,7 +1448,7 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
             (ar_dir / "manifest.ini").write_text("summary = Test\n", encoding="utf-8")
             doc_ar = root / "doc" / "ar"
             doc_ar.mkdir(parents=True)
-            (doc_ar / "readme.html").write_text("dummy", encoding="utf-8")
+            (doc_ar / "readme.html").write_text("placeholder", encoding="utf-8")
 
             with (
                 mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
@@ -2091,7 +2091,7 @@ class DocBuildIntegrationTests(unittest.TestCase):
     def test_find_msgfmt_custom_and_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             fake_exe = Path(td) / "msgfmt.exe"
-            fake_exe.write_text("dummy", encoding="utf-8")
+            fake_exe.write_text("placeholder", encoding="utf-8")
             self.assertEqual(fake_exe.resolve(), build_i18n._find_msgfmt(fake_exe))
             non_existent = Path(td) / "missing_msgfmt.exe"
             self.assertIsNone(build_i18n._find_msgfmt(non_existent))
@@ -2101,7 +2101,7 @@ class DocBuildIntegrationTests(unittest.TestCase):
         self.assertEqual([], build_i18n._check_po_syntax_with_msgfmt(Path("missing.po"), msgfmt_path=None))
 
         with tempfile.TemporaryDirectory() as td:
-            # Headerless PO file (no charset) skips msgfmt gracefully
+            # Headerless PO file (no charset) skips msgfmt
             po_file = Path(td) / "no_charset.po"
             po_file.write_text('msgid ""\nmsgstr ""\n\nmsgid "A"\nmsgstr "B"\n', encoding="utf-8")
             self.assertEqual([], build_i18n._check_po_syntax_with_msgfmt(po_file))

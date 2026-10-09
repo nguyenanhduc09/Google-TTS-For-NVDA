@@ -9,7 +9,7 @@ Covers:
   2. cancelEvent propagation between refresh cycles.
   3. claim_bridge returns bridge when signature matches.
   4. release_synth_bridge stores bridge for reuse.
-  5. terminate shuts down cleanly.
+  5. terminate shuts down the manager.
 """
 
 from __future__ import annotations
@@ -206,7 +206,7 @@ class CancelEventTests(unittest.TestCase):
         self.assertIsNone(mgr._cancelEvent)
 
     def test_clear_standby_handles_none_cancel_event(self) -> None:
-        """_cancel_current_worker_locked handles None cancelEvent gracefully."""
+        """_cancel_current_worker_locked handles None cancelEvent without raising."""
         mgr = _MinimalManager()
         mgr.initialize()
         mgr._cancelEvent = None
@@ -397,7 +397,7 @@ class ReleaseSynthBridgeTests(unittest.TestCase):
 
 
 class TerminateTests(unittest.TestCase):
-    """Verify terminate shuts down cleanly."""
+    """Verify terminate shuts down the manager."""
 
     def test_terminate_sets_shutdown_flag(self) -> None:
         """terminate sets _shutdown=True and clears bridge."""
@@ -435,7 +435,7 @@ class TerminateTests(unittest.TestCase):
         self.assertEqual(6, mgr._generation)
 
     def test_terminate_handles_none_bridge(self) -> None:
-        """terminate handles None bridge gracefully."""
+        """terminate handles None bridge without raising."""
         mgr = _MinimalManager()
         mgr.initialize()
 

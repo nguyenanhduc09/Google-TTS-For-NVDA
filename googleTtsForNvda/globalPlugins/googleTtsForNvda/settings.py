@@ -791,12 +791,16 @@ class GoogleTtsSettingsPanel(SettingsPanel):
         return self._default_voice_for_language(language)
 
     def _profile_int(self, value: object, default: int) -> int:
+        if isinstance(value, bool):
+            return max(0, min(100, int(default)))
         try:
             return max(0, min(100, int(value)))  # type: ignore[call-overload]
         except (TypeError, ValueError):
             return max(0, min(100, int(default)))
 
     def _profile_cap_pitch(self, value: object, default: int) -> int:
+        if isinstance(value, bool):
+            return max(-100, min(100, int(default)))
         try:
             return max(-100, min(100, int(value)))  # type: ignore[call-overload]
         except (TypeError, ValueError):

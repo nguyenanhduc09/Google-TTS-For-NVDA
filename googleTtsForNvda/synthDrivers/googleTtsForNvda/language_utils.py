@@ -12,6 +12,7 @@ SPECIAL_NVDA_LOCALES: dict[str, str] = {
     "ar-XA": "ar",
     "fil-PH": "tl",
 }
+_SPECIAL_NVDA_LOCALES_LOWER: dict[str, str] = {k.lower(): v for k, v in SPECIAL_NVDA_LOCALES.items()}
 
 
 def normalize_language(language: str | None) -> str:
@@ -36,7 +37,11 @@ def get_nvda_locale_for_language(lang_code: str | None) -> str:
     languageText = str(lang_code).strip()
     if languageText in SPECIAL_NVDA_LOCALES:
         return SPECIAL_NVDA_LOCALES[languageText]
-    lowerLanguage = languageText.lower()
+    lowerLanguage = languageText.replace("_", "-").lower()
+    if lowerLanguage in _SPECIAL_NVDA_LOCALES_LOWER:
+        return _SPECIAL_NVDA_LOCALES_LOWER[lowerLanguage]
+    if lowerLanguage.startswith(("cmn-tw", "cmn-hant")):
+        return "zh_TW"
     if lowerLanguage.startswith("cmn"):
         return "zh_CN"
     if lowerLanguage.startswith("yue"):

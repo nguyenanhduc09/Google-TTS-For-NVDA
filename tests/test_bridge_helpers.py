@@ -81,7 +81,7 @@ class NormalizeBrowserRuntimeTests(unittest.TestCase):
                 self.assertEqual("brave", bridge._normalize_browser_runtime(value))
 
     def test_unknown_defaults_to_chrome(self) -> None:
-        self.assertEqual("chrome", bridge._normalize_browser_runtime("firefox"))
+        self.assertEqual("chrome", bridge._normalize_browser_runtime("unknown"))
         self.assertEqual("chrome", bridge._normalize_browser_runtime(""))
         self.assertEqual("chrome", bridge._normalize_browser_runtime(None))
 
@@ -513,7 +513,7 @@ class BrowserProcessManagerSpawnTests(unittest.TestCase):
                 patch.object(bridge, "_elevate_chrome_priority"),
                 patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
             ):
-                pm._start_browser_choice("chrome", "dummy_browser.exe")
+                pm._start_browser_choice("chrome", "placeholder_browser.exe")
 
                 mock_popen.assert_called_once()
                 _, kwargs = mock_popen.call_args

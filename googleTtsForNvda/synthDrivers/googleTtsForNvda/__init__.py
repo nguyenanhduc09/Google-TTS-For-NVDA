@@ -54,6 +54,9 @@ from .language_profiles import (
     LANGUAGE_WORD_RE as _LANGUAGE_WORD_RE,
 )
 from .language_profiles import (
+    has_language_words as _has_language_words,
+)
+from .language_profiles import (
     language_token_signal as _language_token_signal,
 )
 from .language_profiles import (
@@ -214,6 +217,15 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             return True
         return super().isSupported(settingID)
 
+    def languageIsSupported(self, lang: str | None = None, *args: Any, **kwargs: Any) -> bool:
+        if lang is None:
+            return True
+        if self._auto_language_detection_enabled():
+            candidates = self._auto_language_candidates()
+            if candidates:
+                return bool(self._auto_language_candidate_for_language(lang, candidates))
+        return bool(self._speakers_for_language(lang))
+
     @classmethod
     def check(cls) -> bool:
         # Keep the driver visible; runtime dependencies are validated when selected.
@@ -305,6 +317,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         self._pitch = 50
         self._volume = 100
         self._pauseMode = _PAUSE_MODE_DO_NOT_SHORTEN
+        self._isPaused = False
         self._warmupThread: threading.Thread | None = None
         self._warmupCancelEvent = threading.Event()
         self._warm_current_voice_async(delay=_PRELOAD_RESUME_DELAY_SECONDS)
@@ -525,6 +538,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             self._speechCondition.notify()
 
     def cancel(self, *args: Any, **kwargs: Any) -> None:
+        self._isPaused = False
         with self._speechCondition:
             if self._activeCancelEvent is not None:
                 self._activeCancelEvent.set()
@@ -538,6 +552,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             self._player.stop()
 
     def pause(self, switch: bool, *args: Any, **kwargs: Any) -> None:
+        self._isPaused = bool(switch)
         self._player.pause(switch)
 
     def _current_output_device(self) -> str:
@@ -597,6 +612,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             self._player.close()
         self._playerOutputDevice = outputDevice
         self._player = self._create_wave_player(outputDevice)
+        if self._isPaused:
+            with suppress(Exception):
+                self._player.pause(True)
 
     def _build_available_voices(self) -> OrderedDict[str, VoiceInfo]:
         voices: OrderedDict[str, VoiceInfo] = OrderedDict()
@@ -754,6 +772,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         textCharCount = 0
         pendingIndexes: list[_IndexMarker] = []
         firstTextSegment = True
+        sawIndexSinceLastText = False
+        lastGroupProfileRate: int | None = None
         activeVoice = voice
         activeLanguage: str | None = None
         activeRateCommand: RateCommand | None = None
@@ -761,8 +781,24 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         activeVolumeCommand: VolumeCommand | None = None
         _inCharMode = False
 
+        def append_normalized_text(normalizedItem: str) -> None:
+            nonlocal textCharCount, sawIndexSinceLastText
+            if (
+                sawIndexSinceLastText
+                and not _inCharMode
+                and textParts
+                and textParts[-1]
+                and normalizedItem
+                and _TEXT_SEGMENTER.needs_index_boundary_space(textParts[-1][-1], normalizedItem[0])
+            ):
+                textParts.append(" ")
+                textCharCount += 1
+            sawIndexSinceLastText = False
+            textParts.append(normalizedItem)
+            textCharCount += len(normalizedItem)
+
         def flush_text() -> Iterator[tuple[str, Any]]:
-            nonlocal firstTextSegment, textCharCount, pendingIndexes
+            nonlocal firstTextSegment, textCharCount, pendingIndexes, sawIndexSinceLastText
             # When CharacterModeCommand is active (NVDA spelling mode), space out
             # individual characters so the browser TTS engine pronounces each one
             # distinctly — mimicking the SSML <say-as interpret-as="characters">
@@ -770,6 +806,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             rawText = " ".join(textParts) if _inCharMode else "".join(textParts)
             textParts.clear()
             textCharCount = 0
+            sawIndexSinceLastText = False
             sanitizedText = self._sanitize_speech_text(rawText)
             leftTrimmed = len(sanitizedText) - len(sanitizedText.lstrip())
             text = sanitizedText.strip()
@@ -789,7 +826,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             def flush_grouped_segments(
                 pauseShorteningMode: str = _PAUSE_MODE_DO_NOT_SHORTEN,
             ) -> Iterator[tuple[str, Any]]:
-                nonlocal firstTextSegment
+                nonlocal firstTextSegment, lastGroupProfileRate
                 if not groupedSegments:
                     return
                 rawSegments = [segment for segment, _segmentIndexes in groupedSegments]
@@ -812,6 +849,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     pitch,
                     volume,
                 )
+                lastGroupProfileRate = groupProfile["rate"]
                 groupRate = self._apply_prosody_command(groupProfile["rate"], activeRateCommand)
                 groupPitch = self._apply_prosody_command(groupProfile["pitch"], activePitchCommand)
                 groupVolume = self._apply_prosody_command(groupProfile["volume"], activeVolumeCommand)
@@ -838,7 +876,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     ):
                         yield from flush_grouped_segments(
                             _PAUSE_MODE_SHORTEN_ALL
-                            if isSentenceBoundary and pauseMode == _PAUSE_MODE_SHORTEN_ALL
+                            if pauseMode == _PAUSE_MODE_SHORTEN_ALL
                             else _PAUSE_MODE_DO_NOT_SHORTEN,
                         )
                         yield (
@@ -858,20 +896,37 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 return
             itemType = type(item)
             if itemType is str:
-                textParts.append(item)
-                textCharCount += len(item)
+                append_normalized_text(_normalize_mathematical_alphanumeric(item))
             elif itemType is BreakCommand:
                 yield from flush_text()
                 if cancelEvent.is_set():
                     return
                 breakMs = max(0, int(item.time))
-                if breakMs > 0 and rate > 0:
-                    breakMs = int(breakMs * _break_rate_factor(rate))
+                if breakMs > 0:
+                    baseBreakRate = (
+                        lastGroupProfileRate
+                        if lastGroupProfileRate is not None
+                        else self._auto_detect_profile_for_text(
+                            "",
+                            activeVoice,
+                            activeLanguage,
+                            voice,
+                            rate,
+                            rateBoost,
+                            pitch,
+                            volume,
+                        )["rate"]
+                    )
+                    effectiveBreakRate = self._apply_prosody_command(baseBreakRate, activeRateCommand)
+                    if effectiveBreakRate > 0:
+                        breakMs = int(breakMs * _break_rate_factor(effectiveBreakRate))
                 yield ("break", breakMs)
             elif itemType is CharacterModeCommand:
                 _inCharMode = bool(item.state)
             elif itemType is IndexCommand:
                 pendingIndexes.append((item.index, textCharCount))
+                if textParts:
+                    sawIndexSinceLastText = True
             elif itemType is LangChangeCommand:
                 if not self._auto_language_detection_enabled():
                     continue
@@ -881,14 +936,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 yield from flush_text()
                 if cancelEvent.is_set():
                     return
+                lastGroupProfileRate = None
                 activeLanguage = googleLanguage if isinstance(googleLanguage, str) else None
                 activeVoice = self._voice_for_language(activeLanguage, voice)
             elif itemType is PhonemeCommand:
                 # Browser TTS does not support IPA phoneme input.
                 # Fall back to the alternate text if available.
                 if item.text:
-                    textParts.append(item.text)
-                    textCharCount += len(item.text)
+                    append_normalized_text(_normalize_mathematical_alphanumeric(item.text))
             elif itemType is RateCommand:
                 yield from flush_text()
                 if cancelEvent.is_set():
@@ -913,8 +968,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             value = 50
         if command is not None:
             try:
-                offset = int(getattr(command, "_offset", 0))
-                multiplier = float(getattr(command, "_multiplier", 1))
+                rawOffset = getattr(command, "_offset", None)
+                if rawOffset is None:
+                    rawOffset = getattr(command, "offset", 0)
+                rawMultiplier = getattr(command, "_multiplier", None)
+                if rawMultiplier is None:
+                    rawMultiplier = getattr(command, "multiplier", 1)
+                offset = int(rawOffset)
+                multiplier = float(rawMultiplier)
                 if offset:
                     value += offset
                 elif multiplier != 1:
@@ -925,7 +986,16 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
     def _is_prosody_reset_command(self, command: Any) -> bool:
         try:
-            return int(getattr(command, "_offset", 0)) == 0 and float(getattr(command, "_multiplier", 1)) == 1
+            rawOffset = getattr(command, "_offset", None)
+            rawMultiplier = getattr(command, "_multiplier", None)
+            if rawOffset is not None or rawMultiplier is not None:
+                return int(0 if rawOffset is None else rawOffset) == 0 and (
+                    float(1 if rawMultiplier is None else rawMultiplier) == 1
+                )
+            isDefault = getattr(command, "isDefault", None)
+            if isinstance(isDefault, bool):
+                return isDefault
+            return int(getattr(command, "offset", 0)) == 0 and float(getattr(command, "multiplier", 1)) == 1
         except (TypeError, ValueError):
             return False
 
@@ -998,6 +1068,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         try:
             self._ensure_current_output_device()
             self._audioChunksSinceDeviceCheck = 0
+            lastEffectiveRate = rate
             for kind, payload in self._iter_speech_chunks(
                 speechSequence,
                 voice,
@@ -1012,6 +1083,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     return
                 if kind == "text":
                     text, options, indexes, hiddenSegments, pauseShorteningMode = payload
+                    try:
+                        lastEffectiveRate = int(options.get("nvdaRate", rate))
+                    except (TypeError, ValueError):
+                        lastEffectiveRate = rate
                     self._speak_text(
                         text,
                         options,
@@ -1026,15 +1101,15 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     self._sync_player()
                     if not cancelEvent.is_set():
                         synthIndexReached.notify(synth=self, index=payload)
-            if not cancelEvent.is_set():
-                self._finish_request_audio()
             if (
                 not cancelEvent.is_set()
                 and pauseMode in (_PAUSE_MODE_SHORTEN_END_ONLY, _PAUSE_MODE_SHORTEN_ALL)
-                and rate > 0
+                and lastEffectiveRate > 0
                 and sum(len(item) for item in speechSequence if isinstance(item, str)) > 40
             ):
-                self._feed_silence(int(_END_OF_UTTERANCE_PAUSE_MS * _end_of_utterance_rate_factor(rate)))
+                self._feed_silence(int(_END_OF_UTTERANCE_PAUSE_MS * _end_of_utterance_rate_factor(lastEffectiveRate)))
+            if not cancelEvent.is_set():
+                self._finish_request_audio()
             if not cancelEvent.is_set():
                 synthDoneSpeaking.notify(synth=self)
                 self._consecutiveRuntimeErrors = 0
@@ -1229,7 +1304,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         segmentAudioParts: list[bytes] = []
         completedSegmentAudio: list[bytes] = []
         collectSegmentAudio = any(key is not None for key in segmentCacheKeys)
-        chromeRate = float(options.get("rate", 1))
+        chromeRate = float(options.get("artificialRate") or options.get("rate", 1))
         if chromeRate <= 1.175:
             keepSilenceMs = int(45 - (chromeRate - 0.35) * 20 / 0.825)
         else:
@@ -1710,11 +1785,13 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 return profile
         return {}
 
-    def _profile_int(self, value: Any, default: int) -> int:
+    def _profile_int(self, value: Any, default: int, minimum: int = 0, maximum: int = 100) -> int:
+        if isinstance(value, bool):
+            return max(minimum, min(maximum, int(default)))
         try:
-            return max(0, min(100, int(value)))
+            return max(minimum, min(maximum, int(value)))
         except (TypeError, ValueError):
-            return max(0, min(100, int(default)))
+            return max(minimum, min(maximum, int(default)))
 
     def _profile_bool(self, value: Any, default: bool = False) -> bool:
         if isinstance(value, str):
@@ -1790,6 +1867,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         )
         if cldLanguage is not None:
             return cldLanguage
+        if not _has_language_words(text):
+            return None
         candidateByRoot: dict[str, str] = {}
         for language in candidateLanguages:
             candidateByRoot.setdefault(self._language_root(language), language)
@@ -2074,6 +2153,14 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         thread.start()
 
     def _get_language(self) -> str:
+        if self._auto_language_detection_enabled():
+            candidateLanguages = self._auto_language_candidates()
+            if len(candidateLanguages) == 1:
+                return language_utils.resolve_nvda_locale(candidateLanguages[0])
+            if candidateLanguages:
+                preferredLanguage = self._auto_language_preferred(candidateLanguages, self.__voice)
+                if preferredLanguage:
+                    return language_utils.resolve_nvda_locale(preferredLanguage)
         return language_utils.resolve_nvda_locale(self.__voice)
 
     def _nvda_locale_exists(self, locale: str) -> bool:

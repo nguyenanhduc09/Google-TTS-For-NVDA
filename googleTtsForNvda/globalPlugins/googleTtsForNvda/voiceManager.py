@@ -1294,24 +1294,34 @@ class VoiceManagerDialog(nvdaControls.DPIScaledDialog):
         self._refresh_buttons()
         self.set_status(busyMessage, 0, announce=True)
 
+        def safe_done(result: object) -> None:
+            try:
+                done(result)
+            except RuntimeError:
+                log.debug("Ignoring VoiceManagerDialog callback after dialog destruction.", exc_info=True)
+
         def run() -> None:
             try:
                 result = work()
             except Exception as exc:
                 result = exc
-            wx.CallAfter(done, result)
+            wx.CallAfter(safe_done, result)
 
         threading.Thread(target=run, name="googleTtsForNvda.voiceManager", daemon=True).start()
 
     def set_status(self, message: str, percent: int | None = None, announce: bool = False) -> None:
-        self.statusText.SetLabel(message)
-        if percent is not None:
-            value = max(0, min(100, int(percent)))
-            self.progressGauge.SetValue(value)
-            if 25 <= value < 100 and value // 25 > self._lastProgressAnnouncement // 25:
-                self._lastProgressAnnouncement = value
-                announce = True
-        self.Layout()
+        try:
+            self.statusText.SetLabel(message)
+            if percent is not None:
+                value = max(0, min(100, int(percent)))
+                self.progressGauge.SetValue(value)
+                if 25 <= value < 100 and value // 25 > self._lastProgressAnnouncement // 25:
+                    self._lastProgressAnnouncement = value
+                    announce = True
+            self.Layout()
+        except RuntimeError:
+            log.debug("Ignoring VoiceManagerDialog status update after dialog destruction.", exc_info=True)
+            return
         if announce:
             ui.message(message)
 

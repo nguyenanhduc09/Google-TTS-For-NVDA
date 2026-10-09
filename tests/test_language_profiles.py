@@ -38,13 +38,19 @@ class LanguageUtilsTests(unittest.TestCase):
 
     def test_get_nvda_locale_special_cases(self) -> None:
         self.assertEqual(self.language_utils.get_nvda_locale_for_language("cmn-CN"), "zh_CN")
+        self.assertEqual(self.language_utils.get_nvda_locale_for_language("cmn-cn"), "zh_CN")
         self.assertEqual(self.language_utils.get_nvda_locale_for_language("cmn-TW"), "zh_TW")
+        self.assertEqual(self.language_utils.get_nvda_locale_for_language("cmn-tw"), "zh_TW")
         self.assertEqual(self.language_utils.get_nvda_locale_for_language("yue-HK"), "zh_HK")
+        self.assertEqual(self.language_utils.get_nvda_locale_for_language("yue-hk"), "zh_HK")
         self.assertEqual(self.language_utils.get_nvda_locale_for_language("ar-XA"), "ar")
+        self.assertEqual(self.language_utils.get_nvda_locale_for_language("ar-xa"), "ar")
         self.assertEqual(self.language_utils.get_nvda_locale_for_language("fil-PH"), "tl")
+        self.assertEqual(self.language_utils.get_nvda_locale_for_language("fil-ph"), "tl")
 
     def test_get_nvda_locale_prefixes(self) -> None:
         self.assertEqual(self.language_utils.get_nvda_locale_for_language("cmn-Hans-CN"), "zh_CN")
+        self.assertEqual(self.language_utils.get_nvda_locale_for_language("cmn-Hant-TW"), "zh_TW")
         self.assertEqual(self.language_utils.get_nvda_locale_for_language("yue-Hant-HK"), "zh_HK")
 
     def test_resolve_nvda_locale_fallback_to_en(self) -> None:
@@ -212,7 +218,7 @@ class LanguageProfilesTests(unittest.TestCase):
         cls.unicode_data = load_driver_module("unicode_data")
 
     def test_normalize_mathematical_alphanumerics_and_letterlike_symbols(self) -> None:
-        """Mathematical alphanumeric symbols, Greek/Arabic/Hebrew math, and letterlike constants normalize cleanly."""
+        """Mathematical alphanumeric symbols, Greek/Arabic/Hebrew math, and letterlike constants normalize as expected."""
         samples = [
             ("\U0001d407\U0001d41e\U0001d425\U0001d425\U0001d428", "Hello"),  # Bold
             ("\U0001d4b3\U0001d4b4\U0001d4b5", "XYZ"),  # Italic
@@ -233,7 +239,7 @@ class LanguageProfilesTests(unittest.TestCase):
                 self.assertEqual(expected, self.language_profiles.normalize_mathematical_alphanumeric(raw))
 
     def test_normalize_enclosed_small_capitals_and_compat_forms(self) -> None:
-        """Phonetic small capitals, enclosed/squared letters, CLDR fallbacks, fractions, and ligatures normalize cleanly."""
+        """Phonetic small capitals, enclosed/squared letters, CLDR fallbacks, fractions, and ligatures normalize as expected."""
         samples = [
             ("\u029c\u1d07\u029f\u029f\u1d0f \u029f\u1d00\u0274\u0262", "hello lang"),  # Phonetic Small Capitals
             ("ʜᴇʟʟᴏ ᴡᴏʀʟᴅ", "hello world"),  # Latin Small Capitals
@@ -246,7 +252,8 @@ class LanguageProfilesTests(unittest.TestCase):
             ("E=mc² H₂O x³ 10⁴", "E=mc2 H2O x3 104"),  # Superscripts & subscripts
             ("Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ", "I II III IV V"),  # Roman numerals
             ("ﬁrst ﬂight", "first flight"),  # Latin ligatures
-            ("ﾜｰﾙﾄﾞ", "ワールド"),  # Halfwidth Katakana
+            ("ﾜｰﾙﾄﾞ", "ワールド"),  # Halfwidth Katakana composed to NFC
+            ("thê\u0301 hê\u0323", "thế hệ"),  # Decomposed NFD composed to NFC
             ("Xin\u00a0chào\u202fthế\u3000giới\ufeff", "Xin chào thế giới"),  # NBSP, NNBSP, ideographic space, BOM
         ]
         for raw, expected in samples:
@@ -259,7 +266,7 @@ class LanguageProfilesTests(unittest.TestCase):
             with self.subTest(num=token):
                 self.assertTrue(self.language_profiles.is_number_token(token))
 
-        # Official UCD 17.0 Category Sc currency symbols
+        # UCD 17.0 Category Sc currency symbols
         for token in (
             "$100",
             "100.000₫",
@@ -310,8 +317,22 @@ class LanguageProfilesTests(unittest.TestCase):
         self.assertFalse(self.language_profiles.is_symbol_or_emoji_token("Word123"))
 
     def test_detect_language_numbers_and_symbols_use_preferred_language(self) -> None:
-        """Pure numbers, currencies, and symbols route strictly to preferredLanguage."""
+        """Pure numbers, currencies, and symbols return None without preferredLanguage or fallback to preferredLanguage."""
         candidates = ["vi-VN", "en-US", "zh-CN"]
+        self.assertIsNone(
+            self.language_detector.detect_language(
+                "123,456.78",
+                candidates,
+                preferredLanguage=None,
+            )
+        )
+        self.assertIsNone(
+            self.language_detector.detect_language(
+                "🎉🚀🔥",
+                candidates,
+                preferredLanguage=None,
+            )
+        )
         detected_num = self.language_detector.detect_language(
             "123,456.78",
             candidates,
@@ -385,7 +406,7 @@ class LanguageProfilesTests(unittest.TestCase):
         candidates = ["vi-VN", "en-US", "zh-CN", "ja-JP", "ru-RU"]
         test_strings = [
             "Xin chào Peter Parker, hôm nay là 25/12/2026. Chúc mừng năm mới!",
-            "Chào bạn, hãy xem video trên YouTube và ghé thăm Tokyo 東京 nhé.",
+            "Chào bạn, hãy xem video trực tuyến ở London và ghé thăm Tokyo 東京 nhé.",
             "Tập hợp số tự nhiên là ℕ và số thực là ℝ.",
             "123 + 456 = 579. Kết quả rất tốt!",
             "Здравствуйте! Hello world! Chào buổi sáng!",
@@ -455,17 +476,26 @@ class LanguageProfilesTests(unittest.TestCase):
         self.assertFalse(any(lang == "hi-IN" for _, lang in mr_first))
 
     def test_segment_mixed_text_numbers_currencies_units_and_time_clustering(self) -> None:
-        """Numbers clustered with currency, measurement units, time, and ranges are routed to preferredLanguage."""
+        """Numbers clustered with currency, measurement units, time, and ranges follow the active clause language."""
         candidates = ["vi-VN", "en-US"]
         test_cases = [
-            ("Hello world 12345 🎉 have a nice day", ["12345", "🎉"]),
-            ("Tôi có 50kg gạo giá 100.000 ₫ lúc 8h30.", ["50kg", "100.000 ₫", "8h30"]),
-            ("Chạy xe 100km/h từ 10 - 20 km mất 15 phút, nhiệt độ 37 °C.", ["100km/h", "10 - 20 km", "37 °C"]),
-            ("Máy tính có 16 GB RAM, ổ cứng 1 TB, màn hình 24px, chip 3.5 GHz.", ["16 GB", "1 TB", "24px", "3.5 GHz"]),
-            ("Giảm giá 10-20% cho đơn hàng trên 500 USD hoặc 2.000.000 ₫.", ["10-20%", "500 USD", "2.000.000 ₫"]),
-            ("Màn hình 1920x1080 tiêu thụ 500 kWh điện lúc 14:30:15.", ["1920x1080", "500 kWh", "14:30:15"]),
+            ("Hello world 12345 🎉 have a nice day", ["12345", "🎉"], "en-US"),
+            ("Pricing is 500 USD for 16 GB RAM at 14:30.", ["500 USD", "16 GB", "14:30"], "en-US"),
+            ("Tôi có 50kg gạo giá 100.000 ₫ lúc 8h30.", ["50kg", "100.000 ₫", "8h30"], "vi-VN"),
+            ("Chạy xe 100km/h từ 10 - 20 km mất 15 phút, nhiệt độ 37 °C.", ["100km/h", "10 - 20 km", "37 °C"], "vi-VN"),
+            (
+                "Máy tính có 16 GB RAM, ổ cứng 1 TB, màn hình 24px, xung nhịp 3.5 GHz.",
+                ["16 GB", "1 TB", "24px", "3.5 GHz"],
+                "vi-VN",
+            ),
+            (
+                "Giảm giá 10-20% cho đơn hàng trên 500 USD hoặc 2.000.000 ₫.",
+                ["10-20%", "500 USD", "2.000.000 ₫"],
+                "vi-VN",
+            ),
+            ("Màn hình 1920x1080 tiêu thụ 500 kWh điện lúc 14:30:15.", ["1920x1080", "500 kWh", "14:30:15"], "vi-VN"),
         ]
-        for sentence, expected_clusters in test_cases:
+        for sentence, expected_clusters, expected_lang in test_cases:
             with self.subTest(sentence=sentence):
                 segments = self.language_profiles.segment_mixed_text(
                     sentence,
@@ -477,7 +507,11 @@ class LanguageProfilesTests(unittest.TestCase):
                 for cluster in expected_clusters:
                     matching_segs = [(text, lang) for text, lang in segments if cluster in text]
                     self.assertTrue(bool(matching_segs), f"Cluster {cluster} not found in segments")
-                    self.assertEqual("vi-VN", matching_segs[0][1], f"Cluster {cluster} not assigned to vi-VN")
+                    self.assertEqual(
+                        expected_lang,
+                        matching_segs[0][1],
+                        f"Cluster {cluster} not assigned to {expected_lang}",
+                    )
 
     def test_intact_emoji_sequences_and_keycaps_preservation(self) -> None:
         """Emoji keycaps, ZWJ sequences, skin tone modifiers, and flag pairs are preserved intact."""
@@ -503,7 +537,7 @@ class LanguageProfilesTests(unittest.TestCase):
                         self.assertTrue(bool(matching_segs), f"Emoji {keycap} was broken during segmentation")
 
     def test_speech_sanitize_table_inherits_unicode_normalization_table(self) -> None:
-        """_SPEECH_SANITIZE_TABLE inherits whitespace from official Unicode NORMALIZATION_TABLE."""
+        """_SPEECH_SANITIZE_TABLE inherits whitespace from Unicode NORMALIZATION_TABLE."""
         sanitize_table = self.speech_processing._SPEECH_SANITIZE_TABLE
         norm_table = self.unicode_data.NORMALIZATION_TABLE
 
@@ -568,6 +602,534 @@ class LanguageProfilesTests(unittest.TestCase):
         self.assertGreater(zwj_index, 0)
         extended = segmenter._extend_cut_over_combining_marks(text, zwj_index, len(text))
         self.assertGreater(extended, zwj_index)
+
+    def test_single_character_reading_detect_language(self) -> None:
+        """Single letters, numbers, symbols, and punctuation route to preferredLanguage in detect_language."""
+        candidates = ["vi-VN", "en-US", "ja-JP"]
+        preferred = "vi-VN"
+
+        # Alphabet letters (ASCII Latin without diacritics)
+        for char in ("a", "b", "c", "d", "e", "f", "g", "w", "z", "A", "B", "Z", "W"):
+            with self.subTest(char=char):
+                detected = self.language_detector.detect_language(
+                    char,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual(preferred, detected)
+
+        # Digits, symbols, and punctuation
+        for char in ("1", "9", ",", ".", "!", "?", "-", "—", "“", "”", "@", "#", "$", "★"):
+            with self.subTest(symbol=char):
+                detected = self.language_detector.detect_language(
+                    char,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual(preferred, detected)
+
+        # Single non-Latin character with matching candidate routes to that candidate
+        detected_ja = self.language_detector.detect_language(
+            "あ",
+            candidates,
+            preferredLanguage=preferred,
+        )
+        self.assertEqual("ja-JP", detected_ja)
+
+    def test_single_character_reading_segment_mixed_text(self) -> None:
+        """Single character inputs in segment_mixed_text route directly to preferredLanguage."""
+        candidates = ["vi-VN", "en-US", "ja-JP"]
+        preferred = "vi-VN"
+
+        for char in ("a", "b", "c", "d", "w", "z", "A", "Z", "1", ",", "—", "  a  "):
+            with self.subTest(char=char):
+                segments = self.language_profiles.segment_mixed_text(
+                    char,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual(1, len(segments))
+                self.assertEqual(char, segments[0][0])
+                self.assertEqual(preferred, segments[0][1])
+
+        # Single non-Latin character routes to its candidate language
+        segments_ja = self.language_profiles.segment_mixed_text(
+            "あ",
+            candidates,
+            preferredLanguage=preferred,
+        )
+        self.assertEqual([("あ", "ja-JP")], segments_ja)
+
+    def test_punctuation_kept_in_flow_with_sentence(self) -> None:
+        """Punctuation (dashes, quotes, ellipses, commas) stays in flow with sentence without being split."""
+        candidates = ["vi-VN", "en-US"]
+        preferred = "vi-VN"
+
+        # English sentence with dashes, quotes, and ellipsis must remain a single English segment
+        english_sentence = "She said: “Wait — don't go yet…”"
+        segments = self.language_profiles.segment_mixed_text(
+            english_sentence,
+            candidates,
+            preferredLanguage=preferred,
+        )
+        self.assertEqual(1, len(segments))
+        expected_english = self.language_profiles.normalize_mathematical_alphanumeric(english_sentence)
+        self.assertEqual(expected_english, segments[0][0])
+        self.assertEqual("en-US", segments[0][1])
+
+        # Leading quotes and parentheses attach to the subsequent sentence language
+        for text in ("“Hello world”", "(Important notice)", "— Let's start now!"):
+            with self.subTest(leading_punct=text):
+                segs = self.language_profiles.segment_mixed_text(
+                    text,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual(1, len(segs))
+                self.assertEqual(text, segs[0][0])
+                self.assertEqual("en-US", segs[0][1])
+
+        # Mixed sentence keeps punctuation attached to its respective clause
+        mixed_text = "Chào bạn, welcome to our store!"
+        mixed_segs = self.language_profiles.segment_mixed_text(
+            mixed_text,
+            candidates,
+            preferredLanguage=preferred,
+        )
+        self.assertEqual([("Chào bạn, ", "vi-VN"), ("welcome to our store!", "en-US")], mixed_segs)
+
+    def test_alphabet_spelling_in_clause(self) -> None:
+        """Sequences of single Latin letters (alphabet spelling) route to preferredLanguage."""
+        candidates = ["vi-VN", "en-US"]
+        preferred = "vi-VN"
+
+        alphabet_samples = ["a b c d", "x y z", "a, b, c, d"]
+        for sample in alphabet_samples:
+            with self.subTest(alphabet=sample):
+                segments = self.language_profiles.segment_mixed_text(
+                    sample,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual(1, len(segments))
+                self.assertEqual(sample, segments[0][0])
+                self.assertEqual(preferred, segments[0][1])
+
+    def test_symbols_and_bullets_in_sentence_context_vs_single_character(self) -> None:
+        """Bullets (•, ◦) and symbols (+, =) in sentences attach to the sentence language while single chars use preferredLanguage."""
+        candidates = ["vi-VN", "en-US"]
+        preferred = "vi-VN"
+
+        english_sentences = (
+            "• For all systems, updates are automatic.",
+            "◦ Both versions of the system are now supported.",
+            "Hello + world = peace!",
+        )
+        for text in english_sentences:
+            with self.subTest(en_sentence=text):
+                segs = self.language_profiles.segment_mixed_text(
+                    text,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual([(text, "en-US")], segs)
+                self.assertEqual(
+                    "en-US",
+                    self.language_detector.detect_language(text, candidates, preferredLanguage=preferred),
+                )
+
+        vietnamese_sentences = (
+            "• Đối với hệ thống hiện tại, bản cập nhật đã sẵn sàng.",
+            "◦ Lưu ý rằng phiên bản hiện tại hỗ trợ đầy đủ.",
+            "Xin chào + thế giới = hòa bình!",
+        )
+        for text in vietnamese_sentences:
+            with self.subTest(vi_sentence=text):
+                segs = self.language_profiles.segment_mixed_text(
+                    text,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual([(text, "vi-VN")], segs)
+                self.assertEqual(
+                    "vi-VN",
+                    self.language_detector.detect_language(text, candidates, preferredLanguage=preferred),
+                )
+
+        for single_item in ("•", "◦", "+", "=", "a", "z", "🎉🚀🔥"):
+            with self.subTest(single_item=single_item):
+                segs = self.language_profiles.segment_mixed_text(
+                    single_item,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual([(single_item, preferred)], segs)
+                self.assertEqual(
+                    preferred,
+                    self.language_detector.detect_language(single_item, candidates, preferredLanguage=preferred),
+                )
+
+    def test_detect_language_numeric_segments_with_punctuation_and_spelling_clauses(self) -> None:
+        """Spelling clauses route to preferredLanguage while numeric/symbol segments follow active spoken language."""
+        candidates = ["vi-VN", "en-US"]
+        preferred = "vi-VN"
+
+        for spelling in ("a, b, c, d", "x y z", "a"):
+            with self.subTest(spelling=spelling):
+                self.assertTrue(self.language_profiles.is_spelling_only_text(spelling))
+                self.assertEqual(
+                    preferred,
+                    self.language_detector.detect_language(spelling, candidates, preferredLanguage=preferred),
+                )
+                self.assertEqual(
+                    [(spelling, preferred)],
+                    self.language_profiles.segment_mixed_text(
+                        spelling,
+                        candidates,
+                        preferredLanguage=preferred,
+                        defaultLanguage="en-US",
+                    ),
+                )
+
+        for numeric_or_sym in ("1 GB.", "16 GB, ", "10 - 20 km.", "12345 🎉 "):
+            with self.subTest(numeric_or_sym=numeric_or_sym):
+                self.assertFalse(self.language_profiles.is_spelling_only_text(numeric_or_sym))
+                self.assertFalse(self.language_profiles.has_language_words(numeric_or_sym))
+                self.assertIsNone(
+                    self.language_detector.detect_language(numeric_or_sym, candidates, preferredLanguage=None),
+                )
+                self.assertEqual(
+                    preferred,
+                    self.language_detector.detect_language(numeric_or_sym, candidates, preferredLanguage=preferred),
+                )
+                self.assertEqual(
+                    [(numeric_or_sym, "en-US")],
+                    self.language_profiles.segment_mixed_text(
+                        numeric_or_sym,
+                        candidates,
+                        preferredLanguage=preferred,
+                        defaultLanguage="en-US",
+                    ),
+                )
+
+        for word_clause in ("◦ Both items", "• Memory: ", "Hello world"):
+            with self.subTest(word_clause=word_clause):
+                self.assertFalse(self.language_profiles.is_spelling_only_text(word_clause))
+                self.assertTrue(self.language_profiles.has_language_words(word_clause))
+                self.assertEqual(
+                    "en-US",
+                    self.language_detector.detect_language(word_clause, candidates, preferredLanguage=preferred),
+                )
+
+    def test_vietnamese_clauses_keep_latin_words_and_nfd_diacritics_intact(self) -> None:
+        """Vietnamese clauses stay unified without splitting Latin words, non-diacritic words, or NFD accents."""
+        import unicodedata
+
+        candidates = ["en-US", "vi-VN"]
+        preferred = "vi-VN"
+
+        vi_sentences = (
+            "Đây là máy tính model thế hệ 11",
+            "Đây la\u0300 ma\u0301y ti\u0301nh model thê\u0301 hê\u0323 11",
+            "Trong trường hợp này, thành phố Hồ Chí Minh rất đẹp.",
+            "Theo thông báo mới, giao diện người dùng đã sẵn sàng.",
+            "Tri\u0300nh soa\u0323n văn ba\u0309n",
+            "Tri\u0300nh soa\u0323n",
+            "thê\u0301 hê\u0323 11",
+        )
+        for text in vi_sentences:
+            with self.subTest(vi_text=text):
+                self.assertTrue(self.language_profiles.has_vietnamese_diacritics(text))
+                segments = self.language_profiles.segment_mixed_text(
+                    text,
+                    candidates,
+                    preferredLanguage=preferred,
+                )
+                self.assertEqual([(unicodedata.normalize("NFC", text), "vi-VN")], segments)
+                self.assertEqual(
+                    "vi-VN",
+                    self.language_detector.detect_language(text, candidates, preferredLanguage=preferred),
+                )
+
+    def test_single_grapheme_and_combining_mark_scripts(self) -> None:
+        """Single grapheme tokens with combining marks and Indic/Thai vowel signs are tokenized intact."""
+        for single in ("a", "ế", "e\u0302\u0301", "क\u0947", "ก\u0e49"):
+            with self.subTest(single=single):
+                self.assertTrue(self.language_profiles.is_single_grapheme_token(single))
+
+        for multi in ("ab", "thế", "नमस्ते", "สวัสดี", ""):
+            with self.subTest(multi=multi):
+                self.assertFalse(self.language_profiles.is_single_grapheme_token(multi))
+
+        # Indic and Thai words with Mn/Mc combining vowel marks stay single word tokens
+        self.assertEqual(["नमस्ते"], self.language_profiles.LANGUAGE_WORD_RE.findall("नमस्ते"))
+        self.assertEqual(["สวัสดี"], self.language_profiles.LANGUAGE_WORD_RE.findall("สวัสดี"))
+        self.assertEqual(
+            [("Hello ", "en-US"), ("नमस्ते", "hi-IN")],
+            self.language_profiles.segment_mixed_text(
+                "Hello नमस्ते",
+                ["en-US", "hi-IN"],
+                preferredLanguage="en-US",
+            ),
+        )
+        self.assertEqual(
+            [("Hello ", "en-US"), ("สวัสดี", "th-TH")],
+            self.language_profiles.segment_mixed_text(
+                "Hello สวัสดี",
+                ["en-US", "th-TH"],
+                preferredLanguage="en-US",
+            ),
+        )
+
+    def test_whitespace_only_and_multi_clause_single_letter_word_handling(self) -> None:
+        """Whitespace-only segments inherit active language and multi-clause sentences keep single-letter words in flow."""
+        candidates = ["en-US", "vi-VN"]
+        preferred = "vi-VN"
+
+        self.assertEqual(
+            [(" ", "vi-VN")],
+            self.language_profiles.segment_mixed_text(
+                " ",
+                candidates,
+                preferredLanguage=preferred,
+                defaultLanguage="vi-VN",
+            ),
+        )
+        self.assertEqual(
+            [(" ", "vi-VN")],
+            self.language_profiles.segment_mixed_text(
+                " ",
+                candidates,
+                preferredLanguage=preferred,
+            ),
+        )
+
+        for english_text in ("I, Peter, agree with this.", "A: Introduction to Python"):
+            with self.subTest(english_text=english_text):
+                self.assertEqual(
+                    [(english_text, "en-US")],
+                    self.language_profiles.segment_mixed_text(
+                        english_text,
+                        candidates,
+                        preferredLanguage=preferred,
+                    ),
+                )
+
+    def test_case_sensitive_currency_and_unit_matching(self) -> None:
+        """ISO 4217 currencies and CLDR unit symbols match case-sensitively so prose words are not swallowed."""
+        for valid_cluster in ("5 mA", "5 ALL", "1 TRY", "500 USD", "100 bps", "500 mAh", "5‰", "10‱"):
+            with self.subTest(valid_cluster=valid_cluster):
+                self.assertTrue(self.language_profiles.is_number_token(valid_cluster))
+
+        for prose_sequence in ("5 ma", "5 all", "1 try", "10 cup", "2 day"):
+            with self.subTest(prose_sequence=prose_sequence):
+                self.assertFalse(self.language_profiles.is_number_token(prose_sequence))
+
+    def test_cldr_latin_exemplar_disambiguation_and_han_routing(self) -> None:
+        """CLDR Latin exemplar characters and Han scripts disambiguate across catalog languages."""
+        latin_candidates = {"en", "de", "es", "pl", "tr", "is", "vi"}
+        self.assertEqual("de", self.language_profiles.latin_exemplar_signal("Straße", latin_candidates))
+        self.assertEqual("es", self.language_profiles.latin_exemplar_signal("España", latin_candidates))
+        self.assertEqual("pl", self.language_profiles.latin_exemplar_signal("Łódź", latin_candidates))
+        self.assertEqual("tr", self.language_profiles.latin_exemplar_signal("Güneş", {"en", "tr"}))
+        self.assertEqual("is", self.language_profiles.latin_exemplar_signal("Þórður", latin_candidates))
+        self.assertEqual("vi", self.language_profiles.latin_exemplar_signal("Việt", latin_candidates))
+
+        # Multi-Latin mixed segmentation using CLDR exemplars and CLD2
+        self.assertEqual(
+            "de-DE",
+            self.language_detector.detect_language(
+                "Große Straße in München",
+                ["en-US", "de-DE"],
+                preferredLanguage="en-US",
+            ),
+        )
+        self.assertEqual(
+            "pl-PL",
+            self.language_detector.detect_language(
+                "Zażółć gęślą jaźń",
+                ["en-US", "pl-PL"],
+                preferredLanguage="en-US",
+            ),
+        )
+        self.assertEqual(
+            "tr-TR",
+            self.language_detector.detect_language(
+                "Günaydın arkadaşlar",
+                ["en-US", "tr-TR"],
+                preferredLanguage="en-US",
+            ),
+        )
+
+        # Han disambiguation between Simplified (cmn-CN) and Traditional (cmn-TW)
+        han_candidates = ["en-US", "cmn-CN", "cmn-TW"]
+        self.assertEqual(
+            "cmn-CN",
+            self.language_detector.detect_language(
+                "欢迎来到北京，今天天气很好。",
+                han_candidates,
+                preferredLanguage="en-US",
+            ),
+        )
+        self.assertEqual(
+            "cmn-TW",
+            self.language_detector.detect_language(
+                "歡迎來到台北，今天天氣很好。",
+                han_candidates,
+                preferredLanguage="en-US",
+            ),
+        )
+
+    def test_catalog_language_aliases_match_symmetrically(self) -> None:
+        """All catalog language aliases (Konkani, Indonesian, Manipuri, Odia, Punjabi, Santali, Serbian) match."""
+        alias_pairs = (
+            ("kok-IN", "gom"),
+            ("id-ID", "in"),
+            ("mni-IN", "mni-Mtei"),
+            ("or-IN", "ory"),
+            ("pa-IN", "pan"),
+            ("sat-IN", "sat-Olck"),
+            ("sr-RS", "sr-Latn"),
+            ("sr-RS", "sr-Cyrl"),
+        )
+        for catalog_code, alias_code in alias_pairs:
+            with self.subTest(catalog_code=catalog_code, alias_code=alias_code):
+                self.assertTrue(self.language_detector.language_matches(catalog_code, alias_code))
+                self.assertEqual(
+                    catalog_code,
+                    self.language_detector._candidate_for_language(alias_code, [catalog_code, "en-US"]),
+                )
+
+    def test_pipe_and_spaced_dash_clause_breaks_and_email_domain_tokens(self) -> None:
+        """Pipe separators, spaced dashes, and email/domain/filename tokens segment at clause boundaries."""
+        candidates = ["vi-VN", "en-US"]
+        preferred = "vi-VN"
+
+        # Spaced hyphen-minus in window/document titles splits English and Vietnamese clauses
+        self.assertEqual(
+            [("NVDA 2026.2 User Guide - ", "en-US"), ("Trình duyệt", "vi-VN")],
+            self.language_profiles.segment_mixed_text(
+                "NVDA 2026.2 User Guide - Trình duyệt",
+                candidates,
+                preferredLanguage=preferred,
+            ),
+        )
+        self.assertEqual(
+            [("Trình duyệt - ", "vi-VN"), ("2026.2 User Guide", "en-US")],
+            self.language_profiles.segment_mixed_text(
+                "Trình duyệt - 2026.2 User Guide",
+                candidates,
+                preferredLanguage=preferred,
+            ),
+        )
+
+        # Unspaced hyphenated compounds stay unified in their clause
+        self.assertEqual(
+            [("Từ điển Việt-Mỹ mới", "vi-VN")],
+            self.language_profiles.segment_mixed_text(
+                "Từ điển Việt-Mỹ mới",
+                candidates,
+                preferredLanguage=preferred,
+            ),
+        )
+
+        # Pipe separators break clauses and email addresses remain intact without splitting mid-address
+        self.assertEqual(
+            [
+                ("Buổi5.9.10.2026.8h00.Lịch sử Việt Nam | ", "vi-VN"),
+                ("ORG | user123@mail.example.edu.vn | Online Meeting", "en-US"),
+            ],
+            self.language_profiles.segment_mixed_text(
+                "Buổi5.9.10.2026.8h00.Lịch sử Việt Nam | ORG | user123@mail.example.edu.vn | Online Meeting",
+                candidates,
+                preferredLanguage=preferred,
+            ),
+        )
+
+        # Email address and dotted filename embedded in a Vietnamese clause do not split the clause at internal dots
+        self.assertEqual(
+            [("Liên hệ user123@mail.example.edu.vn để biết thêm chi tiết.", "vi-VN")],
+            self.language_profiles.segment_mixed_text(
+                "Liên hệ user123@mail.example.edu.vn để biết thêm chi tiết.",
+                candidates,
+                preferredLanguage=preferred,
+            ),
+        )
+        self.assertEqual(
+            [("Mở tệp voices.json để đối chiếu danh sách.", "vi-VN")],
+            self.language_profiles.segment_mixed_text(
+                "Mở tệp voices.json để đối chiếu danh sách.",
+                candidates,
+                preferredLanguage=preferred,
+            ),
+        )
+
+    def test_cjk_fullwidth_and_greek_punctuation_preserved_across_normalization(self) -> None:
+        """CJK fullwidth punctuation and Greek question mark / ano teleia are preserved during normalization."""
+        cjk_text = "你好！今天天气怎么样？（很好）…‑"
+        self.assertEqual(cjk_text, self.language_profiles.normalize_mathematical_alphanumeric(cjk_text))
+
+        greek_text = "Πώς είσαι\u037e Καλά\u0387 ευχαριστώ."
+        self.assertEqual(greek_text, self.language_profiles.normalize_mathematical_alphanumeric(greek_text))
+
+    def test_arabic_urdu_numeric_separators_and_percent_signs(self) -> None:
+        """Arabic/Urdu numeric separators and prefix/suffix percent signs classify as numeric tokens."""
+        for valid_number in (
+            "١٬٢٣٤٫٥٦",
+            "12\u066b5",
+            "1\u066c000",
+            "٢٠٢٦\u060d١٠\u060d٠٩",
+            "٥٠\u066a",
+            "\u066a٥٠",
+            "%50",
+            "50\uff05",
+            "10\u0609",
+            "10\u060a",
+        ):
+            with self.subTest(valid_number=valid_number):
+                self.assertTrue(self.language_profiles.is_number_token(valid_number))
+
+    def test_script_specific_clause_breaks_and_word_internal_connectors(self) -> None:
+        """Script-specific clause punctuation breaks clauses and word-internal connectors stay inside word tokens."""
+        for punct in (
+            "،",
+            "؛",
+            "؟",
+            "۔",
+            "\u037e",
+            "\u0387",
+            "፣",
+            "፤",
+            "፥",
+            "፦",
+            "።",
+            "՝",
+            "՞",
+            "։",
+            "჻",
+            "។",
+            "៕",
+            "၊",
+            "။",
+            '"',
+            "«",
+            "»",
+        ):
+            with self.subTest(punct=punct):
+                chunks = [
+                    ("a", "SCRIPT_Latin"),
+                    (" ", "WHITE"),
+                    (punct, "PUNCT"),
+                    (" ", "WHITE"),
+                    ("b", "SCRIPT_Latin"),
+                ]
+                self.assertTrue(self.language_profiles._is_clause_break_chunk(chunks, 2))
+
+        for word in ("ארה״ב", "ג׳ורג׳", "תל־אביב", "l’homme", "self‑aware", "א·ב"):
+            with self.subTest(word=word):
+                self.assertEqual([word], self.language_profiles.LANGUAGE_WORD_RE.findall(word))
+                self.assertEqual([word], self.language_profiles._MIXED_TOKENIZER_RE.findall(word))
+                self.assertTrue(self.language_profiles.has_language_words(word))
 
 
 if __name__ == "__main__":

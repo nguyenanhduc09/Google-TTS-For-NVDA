@@ -74,7 +74,7 @@ class DirectoryChangeWatcherLifecycleTests(unittest.TestCase):
     """Verify start / stop lifecycle and basic callback invocation."""
 
     def test_start_stop_cycle(self) -> None:
-        """start() launches the thread, stop() joins it cleanly."""
+        """start() launches the thread, stop() joins it."""
         watcher_mod = load_driver_module("watcher")
         w = watcher_mod.DirectoryChangeWatcher(
             MagicMock(return_value=()),

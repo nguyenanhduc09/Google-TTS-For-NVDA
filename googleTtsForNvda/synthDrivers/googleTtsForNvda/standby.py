@@ -60,6 +60,8 @@ def keep_browser_runtime_ready_enabled() -> bool:
 
 
 def _profile_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return max(0, min(100, int(default)))
     try:
         return max(0, min(100, int(value)))
     except (TypeError, ValueError):
@@ -80,7 +82,7 @@ def _installed_catalog() -> VoiceCatalog | None:
 
 
 def _wasm_engine_signature() -> tuple[Any, ...]:
-    """Return a lightweight fingerprint of the WASM TTS engine directory.
+    """Return a fingerprint of the WASM TTS engine directory.
 
     Includes the pinned engine version, the engine directory modification time,
     and the catalog file modification time so that replacing the engine files
@@ -499,13 +501,14 @@ class _StandbyRuntimeManager:
 
     def refresh_async(self, reason: str = "", *, force: bool = True) -> None:
         bridgeToTerminate: ChromeTtsBridge | None = None
+        watcherToStop: DirectoryChangeWatcher | None = None
         with self._lock:
             if self._shutdown:
                 return
             if not keep_browser_runtime_ready_enabled() or self._synthActive:
                 self._generation += 1
                 bridgeToTerminate = self._clear_standby_locked(cancelWorker=True)
-                self._stop_watchers_locked()
+                watcherToStop = self._detach_watchers_locked()
                 workerAlive = self._worker is not None and self._worker.is_alive()
                 if workerAlive:
                     log.debug("Google TTS standby runtime refresh skipped while synth is active or disabled.")
@@ -519,7 +522,7 @@ class _StandbyRuntimeManager:
                 cancelEvent = threading.Event()
                 workerAlive = self._worker is not None and self._worker.is_alive()
                 self._cancel_current_worker_locked()
-                self._stop_watchers_locked()
+                watcherToStop = self._detach_watchers_locked()
                 if workerAlive:
                     # A cancelled worker may still be unwinding a CDP request; do not let
                     # the replacement worker reuse the same browser bridge concurrently.
@@ -533,42 +536,51 @@ class _StandbyRuntimeManager:
                 )
                 self._worker = worker
                 worker.start()
+        self._stop_watcher(watcherToStop)
         self._terminate_bridge(bridgeToTerminate)
 
     def claim_bridge(self, catalog: VoiceCatalog) -> ChromeTtsBridge | None:
         bridgeToTerminate: ChromeTtsBridge | None = None
+        watcherToStop: DirectoryChangeWatcher | None = None
+        claimedBridge: ChromeTtsBridge | None = None
         with self._lock:
             if self._shutdown:
                 return None
             self._synthActive = True
             self._generation += 1
             self._cancel_current_worker_locked()
-            self._stop_watchers_locked()
+            watcherToStop = self._detach_watchers_locked()
             signature = _catalog_signature(catalog)
             if self._bridge is not None and self._ready and self._signature == signature:
-                bridge = self._bridge
+                claimedBridge = self._bridge
                 self._bridge = None
                 self._signature = None
                 self._ready = False
-                return bridge
-            bridgeToTerminate = self._clear_standby_locked(cancelWorker=False)
+            else:
+                bridgeToTerminate = self._clear_standby_locked(cancelWorker=False)
+        self._stop_watcher(watcherToStop)
+        if claimedBridge is not None:
+            return claimedBridge
         self._terminate_bridge(bridgeToTerminate)
         return None
 
     def note_synth_active(self) -> None:
         bridgeToTerminate: ChromeTtsBridge | None = None
+        watcherToStop: DirectoryChangeWatcher | None = None
         with self._lock:
             if self._shutdown:
                 return
             self._synthActive = True
             self._generation += 1
             self._cancel_current_worker_locked()
-            self._stop_watchers_locked()
+            watcherToStop = self._detach_watchers_locked()
             bridgeToTerminate = self._clear_standby_locked(cancelWorker=False)
+        self._stop_watcher(watcherToStop)
         self._terminate_bridge(bridgeToTerminate)
 
     def release_synth_bridge(self, bridge: ChromeTtsBridge, catalog: VoiceCatalog) -> bool:
         previousBridge: ChromeTtsBridge | None = None
+        watcherToStop: DirectoryChangeWatcher | None = None
         with self._lock:
             if self._shutdown or not keep_browser_runtime_ready_enabled():
                 self._synthActive = False
@@ -576,16 +588,18 @@ class _StandbyRuntimeManager:
             self._synthActive = False
             self._generation += 1
             self._cancel_current_worker_locked()
-            self._stop_watchers_locked()
+            watcherToStop = self._detach_watchers_locked()
             previousBridge = self._bridge if self._bridge is not bridge else None
             self._bridge = bridge
             self._signature = _catalog_signature(catalog)
             self._ready = True
+        self._stop_watcher(watcherToStop)
         self._terminate_bridge(previousBridge)
         self.refresh_async("Google TTS synth released its browser runtime")
         return True
 
     def release_synth_without_bridge(self, reason: str = "") -> None:
+        watcherToStop: DirectoryChangeWatcher | None = None
         with self._lock:
             if self._shutdown:
                 self._synthActive = False
@@ -593,17 +607,20 @@ class _StandbyRuntimeManager:
             self._synthActive = False
             self._generation += 1
             self._cancel_current_worker_locked()
-            self._stop_watchers_locked()
+            watcherToStop = self._detach_watchers_locked()
+        self._stop_watcher(watcherToStop)
         self.refresh_async(reason or "Google TTS synth released without a reusable browser runtime")
 
     def terminate(self) -> None:
         bridgeToTerminate: ChromeTtsBridge | None
+        watcherToStop: DirectoryChangeWatcher | None = None
         with self._lock:
             self._shutdown = True
             self._synthActive = False
             self._generation += 1
             bridgeToTerminate = self._clear_standby_locked(cancelWorker=True)
-            self._stop_watchers_locked()
+            watcherToStop = self._detach_watchers_locked()
+        self._stop_watcher(watcherToStop)
         self._terminate_bridge(bridgeToTerminate)
 
     def _run_refresh(self, generation: int, cancelEvent: threading.Event, reason: str) -> None:
@@ -698,7 +715,9 @@ class _StandbyRuntimeManager:
         self._cancelEvent = None
 
     def _start_watchers_locked(self) -> None:
-        self._stop_watchers_locked()
+        oldWatcher = self._detach_watchers_locked()
+        if oldWatcher is not None:
+            oldWatcher.stop()
         if self._shutdown or self._synthActive or not keep_browser_runtime_ready_enabled():
             return
         generation = self._generation
@@ -708,14 +727,31 @@ class _StandbyRuntimeManager:
         )
         self._watcher.start()
 
-    def _stop_watchers_locked(self) -> None:
+    def _detach_watchers_locked(self) -> DirectoryChangeWatcher | None:
         if self._watcher is None:
-            return
+            return None
         watcher = self._watcher
         self._watcher = None
-        watcher.stop()
+        if hasattr(watcher, "signal_stop"):
+            watcher.signal_stop()
+        return watcher
+
+    def _stop_watchers_locked(self) -> None:
+        watcher = self._detach_watchers_locked()
+        if watcher is not None:
+            watcher.stop()
+
+    def _stop_watcher(self, watcher: DirectoryChangeWatcher | None) -> None:
+        if watcher is None:
+            return
+        try:
+            watcher.stop()
+        except Exception:
+            log.debug("Could not stop Google TTS standby directory watcher.", exc_info=True)
 
     def _refresh_from_watcher(self, reason: str, generation: int) -> None:
+        if generation != self._generation or self._shutdown:
+            return
         with self._lock:
             if generation != self._generation or self._shutdown:
                 return

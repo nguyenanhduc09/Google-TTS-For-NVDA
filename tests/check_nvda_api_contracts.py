@@ -174,6 +174,46 @@ def _category(name: str, tree: SourceTree, specs: Iterable[tuple[str, str]]) -> 
     return result
 
 
+def _speech_hooks_category(tree: SourceTree) -> CategoryResult:
+    result = _category(
+        "Speech hooks and language profiles",
+        tree,
+        [
+            ("speech.extensions", "filter_speechSequence"),
+            ("speech.speech", "speak"),
+            ("speech.speech", "processText"),
+            ("speech.speech", "getSpellingSpeech"),
+            ("speech.shortcutKeys", "shouldUseSpellingFunctionality"),
+            ("speechDictHandler", "loadVoiceDict"),
+            ("speech.commands", "LangChangeCommand"),
+        ],
+    )
+    has_modern_dict_defs = tree.has("speechDictHandler.definitions", "_speechDictDefinitions")
+    has_legacy_dicts = tree.has("speechDictHandler", "dictionaries")
+    result.require(
+        has_modern_dict_defs or has_legacy_dicts,
+        "Missing voice dictionary storage (speechDictHandler.definitions._speechDictDefinitions or speechDictHandler.dictionaries)",
+    )
+    if tree.tree("speech.languageHandling") is not None:
+        _require_symbols(
+            result,
+            tree,
+            [
+                ("speech.languageHandling", "shouldMakeLangChangeCommand"),
+                ("speech.languageHandling", "shouldSwitchVoice"),
+                ("speech.languageHandling", "getSpeechSequenceWithLangs"),
+                ("speech.manager", "shouldSwitchVoice"),
+                ("synthDriverHandler", "SynthDriver.languageIsSupported"),
+            ],
+        )
+        lang_mode = "languageHandling+manager"
+    else:
+        lang_mode = "speech.speak config flags"
+    dict_mode = "_speechDictDefinitions" if has_modern_dict_defs else "dictionaries"
+    result.details.append(f"langSwitching={lang_mode}; voiceDictStorage={dict_mode}")
+    return result
+
+
 def _general_categories(tree: SourceTree) -> list[CategoryResult]:
     return [
         _category(
@@ -191,10 +231,18 @@ def _general_categories(tree: SourceTree) -> list[CategoryResult]:
                     "SynthDriver.VolumeSetting",
                     "SynthDriver.loadSettings",
                     "VoiceInfo",
+                    "LanguageInfo",
                     "synthIndexReached",
                     "synthDoneSpeaking",
                     "getSynth",
+                    "setSynth",
+                    "changeVoice",
+                    "findAndSetNextSynth",
                 )
+            ]
+            + [
+                ("synthSettingsRing", "SynthSettingsRing"),
+                ("synthSettingsRing", "SynthSettingsRing.updateSupportedSettings"),
             ]
             + [
                 ("autoSettingsUtils.driverSetting", item)
@@ -208,11 +256,18 @@ def _general_categories(tree: SourceTree) -> list[CategoryResult]:
                 ("speech.commands", item)
                 for item in (
                     "BreakCommand",
+                    "CharacterModeCommand",
+                    "EndUtteranceCommand",
                     "IndexCommand",
                     "LangChangeCommand",
+                    "PhonemeCommand",
                     "PitchCommand",
                     "RateCommand",
                     "VolumeCommand",
+                    "BaseProsodyCommand",
+                    "BaseProsodyCommand.__init__",
+                    "BaseProsodyCommand.offset",
+                    "BaseProsodyCommand.multiplier",
                 )
             ],
         ),
@@ -225,20 +280,13 @@ def _general_categories(tree: SourceTree) -> list[CategoryResult]:
                 ("core", "postNvdaStartup"),
                 ("gui", "mainFrame"),
                 ("gui", "messageBox"),
+                ("gui", "VoiceDictionaryDialog"),
+                ("scriptHandler", "script"),
+                ("globalCommands", "SCRCAT_SPEECH"),
+                ("globalCommands", "SCRCAT_CONFIG"),
             ],
         ),
-        _category(
-            "Speech hooks and language profiles",
-            tree,
-            [
-                ("speech.extensions", "filter_speechSequence"),
-                ("speech.speech", "processText"),
-                ("speech.speech", "getSpellingSpeech"),
-                ("speech.shortcutKeys", "shouldUseSpellingFunctionality"),
-                ("speechDictHandler", "loadVoiceDict"),
-                ("speech.commands", "LangChangeCommand"),
-            ],
-        ),
+        _speech_hooks_category(tree),
         _category(
             "Settings category",
             tree,
@@ -248,6 +296,8 @@ def _general_categories(tree: SourceTree) -> list[CategoryResult]:
                     "SettingsPanel",
                     "SettingsPanel.makeSettings",
                     "SettingsPanel.onSave",
+                    "SettingsPanel._sendLayoutUpdatedEvent",
+                    "MultiCategorySettingsDialog",
                     "AutoSettingsMixin",
                     "AutoSettingsMixin._getSettingMaker",
                     "AutoSettingsMixin._updateValueForControl",
@@ -397,6 +447,7 @@ def _addon_guard_category() -> CategoryResult:
             "SynthDriver.cancel",
             "SynthDriver.pause",
             "SynthDriver.loadSettings",
+            "SynthDriver.languageIsSupported",
         ),
         plugin_path: (
             "_set_synth_with_google_tts_voice_prompt",
@@ -405,10 +456,15 @@ def _addon_guard_category() -> CategoryResult:
             "_patch_read_only_text_setting._on_discard",
             "_patch_read_only_text_setting._refresh_gui",
             "_patch_read_only_text_setting._voice_make_settings",
+            "_patch_voice_dictionary_dialog.popup_settings_dialog",
+            "_patch_google_tts_voice_dictionary_loading.load_voice_dictionary_for_google_tts_variant",
             "_filter_auto_language_speech_sequence",
+            "_patch_auto_language_voice_dictionary.speak_with_auto_profile",
             "_patch_auto_language_voice_dictionary.process_text_with_auto_voice_dictionary",
             "_patch_auto_language_voice_dictionary.get_spelling_speech_with_auto_profile",
             "_patch_auto_language_voice_dictionary.should_use_spelling_functionality_with_auto_profile",
+            "_patch_auto_language_voice_dictionary.should_make_lang_change_command_with_auto_profile",
+            "_patch_auto_language_voice_dictionary.should_switch_voice_with_auto_profile",
             "GlobalPlugin.terminate",
             "GlobalPlugin.on_open_voice_manager",
             "GlobalPlugin.script_openVoiceManager",

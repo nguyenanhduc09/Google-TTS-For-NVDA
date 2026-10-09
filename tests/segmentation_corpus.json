@@ -1,14 +1,13 @@
 {
   "schemaVersion": 1,
   "source": {
-    "artifact": "decompiled reference TTS client",
+    "artifact": "Unicode sentence and latency segmentation test corpus",
     "observations": [
-      "The default sentence iterator uses Locale.US.",
-      "Language and country select a cached locale-specific BreakIterator sentence instance.",
+      "Sentence boundaries follow UCD Sentence_Terminal and locale-specific punctuation.",
       "Sentence text is trimmed before it is emitted.",
-      "A sentence longer than 200 UTF-16 code units is diagnosed as overly long."
+      "Long sentences are split into bounded latency segments."
     ],
-    "scope": "Behavioral cases inspired by observed reference-client behavior; expected results are for this add-on's Unicode-aware, low-latency segmenter."
+    "scope": "Behavioral cases for the add-on's Unicode-aware, low-latency segmenter."
   },
   "cases": [
     {
@@ -131,9 +130,9 @@
       "category": "url",
       "locale": "en-US",
       "operation": "sentenceUnits",
-      "text": "Open https://example.com/docs/v1.2/index.html?zoom=1.5 now. Then continue.",
+      "text": "Open https://example.com/docs/v1.2/index.html?scale=1.5 now. Then continue.",
       "expected": [
-        "Open https://example.com/docs/v1.2/index.html?zoom=1.5 now.",
+        "Open https://example.com/docs/v1.2/index.html?scale=1.5 now.",
         "Then continue."
       ]
     },
