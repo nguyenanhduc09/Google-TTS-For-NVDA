@@ -771,6 +771,64 @@ class UrlAndDomainBoundaryTests(unittest.TestCase):
         self.assertFalse(self.segmenter.needs_index_boundary_space("好", "世"))
         self.assertFalse(self.segmenter.needs_index_boundary_space("。", "世"))
 
+    def test_ends_with_pause_punctuation(self) -> None:
+        for punctuated in (
+            "Hello world.",
+            "Are you sure?",
+            "Watch out!",
+            "First, ",
+            "Item 1:",
+            "Clause one;",
+            "Wait —",
+            "Range –",
+            "Trailing-",
+            "Downloads (5)",
+            "Opening (",
+            'He said "Hello."',
+            "(Finished.)",
+            "こんにちは。",
+            "مرحبا،",
+            "ሰላም፣",
+        ):
+            with self.subTest(punctuated=punctuated):
+                self.assertTrue(self.segmenter.ends_with_pause_punctuation(punctuated))
+
+        for unpunctuated in (
+            "",
+            "   ",
+            "OK button",
+            "Hello world",
+            "a",
+            "123",
+            'He said "Hello"',
+            "word-part",
+            "https://example.com/path",
+        ):
+            with self.subTest(unpunctuated=unpunctuated):
+                self.assertFalse(self.segmenter.ends_with_pause_punctuation(unpunctuated))
+
+    def test_effective_chrome_rate_and_keep_silence_ms_for_rate(self) -> None:
+        effective_rate = self.processing.effective_chrome_rate
+        keep_ms = self.processing.keep_silence_ms_for_rate
+        end_only = self.processing.PAUSE_MODE_SHORTEN_END_ONLY
+        shorten_all = self.processing.PAUSE_MODE_SHORTEN_ALL
+
+        # When artificialRate is 1.0 (default), engine rate is preserved instead of ignored
+        self.assertAlmostEqual(0.5, effective_rate({"rate": 0.5, "artificialRate": 1.0}))
+        self.assertAlmostEqual(2.0, effective_rate({"rate": 2.0, "artificialRate": 1.0}))
+        # When both engine rate (protected 3.0) and artificialRate (>1.0) are active, they multiply
+        self.assertAlmostEqual(4.5, effective_rate({"rate": 3.0, "artificialRate": 1.5}))
+
+        # Mode "1" (shorten end only) is consistently 10ms longer than Mode "2" (shorten all)
+        for rate_val in (0.5, 1.0, 1.175, 2.0, 3.5, 6.0):
+            ms_end_only = keep_ms(end_only, rate_val)
+            ms_shorten_all = keep_ms(shorten_all, rate_val)
+            self.assertGreaterEqual(ms_end_only, 25)
+            self.assertLessEqual(ms_end_only, 55)
+            self.assertGreaterEqual(ms_shorten_all, 15)
+            self.assertLessEqual(ms_shorten_all, 45)
+            self.assertEqual(ms_end_only - ms_shorten_all, 10)
+
 
 if __name__ == "__main__":
     unittest.main()

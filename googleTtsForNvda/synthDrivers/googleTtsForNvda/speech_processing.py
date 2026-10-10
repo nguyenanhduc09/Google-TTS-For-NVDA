@@ -391,6 +391,33 @@ class PcmLeadBuffer:
         return output
 
 
+def effective_chrome_rate(options: dict[str, Any]) -> float:
+    """Return the combined effective speech rate multiplier from speech options."""
+    try:
+        engineRate = float(options.get("rate", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        engineRate = 1.0
+    try:
+        artificialRate = float(options.get("artificialRate", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        artificialRate = 1.0
+    return max(0.1, engineRate * artificialRate)
+
+
+def keep_silence_ms_for_rate(pauseMode: str, chromeRate: float) -> int:
+    """Calculate the mode-specific kept silence duration in milliseconds for the active rate."""
+    rate = max(0.35, float(chromeRate))
+    if rate <= 1.175:
+        shortenAllMs = int(round(45 - (rate - 0.35) * 20 / 0.825))
+    else:
+        shortenAllMs = int(round(25 - (rate - 1.175) * 10 / 2.825))
+    shortenAllMs = max(15, min(45, shortenAllMs))
+    if pauseMode == PAUSE_MODE_SHORTEN_END_ONLY:
+        modeDelta = SHORTENED_SILENCE_KEEP_MS - SHORTENED_ALL_PAUSES_KEEP_MS
+        return max(15 + modeDelta, min(45 + modeDelta, shortenAllMs + modeDelta))
+    return shortenAllMs
+
+
 def create_pcm_silence_shortener(
     pauseMode: str, sampleRate: int, keepSilenceMs: int | None = None
 ) -> PcmSilenceShortener | None:
@@ -1130,6 +1157,24 @@ class TextSegmenter:
         while stripped and _is_sentence_trailing_closer(stripped[-1]):
             stripped = stripped[:-1].rstrip()
         return bool(stripped) and _is_sentence_terminator_character(stripped[-1])
+
+    def ends_with_pause_punctuation(self, text: str) -> bool:
+        stripped = text.rstrip()
+        if not stripped:
+            return False
+        if stripped[-1] in ")(":
+            return True
+        while stripped and _is_sentence_trailing_closer(stripped[-1]):
+            stripped = stripped[:-1].rstrip()
+        if not stripped:
+            return False
+        lastChar = stripped[-1]
+        return (
+            _is_sentence_terminator_character(lastChar)
+            or _is_soft_break_character(lastChar)
+            or _is_dash_like_character(lastChar)
+            or lastChar == "-"
+        )
 
 
 DEFAULT_TEXT_SEGMENTER = TextSegmenter()

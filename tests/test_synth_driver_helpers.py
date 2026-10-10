@@ -905,10 +905,57 @@ class AutoLanguageGlobalPluginHooksTests(unittest.TestCase):
         )
         synth_source = synth_path.read_text(encoding="utf-8")
         self.assertIn("self._isPaused = bool(switch)", synth_source)
-        self.assertIn('chromeRate = float(options.get("artificialRate") or options.get("rate", 1))', synth_source)
+        self.assertIn("chromeRate = effective_chrome_rate(options)", synth_source)
+        self.assertIn("keepSilenceMs = keep_silence_ms_for_rate(pauseShorteningMode, chromeRate)", synth_source)
         eou_idx = synth_source.index("_END_OF_UTTERANCE_PAUSE_MS * _end_of_utterance_rate_factor(lastEffectiveRate)")
         finish_idx = synth_source.index("self._finish_request_audio()", eou_idx)
         self.assertLess(eou_idx, finish_idx)
+
+    def test_pause_mode_and_utterance_end_resolution(self) -> None:
+        from tests.test_support import load_driver_module
+
+        processing = load_driver_module("speech_processing")
+        segmenter = processing.DEFAULT_TEXT_SEGMENTER
+        mode_0 = processing.PAUSE_MODE_DO_NOT_SHORTEN
+        mode_1 = processing.PAUSE_MODE_SHORTEN_END_ONLY
+        mode_2 = processing.PAUSE_MODE_SHORTEN_ALL
+
+        def resolve_flush(pause_mode: str, is_utterance_end: bool, segment_text: str) -> tuple[str, bool]:
+            ends_with_punct = segmenter.ends_with_pause_punctuation(segment_text)
+            if pause_mode == mode_2:
+                shortening_mode = mode_2
+            elif is_utterance_end:
+                shortening_mode = mode_1 if pause_mode == mode_1 else mode_0
+            else:
+                shortening_mode = mode_0 if ends_with_punct else mode_1
+            emit_end_pause = is_utterance_end and pause_mode == mode_1 and ends_with_punct
+            return shortening_mode, emit_end_pause
+
+        # 1. Mode "0" (Do not shorten):
+        #    - Utterance end never shortens or emits synthetic end_pause
+        self.assertEqual((mode_0, False), resolve_flush(mode_0, True, "OK button"))
+        self.assertEqual((mode_0, False), resolve_flush(mode_0, True, "Hello world."))
+        #    - Mid-utterance flush without punctuation shortens trailing engine silence
+        self.assertEqual((mode_1, False), resolve_flush(mode_0, False, "Hello"))
+        self.assertEqual((mode_0, False), resolve_flush(mode_0, False, "Hello,"))
+
+        # 2. Mode "1" (Shorten at end of text only):
+        #    - Utterance end without punctuation shortens trailing silence without extra end_pause
+        self.assertEqual((mode_1, False), resolve_flush(mode_1, True, "OK button"))
+        self.assertEqual((mode_1, False), resolve_flush(mode_1, True, 'He said "Hello"'))
+        #    - Utterance end with punctuation preserves sentence-end pause via end_pause
+        self.assertEqual((mode_1, True), resolve_flush(mode_1, True, "Hello world."))
+        self.assertEqual((mode_1, True), resolve_flush(mode_1, True, 'He said "Hello."'))
+        self.assertEqual((mode_1, True), resolve_flush(mode_1, True, "Downloads (5)"))
+        #    - Mid-utterance flush preserves punctuation pause, shortens unpunctuated flush
+        self.assertEqual((mode_1, False), resolve_flush(mode_1, False, "Hello"))
+        self.assertEqual((mode_0, False), resolve_flush(mode_1, False, "Hello,"))
+
+        # 3. Mode "2" (Shorten all pauses):
+        #    - Shortens all pauses and never adds extra end_pause
+        self.assertEqual((mode_2, False), resolve_flush(mode_2, True, "OK button"))
+        self.assertEqual((mode_2, False), resolve_flush(mode_2, True, "Hello world."))
+        self.assertEqual((mode_2, False), resolve_flush(mode_2, False, "Hello,"))
 
 
 if __name__ == "__main__":

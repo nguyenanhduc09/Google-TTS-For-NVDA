@@ -69,7 +69,9 @@ from .speech_processing import (
     LIVE_MULTI_SEGMENT_LEAD_MS,
     PcmLeadBuffer,
     create_pcm_silence_shortener,
+    effective_chrome_rate,
     is_complete_speech_result,
+    keep_silence_ms_for_rate,
     segment_audio_cache_key,
     short_audio_cache_key,
 )
@@ -781,6 +783,21 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         activeVolumeCommand: VolumeCommand | None = None
         _inCharMode = False
 
+        lastSpokenItemIndex = -1
+        for seqIdx, seqItem in enumerate(speechSequence):
+            seqItemType = type(seqItem)
+            if seqItemType is str:
+                if self._sanitize_speech_text(_normalize_mathematical_alphanumeric(seqItem)).strip():
+                    lastSpokenItemIndex = seqIdx
+            elif seqItemType is PhonemeCommand and getattr(seqItem, "text", None):
+                if self._sanitize_speech_text(_normalize_mathematical_alphanumeric(seqItem.text)).strip():
+                    lastSpokenItemIndex = seqIdx
+
+        def is_trailing_command_at_utterance_end(seqIdx: int) -> bool:
+            if seqIdx <= lastSpokenItemIndex:
+                return False
+            return not any(type(rem) is BreakCommand for rem in speechSequence[seqIdx + 1 :])
+
         def append_normalized_text(normalizedItem: str) -> None:
             nonlocal textCharCount, sawIndexSinceLastText
             if (
@@ -797,7 +814,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             textParts.append(normalizedItem)
             textCharCount += len(normalizedItem)
 
-        def flush_text() -> Iterator[tuple[str, Any]]:
+        def flush_text(*, isUtteranceEnd: bool = False) -> Iterator[tuple[str, Any]]:
             nonlocal firstTextSegment, textCharCount, pendingIndexes, sawIndexSinceLastText
             # When CharacterModeCommand is active (NVDA spelling mode), space out
             # individual characters so the browser TTS engine pronounces each one
@@ -820,6 +837,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                         return
                     yield ("index", index)
                 return
+            trailingUtteranceIndexes: list[Any] = []
+            if isUtteranceEnd:
+                trailingUtteranceIndexes = [index for index, charOffset in indexes if charOffset >= len(text)]
+                indexes = [(index, charOffset) for index, charOffset in indexes if charOffset < len(text)]
             segments = list(self._iter_indexed_text_segments(text, indexes, firstTextSegment))
             groupedSegments: list[tuple[str, list[_IndexMarker]]] = []
 
@@ -885,20 +906,36 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                             if isSentenceBoundary
                             else _SHORTENED_SENTENCE_BREAK_MS,
                         )
-            yield from flush_grouped_segments(
-                pauseMode
-                if pauseMode in (_PAUSE_MODE_SHORTEN_END_ONLY, _PAUSE_MODE_SHORTEN_ALL)
-                else _PAUSE_MODE_DO_NOT_SHORTEN,
-            )
+            lastSegment = segments[-1][0] if segments else ""
+            lastSegmentEndsWithPunct = self._ends_with_pause_punctuation(lastSegment)
+            if pauseMode == _PAUSE_MODE_SHORTEN_ALL:
+                finalShorteningMode = _PAUSE_MODE_SHORTEN_ALL
+            elif isUtteranceEnd:
+                finalShorteningMode = (
+                    _PAUSE_MODE_SHORTEN_END_ONLY
+                    if pauseMode == _PAUSE_MODE_SHORTEN_END_ONLY
+                    else _PAUSE_MODE_DO_NOT_SHORTEN
+                )
+            else:
+                finalShorteningMode = (
+                    _PAUSE_MODE_DO_NOT_SHORTEN if lastSegmentEndsWithPunct else _PAUSE_MODE_SHORTEN_END_ONLY
+                )
+            yield from flush_grouped_segments(finalShorteningMode)
+            if isUtteranceEnd and pauseMode == _PAUSE_MODE_SHORTEN_END_ONLY and lastSegmentEndsWithPunct:
+                yield ("end_pause", None)
+            for index in trailingUtteranceIndexes:
+                if cancelEvent.is_set():
+                    return
+                yield ("index", index)
 
-        for item in speechSequence:
+        for seqIdx, item in enumerate(speechSequence):
             if cancelEvent.is_set():
                 return
             itemType = type(item)
             if itemType is str:
                 append_normalized_text(_normalize_mathematical_alphanumeric(item))
             elif itemType is BreakCommand:
-                yield from flush_text()
+                yield from flush_text(isUtteranceEnd=False)
                 if cancelEvent.is_set():
                     return
                 breakMs = max(0, int(item.time))
@@ -933,7 +970,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 googleLanguage = getattr(item, _GOOGLE_TTS_LANG_CHANGE_ATTR, _MISSING_GOOGLE_TTS_LANGUAGE)
                 if googleLanguage is _MISSING_GOOGLE_TTS_LANGUAGE:
                     googleLanguage = getattr(item, "lang", None)
-                yield from flush_text()
+                yield from flush_text(isUtteranceEnd=is_trailing_command_at_utterance_end(seqIdx))
                 if cancelEvent.is_set():
                     return
                 lastGroupProfileRate = None
@@ -945,21 +982,21 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 if item.text:
                     append_normalized_text(_normalize_mathematical_alphanumeric(item.text))
             elif itemType is RateCommand:
-                yield from flush_text()
+                yield from flush_text(isUtteranceEnd=is_trailing_command_at_utterance_end(seqIdx))
                 if cancelEvent.is_set():
                     return
                 activeRateCommand = None if self._is_prosody_reset_command(item) else item
             elif itemType is PitchCommand:
-                yield from flush_text()
+                yield from flush_text(isUtteranceEnd=is_trailing_command_at_utterance_end(seqIdx))
                 if cancelEvent.is_set():
                     return
                 activePitchCommand = None if self._is_prosody_reset_command(item) else item
             elif itemType is VolumeCommand:
-                yield from flush_text()
+                yield from flush_text(isUtteranceEnd=is_trailing_command_at_utterance_end(seqIdx))
                 if cancelEvent.is_set():
                     return
                 activeVolumeCommand = None if self._is_prosody_reset_command(item) else item
-        yield from flush_text()
+        yield from flush_text(isUtteranceEnd=True)
 
     def _apply_prosody_command(self, baseValue: Any, command: Any | None) -> int:
         try:
@@ -1024,6 +1061,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
     def _should_pause_after_segment(self, segment: str) -> bool:
         return _TEXT_SEGMENTER.should_pause_after_segment(segment)
+
+    def _ends_with_pause_punctuation(self, segment: str) -> bool:
+        return _TEXT_SEGMENTER.ends_with_pause_punctuation(segment)
 
     def _sentence_break_milliseconds(self, pauseMode: str) -> int:
         if pauseMode == _PAUSE_MODE_SHORTEN_ALL:
@@ -1097,17 +1137,15 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     )
                 elif kind == "break":
                     self._feed_silence(payload)
+                elif kind == "end_pause":
+                    if lastEffectiveRate > 0:
+                        self._feed_silence(
+                            int(_END_OF_UTTERANCE_PAUSE_MS * _end_of_utterance_rate_factor(lastEffectiveRate))
+                        )
                 elif kind == "index":
                     self._sync_player()
                     if not cancelEvent.is_set():
                         synthIndexReached.notify(synth=self, index=payload)
-            if (
-                not cancelEvent.is_set()
-                and pauseMode in (_PAUSE_MODE_SHORTEN_END_ONLY, _PAUSE_MODE_SHORTEN_ALL)
-                and lastEffectiveRate > 0
-                and sum(len(item) for item in speechSequence if isinstance(item, str)) > 40
-            ):
-                self._feed_silence(int(_END_OF_UTTERANCE_PAUSE_MS * _end_of_utterance_rate_factor(lastEffectiveRate)))
             if not cancelEvent.is_set():
                 self._finish_request_audio()
             if not cancelEvent.is_set():
@@ -1166,8 +1204,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         for index in leadingIndexes:
             if cancelEvent.is_set():
                 return
-            self._sync_player()
-            synthIndexReached.notify(synth=self, index=index)
+            if self._isPaused:
+                self._sync_player()
+            if not cancelEvent.is_set():
+                synthIndexReached.notify(synth=self, index=index)
 
         hasInternalIndexes = any(0 < charOffset < len(originalText) for _index, charOffset in remainingIndexes)
         cacheKey = self._short_cache_key(
@@ -1213,8 +1253,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                         for index, _charOffset in remainingIndexes:
                             if cancelEvent.is_set():
                                 return
-                            self._sync_player()
-                            synthIndexReached.notify(synth=self, index=index)
+                            if self._isPaused:
+                                self._sync_player()
+                            if not cancelEvent.is_set():
+                                synthIndexReached.notify(synth=self, index=index)
                 return
             log.debug("Google TTS short audio cache miss: kind=group, chars=%d.", len(originalText))
 
@@ -1260,8 +1302,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 for index, _charOffset in remainingIndexes:
                     if cancelEvent.is_set():
                         return
-                    self._sync_player()
-                    synthIndexReached.notify(synth=self, index=index)
+                    if self._isPaused:
+                        self._sync_player()
+                    if not cancelEvent.is_set():
+                        synthIndexReached.notify(synth=self, index=index)
             if cacheKey is not None and not cancelEvent.is_set():
                 self._put_cached_audio(cacheKey, cached)
             return
@@ -1304,12 +1348,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         segmentAudioParts: list[bytes] = []
         completedSegmentAudio: list[bytes] = []
         collectSegmentAudio = any(key is not None for key in segmentCacheKeys)
-        chromeRate = float(options.get("artificialRate") or options.get("rate", 1))
-        if chromeRate <= 1.175:
-            keepSilenceMs = int(45 - (chromeRate - 0.35) * 20 / 0.825)
-        else:
-            keepSilenceMs = int(25 - (chromeRate - 1.175) * 10 / 2.825)
-        keepSilenceMs = max(15, min(45, keepSilenceMs))
+        chromeRate = effective_chrome_rate(options)
+        keepSilenceMs = keep_silence_ms_for_rate(pauseShorteningMode, chromeRate)
         silenceShortener = create_pcm_silence_shortener(pauseShorteningMode, SAMPLE_RATE, keepSilenceMs)
         leadBuffer = (
             PcmLeadBuffer(sampleRate=SAMPLE_RATE, leadMs=LIVE_MULTI_SEGMENT_LEAD_MS)
@@ -1323,6 +1363,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 len(synthesisSegments),
             )
         pendingIndexes = sorted(remainingIndexes, key=lambda item: item[1])
+        deferredMarkOffset = -1
 
         def notify_indexes_through(charOffset: int, *, sync: bool = False) -> None:
             nonlocal pendingIndexes
@@ -1330,15 +1371,23 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 index, _indexOffset = pendingIndexes.pop(0)
                 if cancelEvent.is_set():
                     return
-                if sync:
+                if sync or self._isPaused:
                     self._sync_player()
-                synthIndexReached.notify(synth=self, index=index)
+                if not cancelEvent.is_set():
+                    synthIndexReached.notify(synth=self, index=index)
 
         def on_mark(charOffset: int) -> None:
-            if not cancelEvent.is_set():
-                notify_indexes_through(max(0, min(len(text), charOffset)))
+            nonlocal deferredMarkOffset
+            if cancelEvent.is_set():
+                return
+            clampedOffset = max(0, min(len(text), charOffset))
+            if self._isPaused:
+                deferredMarkOffset = max(deferredMarkOffset, clampedOffset)
+                return
+            notify_indexes_through(clampedOffset)
 
         def feed_processed_audio(pcm: bytes) -> None:
+            nonlocal deferredMarkOffset
             if not pcm:
                 return
             if cacheKey is not None:
@@ -1348,6 +1397,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             if not cancelEvent.is_set():
                 livePcm = leadBuffer.feed(pcm) if leadBuffer is not None else pcm
                 self._feed_audio(livePcm)
+                if deferredMarkOffset >= 0 and not self._isPaused:
+                    flushedOffset = deferredMarkOffset
+                    deferredMarkOffset = -1
+                    notify_indexes_through(flushedOffset)
 
         def on_audio(pcm: bytes) -> None:
             if silenceShortener is not None:
@@ -1385,12 +1438,17 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             self._feed_audio(leadBuffer.finish())
 
         audio = b"".join(audioParts) if audioParts else b""
+        if deferredMarkOffset >= 0 and not cancelEvent.is_set():
+            notify_indexes_through(deferredMarkOffset, sync=self._isPaused)
+            deferredMarkOffset = -1
         if pendingIndexes and not cancelEvent.is_set():
             for index, _charOffset in pendingIndexes:
                 if cancelEvent.is_set():
                     return
-                self._sync_player()
-                synthIndexReached.notify(synth=self, index=index)
+                if self._isPaused:
+                    self._sync_player()
+                if not cancelEvent.is_set():
+                    synthIndexReached.notify(synth=self, index=index)
         expectedSegmentEnds = max(0, len(synthesisSegments) - 1)
         speechComplete = not cancelEvent.is_set() and is_complete_speech_result(
             speechResult,
@@ -1464,8 +1522,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             for index, _charOffset in indexes:
                 if cancelEvent.is_set():
                     return
-                self._sync_player()
-                synthIndexReached.notify(synth=self, index=index)
+                if self._isPaused:
+                    self._sync_player()
+                if not cancelEvent.is_set():
+                    synthIndexReached.notify(synth=self, index=index)
             return
         totalBytes = len(pcm)
         totalCharacters = max(1, totalCharacters)
@@ -1482,7 +1542,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             if byteOffset > position:
                 self._feed_audio(pcm[position:byteOffset])
                 position = byteOffset
-            self._sync_player()
+            if self._isPaused:
+                self._sync_player()
             if not cancelEvent.is_set():
                 synthIndexReached.notify(synth=self, index=index)
         if not cancelEvent.is_set() and position < totalBytes:
