@@ -205,9 +205,9 @@ class GoogleTtsSettingsPanel(SettingsPanel):
     def makeSettings(self, settingsSizer: wx.Sizer, *args: object, **kwargs: object) -> None:
         self._settingsSizer = settingsSizer
         # Bundled runtime first: it is the default and needs nothing installed.
-        self._runtimeValues = [
-            runtime for runtime in (browserBridge.BROWSER_RUNTIME_BUN, *browserBridge.BROWSER_RUNTIMES)
-        ][: len(browserBridge.BROWSER_RUNTIMES)]
+        # dict.fromkeys dedupes without depending on where the bundled runtime
+        # sits in BROWSER_RUNTIMES.
+        self._runtimeValues = list(dict.fromkeys((browserBridge.BROWSER_RUNTIME_BUN, *browserBridge.BROWSER_RUNTIMES)))
         self._refresh_runtime_snapshot()
         self._savedRuntime = self._runtimeSnapshot["selectedRuntime"]
         self._savedKeepBrowserRuntimeReady = _configured_keep_browser_runtime_ready()
