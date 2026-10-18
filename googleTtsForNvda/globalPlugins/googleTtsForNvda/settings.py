@@ -255,18 +255,18 @@ class GoogleTtsSettingsPanel(SettingsPanel):
         self.effectiveRuntimeText.SetName(_("Speech runtime status"))
         bind_read_only_text_focus_announcement(self.effectiveRuntimeText, minLines=2, maxLines=5)
         self.keepBrowserRuntimeReadyCheck = runtimeGroup.addCheckBox(
-            _("&Keep Google TTS browser runtime ready in the background")
+            _("&Keep Google TTS speech runtime ready in the background")
         )
-        self.keepBrowserRuntimeReadyCheck.SetName(_("Keep Google TTS browser runtime ready in the background"))
+        self.keepBrowserRuntimeReadyCheck.SetName(_("Keep Google TTS speech runtime ready in the background"))
         self.keepBrowserRuntimeReadyCheck.SetValue(self._savedKeepBrowserRuntimeReady)
         self.keepBrowserRuntimeReadyCheck.Bind(wx.EVT_CHECKBOX, self.on_keep_browser_runtime_ready_changed)
         self.keepBrowserRuntimeReadyStatusText = runtimeGroup.addLabeledControl(
-            _("Background browser runtime status") + ":",
+            _("Background speech runtime status") + ":",
             wx.TextCtrl,
             value=self._keep_browser_runtime_ready_status_message(),
             style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
         )
-        self.keepBrowserRuntimeReadyStatusText.SetName(_("Background browser runtime status"))
+        self.keepBrowserRuntimeReadyStatusText.SetName(_("Background speech runtime status"))
         bind_read_only_text_focus_announcement(self.keepBrowserRuntimeReadyStatusText, minLines=2, maxLines=5)
 
         autoLanguageGroup = self._add_settings_group(helper, _("Automatic language profile"))

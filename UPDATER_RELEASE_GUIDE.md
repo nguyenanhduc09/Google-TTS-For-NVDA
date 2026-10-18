@@ -68,6 +68,13 @@ If a locale does not provide a changelog, it is skipped and users with that NVDA
 
 ## 2. Build the add-on package
 
+The build downloads the Bun speech runtime and places `runtime/bun.exe` inside the package, so it needs
+internet access on the first run (the archive is cached afterwards). This makes the package roughly
+53 MB rather than 10 MB, which is still far below `MAX_UPDATE_PACKAGE_BYTES` (512 MB) in
+`globalPlugins/googleTtsForNvda/updater.py`. Because the runtime is a build input rather than source,
+`size` and `sha256` in `stable.json` must always be regenerated from the final package rather than
+reused from a previous release.
+
 Build the final `.nvda-addon` package after the release metadata, `buildInfo.json`, and any
 available localized changelogs have been merged.
 

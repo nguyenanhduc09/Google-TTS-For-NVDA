@@ -57,7 +57,7 @@ If `msgmerge` or `msgfmt` are absent, `build_i18n.py` falls back to internal pur
 `build_i18n.py` automates translation maintenance across UI strings and documentation:
 
 1. **Interface Strings & Add-on Metadata (`locale/<language>/`)**:
-   - `LC_MESSAGES/nvda.po`: Primary gettext source containing all UI strings, dialog labels, and manifest fields (`summary`, `description`).
+   - `LC_MESSAGES/nvda.po`: Primary gettext source containing all UI strings, dialog labels, and manifest fields (`summary`, `description`, `changelog`).
    - `LC_MESSAGES/nvda.mo`: Runtime binary catalog compiled from `nvda.po` via GNU `msgfmt` or internal compiler.
    - `manifest.ini`: Translated metadata displayed in NVDA's Add-on Store, generated automatically from `nvda.po`.
    - `languageSort.json`: Optional custom alphabetical sorting rules for language names displayed in Voice Manager.

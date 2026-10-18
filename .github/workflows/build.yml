@@ -97,6 +97,7 @@ jobs:
               "synthDrivers/googleTtsForNvda/bun_bootstrap.py",
               "synthDrivers/googleTtsForNvda/bunRuntime/shim.js",
               "synthDrivers/googleTtsForNvda/bunRuntime/worker.js",
+              "synthDrivers/googleTtsForNvda/bunRuntime/LICENSE-bun.txt",
               "synthDrivers/googleTtsForNvda/web/bridgeHarness.js",
               "synthDrivers/googleTtsForNvda/WasmTtsEngine/20260917.1/bindings_main.wasm"
             )) {

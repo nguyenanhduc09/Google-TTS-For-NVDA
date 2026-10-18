@@ -18,7 +18,7 @@ Technical code map indexing the codebase architecture, modules, classes, functio
     - **bridge.py** — `ChromeTtsBridge`, `BrowserProcessManager`, `CdpClient`, `CdpDispatcher`, HTTP server, browser lifecycle, runtime selection (`BROWSER_RUNTIME_BUN`, `CHROMIUM_RUNTIMES`, `effective_speech_runtime()`, `speech_runtime_executable()`, `bun_runtime_available()`)
     - **bun_bridge.py** — Bundled Bun runtime: `BunProcessManager`, `BunClient`, `classify_expression()`, `find_bun()`/`bun_candidates()`. Presents the `BrowserProcessManager`/`CdpClient` duck-typed surface so `ChromeTtsBridge` and all of `WasmTtsEngineBridge` are shared with the browser path
     - **bun_bootstrap.py** — `generate()`, `find_engine_global()`, `harness_probe_names()`: builds `engine_boot.js` + `pthread_worker.js` from the pristine engine sources into `<CONFIG>/googleTtsForNvda/runtime/bunBootstrap/`
-    - **bunRuntime/** — Bun host shims: `shim.js` (parentPort→`onmessage` bridge, `Worker` shim, in-memory `indexedDB`, relative-URL `fetch`), `worker.js` (stdin/stdout line protocol; reuses `../web/bridgeHarness.js` verbatim)
+    - **bunRuntime/** — Bun host shims: `shim.js` (parentPort→`onmessage` bridge, `Worker` shim, in-memory `indexedDB`, relative-URL `fetch`), `worker.js` (stdin/stdout line protocol; reuses `../web/bridgeHarness.js` verbatim), `LICENSE-bun.txt` (Bun's MIT notice plus the LGPL-2 JavaScriptCore relinking instructions, redistributed because the add-on ships `bun.exe`)
     - **runtime/** — Build-time output only (gitignored): `bun.exe` and `bun_version.json`, placed by `fetch_bun_runtime.py`
     - **standby.py** — `_StandbyRuntimeManager`, background browser-runtime readiness and voice pre-warming manager
     - **watcher.py** — `DirectoryChangeWatcher`, kernel-blocked Win32 directory-change watcher
@@ -88,6 +88,8 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 5. Python receives the events as `Runtime.bindingCalled` envelopes (`bunRuntime/worker.js` writes exactly that shape to stdout; `CdpDispatcher` delivers it for the browser path), so the single `WasmTtsEngineBridge.handle_event()` decodes base64 PCM for both and feeds audio directly to `nvwave.WavePlayer` for output.
 
 > **Bundled runtime host requirements.** Bun supplies no Web Audio, no DOM and no `indexedDB`, and — unlike Node — does not deliver `worker_threads` messages to `globalThis.onmessage`. `bunRuntime/shim.js` closes those gaps; see its header comment and `tests/test_bun_runtime.py` for the specific behaviours that are asserted.
+
+> **Redistribution obligation.** `runtime/bun.exe` is a third-party binary shipped inside the `.nvda-addon`. Bun is MIT and statically links LGPL-2 JavaScriptCore, whose terms require the relinking instructions to travel with the binary — that is what `bunRuntime/LICENSE-bun.txt` is for. `tests/test_bun_runtime.py` and the `build.yml` archive check both assert the file is present, so removing it fails CI rather than silently creating a license problem. Re-copy it from <https://github.com/oven-sh/bun/blob/main/LICENSE.md> when Bun is upgraded.
 
 ---
 

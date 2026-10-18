@@ -23,6 +23,7 @@ For a long time, screen reader users have wished they could use familiar voices 
   * [Custom Runtime Paths](#custom-runtime-paths)
   * [Add-on Updates](#add-on-updates)
   * [Automatic Language Profiles](#automatic-language-profiles)
+* [Do I Need to Install a Web Browser?](#do-i-need-to-install-a-web-browser)
 * [Troubleshooting Edge Runtime Silence](#troubleshooting-edge-runtime-silence)
 * [Clearing Browser Runtime Cache and Resolving Conflicts](#clearing-browser-runtime-cache-and-resolving-conflicts)
 * [Frequently Asked Questions](#frequently-asked-questions)
@@ -36,7 +37,7 @@ For a long time, screen reader users have wished they could use familiar voices 
 
 Latest stable release: **Google TTS For NVDA 1.0**, last updated on **October 12, 2026**.
 
-Version 1.0 marks a significant step in the project's maturity. With a supported Chromium browser runtime available, Google TTS For NVDA is now a dependable choice for everyday NVDA use, offering faster long-text reading, broader multilingual text handling, steady speech output, and resilient runtime recovery.
+Version 1.0 marks a significant step in the project's maturity. With its own bundled speech runtime, Google TTS For NVDA is now a dependable choice for everyday NVDA use, offering faster long-text reading, broader multilingual text handling, steady speech output, and resilient runtime recovery.
 
 * Full change log for version 1.0: [Google TTS For NVDA 1.0 release notes](https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/tag/v1.0).
 * Download the latest stable package: [googleTtsForNvda-1.0.nvda-addon](https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/download/v1.0/googleTtsForNvda-1.0.nvda-addon).
@@ -113,7 +114,7 @@ NVDA's Speech settings dialog (<kbd>NVDA+Ctrl+V</kbd>) provides **Pauses** for G
 
 * **Voice:** Choose the installed Google TTS language.
 * **Variant:** Choose the voice name within that language, including Chrome OS and Google Natural voices when installed.
-* **Rate:** Adjust the reading speed. Non-SeaNet packages use the Chromium browser runtime rate path; SeaNet packages may use post-synthesis artificial rate processing at higher speeds.
+* **Rate:** Adjust the reading speed. Non-SeaNet packages use the engine's native rate path; SeaNet packages may use post-synthesis artificial rate processing at higher speeds.
 * **Rate Boost:** Enable to double the computed speech rate for fast reading. High-speed SeaNet speech may use more CPU because the add-on processes generated audio after synthesis.
 * **Pitch:** Adjust the pitch of the voice.
 * **Volume:** Adjust the speech volume.
@@ -125,7 +126,7 @@ Under **NVDA Menu -> Preferences -> Settings -> Google TTS For NVDA**, you can c
 
 * **Speech runtime:** Choose which host runs the TTS engine from a single list of four: **Bundled runtime (no browser required)** — the default — **Google Chrome**, **Microsoft Edge**, or **Brave**. Each entry shows whether it is available, and Microsoft Edge additionally reports whether the WebView2 Runtime is present.
 * **Speech runtime status:** Review the selected runtime, whether it was found, and the active fallback runtime when one is used.
-* **Keep Google TTS browser runtime ready in the background:** Turn on to let Google TTS prepare the browser runtime and current voice package while another synthesizer is active, making switching back to Google TTS faster. This setting is off by default. After you turn it on and press OK or Apply, it may use more memory and keep runtime files open until you turn it off or exit NVDA.
+* **Keep Google TTS speech runtime ready in the background:** Turn on to let Google TTS prepare the browser runtime and current voice package while another synthesizer is active, making switching back to Google TTS faster. This setting is off by default. After you turn it on and press OK or Apply, it may use more memory and keep runtime files open until you turn it off or exit NVDA.
 * **Background browser runtime status:** Review whether this setting is off, unnecessary because Google TTS is already the current synthesizer, or waiting to start after you press OK or Apply.
 * **Use automatic language profiles:** Enable automatic profile selection and open the profile controls described below:
   * **Preferred profile language:** Choose the enabled profile language used when a sentence is unclear. This list can be empty until at least one language profile is enabled.
@@ -196,7 +197,10 @@ Rate, pitch, and volume use slider controls like NVDA's Speech Settings. Capital
 
 ## Troubleshooting Edge Runtime Silence
 
-If you choose **Microsoft Edge** as the Chromium browser runtime and speech remains silent:
+> [!NOTE]
+> This section only applies when you have selected a Chromium browser as your speech runtime. The **bundled runtime** does not use Microsoft Edge or WebView2.
+
+If you choose **Microsoft Edge** as the speech runtime and speech remains silent:
 
 1. **Verify WebView2 Runtime:** Microsoft Edge requires the Microsoft Edge WebView2 Runtime for headless engine hosting. Google Chrome and Brave do not depend on WebView2.
 2. **Install Evergreen Bootstrapper:** Download Microsoft's small bootstrapper installer: [Download Microsoft Edge WebView2 Runtime](https://go.microsoft.com/fwlink/p/?LinkId=2124703).
@@ -207,13 +211,16 @@ If you choose **Microsoft Edge** as the Chromium browser runtime and speech rema
 
 ## Clearing Browser Runtime Cache and Resolving Conflicts
 
+> [!NOTE]
+> This section only applies when you have selected a Chromium browser as your speech runtime. The **bundled runtime** keeps no browser profile, so there is nothing to clear; if it misbehaves, switch synthesizers and switch back, or restart NVDA.
+
 If Google TTS encounters profile conflicts (exit code 21 or 0), fails to initialize after a browser update, or remains silent:
 
 > [!NOTE]
 > Clearing the browser runtime cache does **not** delete your downloaded voice packages. Voice packages (`.zvoice` files) are stored separately in `%appdata%\nvda\googleTtsForNvda\voices\` and remain completely safe.
 
 1. **Switch Synthesizers:** Press <kbd>NVDA+Ctrl+S</kbd>, select any other synthesizer (such as **Windows OneCore voices**), and press <kbd>Enter</kbd>.
-2. **Disable Background Readiness:** Open **NVDA Menu -> Preferences -> Settings -> Google TTS For NVDA**, uncheck **Keep Google TTS browser runtime ready in the background**, and press **OK** so all browser processes cleanly exit.
+2. **Disable Background Readiness:** Open **NVDA Menu -> Preferences -> Settings -> Google TTS For NVDA**, uncheck **Keep Google TTS speech runtime ready in the background**, and press **OK** so all browser processes cleanly exit.
 3. **Open Cache Folder:** Press <kbd>Windows+R</kbd>, type `%localappdata%\googleTtsForNvda`, and press <kbd>Enter</kbd>.
 4. **Delete Runtime Profiles:** Press <kbd>Ctrl+A</kbd> to select all folders inside (`chromeProfiles`, `edgeProfiles`, `braveProfiles`) and press <kbd>Shift+Delete</kbd>, then choose **Yes** to delete them.
 5. **Switch Back to Google TTS:** Press <kbd>NVDA+Ctrl+S</kbd>, select **Google TTS For NVDA**, and press <kbd>Enter</kbd>. The add-on will automatically rebuild clean, conflict-free runtime profiles.
@@ -222,17 +229,25 @@ If Google TTS encounters profile conflicts (exit code 21 or 0), fails to initial
 
 ## Frequently Asked Questions
 
-### Can Google TTS For NVDA work offline?
-Yes. After downloading your desired voice packages, the add-on generates speech locally on your computer through the bundled WASM TTS Engine and the local Chromium browser runtime. An internet connection is only needed to download additional voice packages or add-on updates.
+### Do I need to install a web browser?
+No. Since the bundled speech runtime was introduced, the add-on carries its own runtime and needs no browser at all — this is the default and the recommended setting. Google Chrome, Microsoft Edge, and Brave remain selectable in the **Speech runtime** setting if you would rather use a browser you already have, and the add-on falls back to one automatically if the bundled runtime is ever missing (for example, if antivirus removed `runtime\bun.exe`).
 
-### Which Chromium browser runtimes are supported?
-Google Chrome, Microsoft Edge, and Brave are supported. You can select your preferred browser from the add-on settings category, and the add-on can automatically fall back to another installed supported runtime if the chosen browser cannot start.
+### Can Google TTS For NVDA work offline?
+Yes. After downloading your desired voice packages, the add-on generates speech locally on your computer through the bundled WASM TTS Engine running in the bundled speech runtime. An internet connection is only needed to download additional voice packages or add-on updates.
+
+### Which speech runtimes are supported?
+The **Speech runtime** setting in the add-on settings category offers four choices:
+
+* **Bundled runtime (no browser required)** — the default. A Bun executable ships inside the add-on, so nothing else has to be installed.
+* **Google Chrome**, **Microsoft Edge**, or **Brave** — headless Chromium browsers, if you prefer to use one you already have.
+
+The add-on automatically falls back to another available runtime if your chosen one cannot start.
 
 ### Must a browser window remain open while NVDA is speaking?
-No. The add-on starts and manages its own background headless Chromium process. You do not need to open or keep a regular browser window open.
+No. The add-on starts and manages its own background process — the bundled runtime, or a headless Chromium process if you selected a browser. No window is shown either way, and you never need to open or keep a regular browser window open.
 
 ### Why can the first speech take a moment after NVDA starts?
-The Chromium browser runtime, WASM TTS Engine, and selected voice package require a brief startup phase. Enabling **Keep Google TTS browser runtime ready in the background** prepares the runtime sooner while another synthesizer is active, at the cost of additional background memory use.
+The speech runtime, WASM TTS Engine, and selected voice package require a brief startup phase: roughly two seconds to load the runtime and engine, and a few more seconds the first time a given voice package is used. Later utterances start in a few hundred milliseconds. Enabling **Keep Google TTS speech runtime ready in the background** prepares the runtime sooner while another synthesizer is active, at the cost of additional background memory use.
 
 ### Why are normal voice controls disabled in NVDA Speech Settings when automatic language profiles are enabled?
 Because automatic language profiles manage separate voice, variant, rate, pitch, and spelling options for every enabled language, standard single-voice settings cannot represent all active profiles simultaneously. Presenting them separately protects both your normal voice preferences and your per-language configurations. Normal controls return immediately when automatic language profiles are disabled.
@@ -245,10 +260,10 @@ In Google TTS Voice Manager, certain voice packages (such as packages containing
 * **Proactive Protection:** To prevent synthesizer errors, silent speech, or browser crashes, Google TTS For NVDA identifies these incompatible package families in the catalog and marks them as unsupported in advance. They are kept in the catalog so that if a future upstream WASM engine update introduces software decoding for them, they can be enabled smoothly.
 
 ### Does Microsoft Edge require WebView2 Runtime?
-Yes, but only when Microsoft Edge is the effective runtime. Google Chrome and Brave operate independently and do not require WebView2.
+Yes, but only when Microsoft Edge is the effective runtime. The bundled runtime, Google Chrome, and Brave operate independently and do not require WebView2.
 
 ### Can Google TTS speak on the Windows sign-in screen or secure desktop?
-Do not rely on it there. Google TTS For NVDA requires an interactive Windows user session to run its background browser process, which is restricted in secure desktop and pre-login environments.
+Do not rely on it there. Google TTS For NVDA requires an interactive Windows user session to run its background speech runtime process, which is restricted in secure desktop and pre-login environments.
 
 ### Under what license is Google TTS For NVDA released?
 * **Add-on source code:** GNU General Public License version 2.0 (GPL-2.0), matching NVDA.
@@ -256,6 +271,7 @@ Do not rely on it there. Google TTS For NVDA requires an interactive Windows use
 * **Eigen math library:** Apache License 2.0.
 * **Compact Language Detector 2 (CLD2):** Apache License 2.0.
 * **websocket-client:** Apache License 2.0.
+* **Bun runtime (`runtime\bun.exe`):** MIT License. Bun statically links JavaScriptCore, which is LGPL-2, so Bun's license text — including the relinking instructions LGPL-2 requires — is redistributed with the binary at `synthDrivers\googleTtsForNvda\bunRuntime\LICENSE-bun.txt`.
 * **Unicode Character Database (UCD):** Unicode License V3 (Unicode-3.0).
 * **Unicode Common Locale Data Repository (CLDR):** Unicode License V3 (Unicode-3.0).
 * **Voice packages (`.zvoice`):** Downloaded directly on demand from Google's official public speech CDN; not distributed within the add-on package.
@@ -267,14 +283,25 @@ Do not rely on it there. Google TTS For NVDA requires an interactive Windows use
 To package the add-on yourself:
 
 1. Clone this repository: `git clone https://github.com/nguyenanhduc09/Google-TTS-For-NVDA.git`
-2. Ensure **Python** and **Node.js** are installed on your computer.
+2. Ensure **Python** and **Node.js** are installed on your computer. Internet access is needed once, to download the Bun runtime.
 3. Run the automated build script:
 
 ```bat
 build.bat
 ```
 
-The build script reads the version from `googleTtsForNvda/manifest.ini`, verifies Python and JavaScript syntax, confirms no `.zvoice` packages are in the source tree, cleans cache folders, and packages the add-on into `dist/`.
+The build script reads the version from `googleTtsForNvda/manifest.ini`, verifies Python and JavaScript syntax, **downloads the Bun runtime and places `bun.exe` in `googleTtsForNvda/synthDrivers/googleTtsForNvda/runtime/`**, confirms no `.zvoice` packages are in the source tree, cleans cache folders, and packages the add-on into `dist/`.
+
+The Bun step is performed by `fetch_bun_runtime.py`, which downloads `bun-windows-x64.zip` from Bun's latest release, extracts it, locates `bun.exe` by recursive search, verifies it is a genuine Windows PE image, and records its version and SHA-256 in `runtime/bun_version.json`. The downloaded archive is cached, so repeat builds do not re-download it. Two environment variables alter this step:
+
+* `SKIP_BUN_RUNTIME=1` — build without downloading (the resulting add-on will fall back to a browser at runtime)
+* `BUN_RUNTIME_URL=<url>` — download from a different archive, for example to pin a specific Bun release
+
+`runtime/` is gitignored: `bun.exe` is a build input, never a tracked source file. Because of it the package is roughly 53 MB rather than 10 MB.
+
+### Continuous integration
+
+`.github/workflows/test.yml` runs linting, type checking, and the unit test suite on Python 3.11 and 3.12. `.github/workflows/build.yml` performs the same Bun download, builds the `.nvda-addon`, verifies that `bun.exe` and the other required files are actually inside the archive, uploads it as a build artifact, and publishes a GitHub Release when a `v*` tag is pushed.
 
 ---
 

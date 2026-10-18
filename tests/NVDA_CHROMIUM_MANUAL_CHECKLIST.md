@@ -30,7 +30,7 @@ log/audio captures. For the bundled runtime, record the version reported by
 - [ ] Install the packaged add-on on a machine with **no browser installed** and verify speech works.
 - [ ] Verify the settings panel lists four runtimes with the bundled one first and marked Available.
 - [ ] Verify a cold first utterance, then warm speech, and record time to first audio for each.
-- [ ] Verify **Keep Google TTS browser runtime ready** both off and on.
+- [ ] Verify **Keep Google TTS speech runtime ready** both off and on.
 - [ ] Verify no console window flashes at NVDA startup or during speech.
 - [ ] Verify cancellation while speaking: interrupt mid-utterance repeatedly and confirm speech stops promptly with no leaked or trailing audio.
 - [ ] Verify the sign-in screen / secure desktop behaviour and record it; do not assume it works.

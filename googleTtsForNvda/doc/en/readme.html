@@ -9,7 +9,7 @@
 	<p><strong>Authors:</strong> Nguyen Anh Duc, Dao Duc Trung, and Pham Hung Vuong</p>
 	<p><strong>Independence notice:</strong> Google TTS For NVDA is an independent, open-source accessibility project. It is not affiliated with, sponsored by, or endorsed by Google LLC. Google is a trademark of Google LLC.</p>
 	<p>For a long time, screen reader users have wished they could use familiar voices from Google's text-to-speech technology on NVDA for Windows, similar to the experience on Android screen readers.</p>
-	<p><strong>Google TTS For NVDA</strong> was created to fulfill that wish. By leveraging Google's text-to-speech technology through WebAssembly (WASM), running in a supported background Chromium browser runtime such as Google Chrome, Microsoft Edge, or Brave, this add-on brings familiar, natural Google voices to enhance your daily computer use.</p>
+	<p><strong>Google TTS For NVDA</strong> was created to fulfill that wish. By leveraging Google's text-to-speech technology through WebAssembly (WASM), running in a speech runtime bundled with the add-on, this add-on brings familiar, natural Google voices to enhance your daily computer use.</p>
 	<p>Once your desired voice packages are downloaded, the add-on operates entirely offline on your computer, providing responsive speech without requiring a continuous internet connection.</p>
 
 	<h2>Key Features</h2>
@@ -18,7 +18,8 @@
 		<li><strong>Diverse languages and voices:</strong> Provides multiple Google TTS voice packages for supported languages.</li>
 		<li><strong>Fast response and low latency:</strong> Uses text segmentation and audio buffering to improve NVDA responsiveness.</li>
 		<li><strong>Google TTS Voice Manager:</strong> Browse, download, remove, and inspect voice packages from an accessible dialog.</li>
-		<li><strong>Chromium Browser Runtime Selection:</strong> Choose Google Chrome, Microsoft Edge, or Brave as the supported background browser runtime.</li>
+		<li><strong>No browser required:</strong> Speech runs inside a runtime bundled with the add-on, so nothing else has to be installed.</li>
+		<li><strong>Speech Runtime Selection:</strong> Optionally choose Google Chrome, Microsoft Edge, or Brave instead of the bundled runtime.</li>
 		<li><strong>Automatic language profiles:</strong> Optionally use per-language profiles so different languages can have their own voice and speech values.</li>
 		<li><strong>Built-in add-on updates:</strong> Check for add-on updates from NVDA Settings, with an optional once-per-startup automatic check.</li>
 	</ul>
@@ -26,8 +27,8 @@
 	<h2>System Requirements</h2>
 	<ul>
 		<li><strong>NVDA:</strong> Version 2024.1 or newer. The add-on supports NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) NVDA builds.</li>
-		<li><strong>Chromium browser:</strong> Google Chrome, Microsoft Edge, or Brave installed on your computer. If you use Microsoft Edge as the runtime, Microsoft Edge WebView2 Runtime must also be available.</li>
-		<li><strong>Interactive Windows user session:</strong> Do not rely on this add-on where the Chromium browser runtime cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.</li>
+		<li><strong>Speech runtime:</strong> None. The add-on bundles its own runtime. Only if you deliberately select a Chromium browser in the settings do you need Google Chrome, Microsoft Edge, or Brave installed; Microsoft Edge additionally requires the Microsoft Edge WebView2 Runtime.</li>
+		<li><strong>Interactive Windows user session:</strong> Do not rely on this add-on where its background speech runtime process cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.</li>
 	</ul>
 
 	<h2>Quick Start Guide</h2>
@@ -72,10 +73,10 @@
 	<h3>Add-on Settings</h3>
 	<p>Under <strong>NVDA Menu &rarr; Preferences &rarr; Settings &rarr; Google TTS For NVDA</strong>, you can configure:</p>
 	<ul>
-		<li><strong>Chromium browser runtime:</strong> Choose Google Chrome, Microsoft Edge, or Brave as the background Chromium browser runtime for the add-on. The settings panel displays browser availability.</li>
-		<li><strong>Chromium browser runtime status:</strong> Review the selected runtime, browser availability, and the active fallback runtime when one is used.</li>
-		<li><strong>Keep Google TTS browser runtime ready in the background:</strong> Turn on to let Google TTS prepare the browser runtime and current voice package while another synthesizer is active, so switching back to Google TTS can be faster. This setting is off by default. After you turn it on and press OK or Apply, it may use more memory and keep runtime files open until you turn it off or exit NVDA.</li>
-		<li><strong>Background browser runtime status:</strong> Review whether this setting is off, unnecessary because Google TTS is already the current synthesizer, or waiting to start after you press OK or Apply.</li>
+		<li><strong>Speech runtime:</strong> Choose what runs the speech engine: the <strong>Bundled runtime (no browser required)</strong>, which is the default, or Google Chrome, Microsoft Edge, or Brave. Each entry shows whether it is available.</li>
+		<li><strong>Speech runtime status:</strong> Review the selected runtime, whether it was found, and the active fallback runtime when one is used.</li>
+		<li><strong>Keep Google TTS speech runtime ready in the background:</strong> Turn on to let Google TTS prepare the speech runtime and current voice package while another synthesizer is active, so switching back to Google TTS can be faster. This setting is off by default. After you turn it on and press OK or Apply, it may use more memory and keep runtime files open until you turn it off or exit NVDA.</li>
+		<li><strong>Background speech runtime status:</strong> Review whether this setting is off, unnecessary because Google TTS is already the current synthesizer, or waiting to start after you press OK or Apply.</li>
 		<li><strong>Use automatic language profiles:</strong> Enable automatic profile selection and open the profile controls described below.
 			<ul>
 				<li><strong>Preferred profile language:</strong> Choose the enabled profile language used when a sentence is unclear. This list can be empty until at least one language profile is enabled.</li>
@@ -121,7 +122,8 @@
 	<p>While automatic language profiles are enabled, NVDA's Speech settings dialog will not offer the normal voice, variant, rate, rate boost, pitch, and volume controls for this synthesizer. It will show a focusable notice directing you to the Google TTS For NVDA settings category instead. <strong>Pauses</strong> remains available in Speech settings and applies to all Google TTS speech. The normal synth settings ring commands, such as <kbd>NVDA+Ctrl+Arrow keys</kbd> on desktop keyboards or <kbd>NVDA+Shift+Ctrl+Arrow keys</kbd> on laptop keyboards, announce this notice instead of changing the Google TTS voice or speech values in this mode. Google TTS also uses each enabled profile's capital-letter and spelling options while automatic language profiles are on; the normal Speech Settings values remain available again when automatic language profiles are turned off. Status messages in the Google TTS For NVDA settings category are also reachable with Tab so screen readers can announce them.</p>
 
 	<h2>Troubleshooting Edge Runtime Silence</h2>
-	<p>If you choose <strong>Microsoft Edge</strong> as the Chromium browser runtime, Google TTS For NVDA also checks whether Microsoft Edge WebView2 Runtime is available. Edge may be installed while WebView2 is missing or damaged, and in that case the add-on cannot use Edge for speech. Google Chrome and Brave do not depend on WebView2.</p>
+	<p>This section applies only if you selected Microsoft Edge as your speech runtime. The bundled runtime, Google Chrome, and Brave do not use WebView2.</p>
+	<p>If you choose <strong>Microsoft Edge</strong> as the speech runtime, Google TTS For NVDA also checks whether Microsoft Edge WebView2 Runtime is available. Edge may be installed while WebView2 is missing or damaged, and in that case the add-on cannot use Edge for speech. Google Chrome and Brave do not depend on WebView2.</p>
 	<p>WebView2 is the Microsoft Edge runtime used by native Windows applications to host web content. It is related to Microsoft Edge, but having the normal Edge browser available does not always mean the WebView2 Runtime is installed and healthy for app scenarios. Microsoft recommends the Evergreen WebView2 Runtime for applications because it is shared, automatically updated, and the small Evergreen Bootstrapper downloads the matching runtime for the device architecture.</p>
 	<p>When WebView2 is needed, Google TTS For NVDA offers buttons to download Microsoft's online Evergreen Bootstrapper, open Microsoft's WebView2 page for offline installers or fixed-version packages, or leave the change for later. NVDA keeps using the previous synthesizer until WebView2 is available.</p>
 	<p>If Windows cannot open the download page, the add-on shows the download address in a labeled read-only field and includes a <strong>Copy link</strong> button so you can paste the address into a browser manually.</p>
@@ -130,7 +132,7 @@
 
 	<h2>Notes</h2>
 	<ul>
-		<li>You do not need to keep a Google Chrome, Microsoft Edge, or Brave browser window open while using NVDA. The add-on automatically connects and processes speech in the background.</li>
+		<li>You do not need to install or open any web browser. The add-on starts its own background speech runtime process and shows no window.</li>
 		<li>When NVDA first speaks after startup, voices may take a brief moment to initialize.</li>
 	</ul>
 
@@ -148,6 +150,7 @@
 	<h2>Change Log</h2>
 	<h3>Version 1.0 (2026-10-12)</h3>
 	<ul>
+		<li><strong>Bundled Speech Runtime:</strong> The WASM TTS engine now runs inside a runtime bundled with the add-on, so no web browser has to be installed. The <strong>Speech runtime</strong> setting lists it alongside Google Chrome, Microsoft Edge, and Brave, and the add-on falls back to an installed browser automatically if the bundled runtime is missing. Audio behaviour is unchanged because both runtimes share one copy of the synthesis harness.</li>
 		<li><strong>Faster and smoother reading:</strong>
 			<ul>
 				<li>For medium and long text, the add-on now uses a shorter first section so speech can begin sooner, then processes the remaining text in larger sections.</li>

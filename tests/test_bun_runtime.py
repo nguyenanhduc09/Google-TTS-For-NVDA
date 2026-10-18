@@ -805,6 +805,83 @@ class FetchBunRuntimeTests(unittest.TestCase):
         self.assertIn("bun.exe", gitignore)
 
 
+class RedistributionAndDocsTests(unittest.TestCase):
+    """Shipping a third-party binary carries obligations the docs must reflect."""
+
+    def setUp(self) -> None:
+        self.licensePath = BUN_RUNTIME_DIR / "LICENSE-bun.txt"
+        self.manifest = (ROOT / "googleTtsForNvda" / "manifest.ini").read_text(encoding="utf-8-sig")
+        self.readme = (ROOT / "readme.md").read_text(encoding="utf-8")
+
+    def test_bun_license_notice_ships_with_the_addon(self) -> None:
+        self.assertTrue(self.licensePath.is_file(), "bunRuntime/LICENSE-bun.txt must ship next to bun.exe")
+
+    def test_bun_license_notice_covers_mit_and_the_lgpl_relink_terms(self) -> None:
+        text = self.licensePath.read_text(encoding="utf-8")
+        self.assertIn("MIT", text)
+        # JavaScriptCore is statically linked and is LGPL-2, whose terms require the
+        # relinking instructions to travel with the binary.
+        self.assertIn("LGPL", text)
+        self.assertIn("JavaScriptCore", text)
+        self.assertIn("relink", text.lower())
+
+    def test_readme_lists_bun_in_the_license_section(self) -> None:
+        self.assertIn("Bun runtime", self.readme)
+        self.assertIn("LICENSE-bun.txt", self.readme)
+
+    def test_build_workflow_verifies_the_license_notice_is_packaged(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+        self.assertIn("synthDrivers/googleTtsForNvda/bunRuntime/LICENSE-bun.txt", workflow)
+
+    def test_manifest_description_no_longer_requires_a_browser(self) -> None:
+        description = _manifest_value(self.manifest, "description")
+        self.assertIn("bundled", description.lower())
+        self.assertNotIn("through a supported Chromium browser runtime", description)
+        self.assertIn("no web browser needs to be installed", description)
+
+    def test_manifest_changelog_mentions_the_bundled_runtime(self) -> None:
+        self.assertIn("bundled speech runtime", _manifest_value(self.manifest, "changelog"))
+
+    def test_manifest_keeps_its_nvda_version_bounds(self) -> None:
+        """Guard against an accidental edit; bumping these is a deliberate release step."""
+        self.assertEqual("2024.1.0", _manifest_value(self.manifest, "minimumNVDAVersion"))
+        self.assertEqual("2026.3.0", _manifest_value(self.manifest, "lastTestedNVDAVersion"))
+
+    def test_manifest_parses_with_the_parser_nvda_uses(self) -> None:
+        """Triple-quoted multi-line values are easy to break; parse it for real."""
+        try:
+            import configobj
+        except ImportError:
+            self.skipTest("configobj is not installed")
+        parsed = configobj.ConfigObj(str(ROOT / "googleTtsForNvda" / "manifest.ini"), encoding="utf-8")
+        for key in ("name", "summary", "description", "author", "version", "changelog"):
+            self.assertTrue(str(parsed.get(key, "")).strip(), f"manifest {key} is empty")
+        self.assertIn("bundled", parsed["description"].lower())
+
+    def test_readme_documents_all_four_runtimes_and_the_build_download(self) -> None:
+        self.assertIn("Do I need to install a web browser?", self.readme)
+        self.assertIn("Bundled runtime (no browser required)", self.readme)
+        self.assertIn("fetch_bun_runtime.py", self.readme)
+        self.assertIn("SKIP_BUN_RUNTIME", self.readme)
+
+    def test_contributing_documents_the_build_workflow_and_the_download(self) -> None:
+        contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        self.assertIn("build.yml", contributing)
+        self.assertIn("fetch_bun_runtime.py", contributing)
+        self.assertIn("check_bun_runtime.py", contributing)
+
+
+def _manifest_value(text: str, key: str) -> str:
+    """Read one manifest.ini value, handling both plain and triple-quoted forms."""
+    marker = f"{key} = "
+    start = text.index(marker) + len(marker)
+    if text.startswith('"""', start):
+        end = text.index('"""', start + 3)
+        return text[start + 3 : end]
+    end = text.index("\n", start)
+    return text[start:end].strip().strip('"')
+
+
 class WorkflowTests(unittest.TestCase):
     """The CI build workflow must bundle the runtime from the documented URL."""
 
