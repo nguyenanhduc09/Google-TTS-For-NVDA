@@ -197,6 +197,15 @@ def _read_json_endpoint(port: int, path: str, method: str = "GET", timeout: floa
         return json.loads(response.read().decode("utf-8"))
 
 
+def _process_manager_supports_fallback(processManager: Any) -> bool:
+    """Whether ``processManager`` can retry with a different runtime candidate.
+
+    Keyed off the manager rather than a bridge attribute so that instances built
+    without ``__init__`` (the test fakes) keep the browser fallback behaviour.
+    """
+    return bool(getattr(processManager, "supports_runtime_fallback", True))
+
+
 def _raise_if_cancelled(cancelEvent: threading.Event | None) -> None:
     if cancelEvent is not None and cancelEvent.is_set():
         raise CdpCancelled()
@@ -1015,6 +1024,10 @@ class CdpDispatcher:
 
 class BrowserProcessManager:
     """Manages browser executable discovery, profile directories, HTTP server, and subprocess lifecycle."""
+
+    # This manager can retry with a different Chromium candidate, so
+    # ChromeTtsBridge.ensure_connection() keeps its fallback loop.
+    supports_runtime_fallback = True
 
     def __init__(self, catalog: VoiceCatalog) -> None:
         self.catalog = catalog
@@ -2055,7 +2068,9 @@ class ChromeTtsBridge:
     @property
     def speech_runtime(self) -> str:
         """The resolved host this bridge drives; one of ``BROWSER_RUNTIMES``."""
-        return str(getattr(self, "_speechRuntime", DEFAULT_BROWSER_RUNTIME))
+        if not _process_manager_supports_fallback(self._process_manager):
+            return BROWSER_RUNTIME_BUN
+        return str(getattr(self, "_speechRuntime", configured_browser_runtime()))
 
     @property
     def _ws(self) -> websocket.WebSocket | None:
@@ -2222,10 +2237,9 @@ class ChromeTtsBridge:
                         self._process_manager.terminate()
                     # The bundled runtime has no candidate list to fall back
                     # through; retrying would loop on the same missing executable.
-                    usingBundledRuntime = (
-                        getattr(self, "_speechRuntime", DEFAULT_BROWSER_RUNTIME) == BROWSER_RUNTIME_BUN
-                    )
-                    if runtime and not usingBundledRuntime:
+                    # Keyed off the manager, not a bridge attribute, so instances
+                    # built without __init__ keep the browser fallback behaviour.
+                    if runtime and _process_manager_supports_fallback(self._process_manager):
                         runtime = _normalize_browser_runtime(runtime)
                         skipRuntimes.add(runtime)
                         if _browser_choices(skipRuntimes=skipRuntimes):

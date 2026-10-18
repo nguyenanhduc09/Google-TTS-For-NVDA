@@ -179,6 +179,10 @@ class BunProcessManager:
     ``ChromeTtsBridge`` touches.
     """
 
+    # There is exactly one bundled executable, so there is no candidate list to
+    # fall back through; retrying would loop on the same missing file.
+    supports_runtime_fallback = False
+
     def __init__(self, catalog: VoiceCatalog) -> None:
         self.catalog = catalog
         self._lock = threading.RLock()

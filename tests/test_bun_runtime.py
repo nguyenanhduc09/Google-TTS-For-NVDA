@@ -176,6 +176,66 @@ class AdapterContractTests(unittest.TestCase):
         self.assertTrue(expected)
         self.assertEqual(expected, actual)
 
+    def test_fallback_capability_flags(self) -> None:
+        """BrowserProcessManager can retry with another candidate; the bundled one cannot."""
+        self.assertTrue(bridge.BrowserProcessManager.supports_runtime_fallback)
+        self.assertFalse(bun_bridge.BunProcessManager.supports_runtime_fallback)
+
+    def test_fallback_capability_defaults_to_true_for_unknown_managers(self) -> None:
+        """Instances built without __init__ (the test fakes) must keep browser fallback."""
+
+        class _Bare:
+            pass
+
+        self.assertTrue(bridge._process_manager_supports_fallback(_Bare()))
+        self.assertFalse(
+            bridge._process_manager_supports_fallback(
+                bun_bridge.BunProcessManager.__new__(bun_bridge.BunProcessManager)
+            )
+        )
+
+    def test_ensure_connection_retries_for_a_browser_manager(self) -> None:
+        """Deterministic counterpart to the cancellation race in test_bridge_concurrency."""
+        attempts = self._run_ensure_connection(supportsFallback=True)
+        self.assertEqual(2, len(attempts), attempts)
+
+    def test_ensure_connection_does_not_retry_for_the_bundled_runtime(self) -> None:
+        attempts = self._run_ensure_connection(supportsFallback=False)
+        self.assertEqual(1, len(attempts), attempts)
+
+    def _run_ensure_connection(self, *, supportsFallback: bool) -> list[str]:
+        from tests.test_support import FakeCdpClient, FakeProcessManager, make_fake_bridge
+
+        manager = FakeProcessManager(urls=["ws://first:1", "ws://second:1"])
+        manager.supports_runtime_fallback = supportsFallback
+        client = FakeCdpClient()
+        bridgeInstance = make_fake_bridge(cdp_client=client, process_manager=manager)
+        attempts: list[str] = []
+
+        def alwaysFails(wsUrl: str) -> None:
+            attempts.append(wsUrl)
+            raise bridge.CdpError("refused", "refused")
+
+        client.connect = alwaysFails
+        allChoices = (
+            ("chrome", "C:/chrome/chrome.exe"),
+            ("edge", "C:/edge/msedge.exe"),
+            ("brave", "C:/brave/brave.exe"),
+        )
+
+        def fakeChoices(runtime: str | None = None, skipRuntimes: set[str] | None = None) -> tuple:
+            # Honour skipRuntimes like the real helper, otherwise the retry loop
+            # never exhausts its candidates and spins forever.
+            skipped = skipRuntimes or set()
+            return tuple(choice for choice in allChoices if choice[0] not in skipped)
+
+        with (
+            mock.patch.object(bridge, "_browser_choices", side_effect=fakeChoices),
+            self.assertRaises(bridge.CdpError),
+        ):
+            bridgeInstance.ensure_connection()
+        return attempts
+
     def test_start_and_get_websocket_url_accepts_the_keyword_arguments_bridge_passes(self) -> None:
         import inspect
 
