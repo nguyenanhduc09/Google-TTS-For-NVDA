@@ -142,7 +142,10 @@ Under **NVDA Menu -> Preferences -> Settings -> Google TTS For NVDA**, you can c
 
 ### Custom Runtime Paths
 
-The bundled speech runtime ships inside the add-on at `synthDrivers\googleTtsForNvda\runtime\bun.exe` and normally needs no configuration. Set `GTTS_BUN_PATH` to the full path of a Bun executable to use your own copy instead, for example to test a newer Bun build.
+The bundled speech runtime ships inside the add-on at `synthDrivers\googleTtsForNvda\runtime\bun.exe` and normally needs no configuration. Two variables are available for troubleshooting:
+
+* `GTTS_BUN_PATH` — full path to a Bun executable, to use your own copy instead (for example to test a newer Bun build).
+* `GTTS_DRAIN_IDLE_MS` — how long the engine's audio pump may go quiet before an utterance is treated as finished. Defaults to `250` for the bundled runtime and `80` for a Chromium browser runtime. Raise it if the ends of sentences are ever cut off on a slow or heavily loaded machine; lower it if you want `speak()` to return sooner. Larger values are safer against truncation, smaller ones return faster.
 
 Google TTS For NVDA automatically discovers Google Chrome, Microsoft Edge, or Brave from standard Windows installation locations and the registry. If you use a portable browser, a custom installation folder, or an enterprise environment where the executable resides elsewhere, set one of these environment variables to the full executable path:
 

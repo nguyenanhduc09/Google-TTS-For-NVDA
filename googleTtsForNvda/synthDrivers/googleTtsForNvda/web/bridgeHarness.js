@@ -22,7 +22,18 @@
 	const softLimiterCeiling = 0.94;
 	const synthesisIdlePollMs = 2;
 	const synthesisGeneratingEmptyDelayMs = 500;
-	const synthesisFinishedIdleMs = 80;
+	// How long the engine's audio pump may go quiet before the utterance is treated as
+	// finished. This is the ONLY completion criterion for an utterance that produced any
+	// audio at all: endHasSettled below is gated on lastChunkAt <= 0, i.e. no audio.
+	// The engine delivers 128-sample blocks (~5.3 ms each) from a chained setTimeout, so
+	// a stall longer than this -- TFLite inference on a date or number, GC, or event-loop
+	// contention -- is misread as "drained", the tail is discarded and the utterance is
+	// still reported as done. 80 ms suits the Chromium renderer, which gets its own
+	// prioritised process; hosts that share one event loop with the WASM pthread pool can
+	// override it by setting this global before the harness loads.
+	const synthesisFinishedIdleMs = Number(globalThis.googleTtsForNvdaDrainIdleMs) > 0
+		? Number(globalThis.googleTtsForNvdaDrainIdleMs)
+		: 80;
 	const tempoFrameSamples = 720;
 	const tempoOverlapSamples = 180;
 	const tempoSynthesisHopSamples = tempoFrameSamples - tempoOverlapSamples;

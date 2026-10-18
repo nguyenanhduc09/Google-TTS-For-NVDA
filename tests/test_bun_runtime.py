@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -888,6 +889,92 @@ class InterruptAndAccountingTests(unittest.TestCase):
         client._deliveredAudioSamples = 900
         client._report_audio_accounting({"success": True})
         client._report_audio_accounting(None)
+
+
+class DrainIdleOverrideTests(unittest.TestCase):
+    """Truncated speech: the harness treats an 80 ms pump stall as end-of-utterance.
+
+    waitForSynthesisComplete()'s endHasSettled branch is gated on `lastChunkAt <= 0`,
+    i.e. no audio at all, so for any utterance that produced sound, `audioHasDrained`
+    (an idle gap of synthesisFinishedIdleMs) is the ONLY completion criterion. The
+    engine delivers ~128-sample blocks from a chained setTimeout, so a stall longer
+    than that discards the tail while still reporting done -- and the driver then
+    caches the truncated audio as a complete result.
+    """
+
+    def setUp(self) -> None:
+        self.harness = HARNESS_JS.read_text(encoding="utf-8")
+        self.worker = WORKER_JS.read_text(encoding="utf-8")
+
+    def test_harness_reads_the_override_and_defaults_to_80(self) -> None:
+        self.assertIn("globalThis.googleTtsForNvdaDrainIdleMs", self.harness)
+        self.assertIn(
+            "const synthesisFinishedIdleMs = Number(globalThis.googleTtsForNvdaDrainIdleMs) > 0", self.harness
+        )
+        # the literal 80 must remain as the fallback so the browser path is unchanged
+        self.assertRegex(self.harness, r"googleTtsForNvdaDrainIdleMs[\s\S]{0,120}:\s*80;")
+
+    def test_override_expression_evaluates_to_80_when_unset(self) -> None:
+        """Prove the browser path is numerically identical, not just textually similar."""
+        import shutil
+        import subprocess
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not installed")
+        match = re.search(r"const synthesisFinishedIdleMs = ([\s\S]*?);\n", self.harness)
+        assert match is not None
+        script = (
+            "const f = new Function('return (' + process.argv[1] + ');');"
+            "const cases = [['unset', undefined], ['250', 250], ['zero', 0], ['nan', NaN], ['neg', -5]];"
+            "for (const [label, value] of cases) {"
+            "  if (value === undefined) delete globalThis.googleTtsForNvdaDrainIdleMs;"
+            "  else globalThis.googleTtsForNvdaDrainIdleMs = value;"
+            "  console.log(label + '=' + f());"
+            "}"
+        )
+        completed = subprocess.run(
+            [node, "-e", script, match.group(1)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        values = dict(line.split("=", 1) for line in completed.stdout.split())
+        self.assertEqual("80", values["unset"], "browser path must keep 80 ms")
+        self.assertEqual("80", values["zero"])
+        self.assertEqual("80", values["nan"])
+        self.assertEqual("80", values["neg"])
+        self.assertEqual("250", values["250"])
+
+    def test_worker_sets_the_override_before_loading_the_harness(self) -> None:
+        setAt = self.worker.index("globalThis.googleTtsForNvdaDrainIdleMs = DRAIN_IDLE_MS")
+        requireAt = self.worker.index('require(path.join(WEB_DIR, "bridgeHarness.js"))')
+        self.assertLess(setAt, requireAt, "the harness reads the value into a const at load time")
+
+    def test_worker_default_is_more_generous_than_the_browser_value(self) -> None:
+        match = re.search(r"GTTS_DRAIN_IDLE_MS\) \|\| (\d+)", self.worker)
+        assert match is not None
+        self.assertGreater(int(match.group(1)), 80)
+
+    def test_runtime_process_priority_is_elevated(self) -> None:
+        """A starved or power-throttled process stalls the audio pump."""
+        source = (DRIVER_DIR / "bun_bridge.py").read_text(encoding="utf-8-sig")
+        self.assertIn("_elevate_chrome_priority(process.pid)", source)
+
+    def test_accounting_ignores_superseded_sessions(self) -> None:
+        """Otherwise the warning fires on the very pattern it exists to diagnose."""
+        client = bun_bridge.BunClient.__new__(bun_bridge.BunClient)
+        client._lock = threading.RLock()
+        client._deliveredAudioPackets = 0
+        client._deliveredAudioSamples = 0
+        stale = json.dumps({"type": "audio", "sessionId": "old", "sampleRate": 24000, "data": "AAAAAA=="})
+        current = json.dumps({"type": "audio", "sessionId": "new", "sampleRate": 24000, "data": "AAAAAA=="})
+        client._count_delivered_audio(stale, "new")
+        self.assertEqual(0, client._deliveredAudioPackets)
+        client._count_delivered_audio(current, "new")
+        self.assertEqual(1, client._deliveredAudioPackets)
 
 
 class RedistributionAndDocsTests(unittest.TestCase):

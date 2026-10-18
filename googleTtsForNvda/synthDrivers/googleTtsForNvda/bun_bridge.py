@@ -59,6 +59,7 @@ from .bridge import (
     BINDING_NAME,
     SAMPLE_RATE,
     CdpCancelled,
+    _elevate_chrome_priority,
     _friendly_cdp_error,
     _hidden_chrome_startup_kwargs,
     _process_tree_memory_usage,
@@ -307,6 +308,13 @@ class BunProcessManager:
                     f"Bun exited immediately with code {process.returncode}.",
                 )
             time.sleep(READY_LINE_POLL_SECONDS)
+        # The Chromium path elevates its browser for the same reason: the WASM engine
+        # pumps audio from a setTimeout chain, and a starved or power-throttled process
+        # stalls that pump long enough for the harness to think the utterance drained.
+        # Bun gets no scheduler or power-throttling concessions by default, so ask for
+        # them explicitly. Despite the name this helper is runtime-agnostic: it only
+        # calls SetPriorityClass and disables PROCESS_POWER_THROTTLING_EXECUTION_SPEED.
+        _elevate_chrome_priority(process.pid)
         log.debug("Google TTS bundled speech runtime started (pid %d, %s).", process.pid, bunPath)
         return BUN_CONNECTION_URL
 
@@ -349,6 +357,7 @@ class BunClient:
         self._pending: dict[int, threading.Event] = {}
         self._deliveredAudioPackets = 0
         self._deliveredAudioSamples = 0
+        self._activeSessionId: str | None = None
         self._responses: dict[int, dict[str, Any]] = {}
         self._eventHandlers: dict[int, Callable[[dict[str, Any]], None]] = {}
         self._handlerErrors: dict[int, BaseException] = {}
@@ -467,7 +476,7 @@ class BunClient:
         if method == "Runtime.bindingCalled":
             params = message.get("params")
             if isinstance(params, dict) and params.get("name") == BINDING_NAME:
-                self._count_delivered_audio(params.get("payload"))
+                self._count_delivered_audio(params.get("payload"), self._activeSessionId)
                 envelope = {"method": "Runtime.bindingCalled", "params": params}
                 self._fan_out(envelope)
             return
@@ -481,8 +490,14 @@ class BunClient:
         if event is not None:
             event.set()
 
-    def _count_delivered_audio(self, rawPayload: Any) -> None:
-        """Track audio packets handed to handle_event(), for loss detection."""
+    def _count_delivered_audio(self, rawPayload: Any, sessionId: str | None = None) -> None:
+        """Track audio packets handed to handle_event(), for loss detection.
+
+        Packets belonging to a superseded session are skipped: handle_event() filters
+        them out by sessionId, so counting them here would report a mismatch that is
+        not a loss. Without this the warning fires on exactly the rapid
+        interrupt-then-respeak pattern it is meant to diagnose.
+        """
         if not isinstance(rawPayload, str):
             return
         try:
@@ -490,6 +505,8 @@ class BunClient:
         except json.JSONDecodeError:
             return
         if not isinstance(event, dict) or event.get("type") != "audio":
+            return
+        if sessionId is not None and event.get("sessionId") != sessionId:
             return
         data = event.get("data")
         if not isinstance(data, str):
@@ -594,9 +611,19 @@ class BunClient:
         if method in ("Runtime.enable", "Page.enable", "Runtime.addBinding"):
             return {"id": self.next_msg_id(), "result": {}}
         msgId = self.next_msg_id()
+        operation, operationPayload = (
+            classify_expression(str((params or {}).get("expression") or ""))
+            if method == "Runtime.evaluate"
+            else (method, None)
+        )
         with self._lock:
             self._deliveredAudioPackets = 0
             self._deliveredAudioSamples = 0
+            self._activeSessionId = (
+                str(operationPayload.get("sessionId"))
+                if operation == "speak" and isinstance(operationPayload, dict)
+                else None
+            )
         event = threading.Event()
         with self._lock:
             self._pending[msgId] = event

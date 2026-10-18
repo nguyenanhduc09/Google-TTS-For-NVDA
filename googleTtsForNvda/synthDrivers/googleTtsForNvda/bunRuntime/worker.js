@@ -3,15 +3,19 @@
 // This is the Bun counterpart of web/index.html. It loads, in order:
 //
 //   1. shim.js                 — the Bun host-API shims
-//   2. ../web/bridgeHarness.js — UNCHANGED, shared verbatim with the browser path
+//   2. ../web/bridgeHarness.js — shared with the browser path
 //   3. engine_boot.js          — generated: bindings_main.js + offscreen_compiled.js
 //
-// Reusing bridgeHarness.js as-is is deliberate: all of the audio behaviour lives
-// there (soft limiter and output gain, post-pitch resampling, WSOLA tempo for
-// artificial rate, segment boundary hold, adaptive packet sizing, session token
-// fencing, mark/segmentEnd/done event ordering). Duplicating it would risk the two
-// runtimes drifting apart, and tests/test_performance.py already asserts those
+// Sharing bridgeHarness.js rather than porting it is deliberate: all of the audio
+// behaviour lives there (soft limiter and output gain, post-pitch resampling, WSOLA
+// tempo for artificial rate, segment boundary hold, adaptive packet sizing, session
+// token fencing, mark/segmentEnd/done event ordering). Duplicating it would risk the
+// two runtimes drifting apart, and tests/test_performance.py already asserts those
 // constants by reading web/bridgeHarness.js.
+//
+// The one thing this file configures is synthesisFinishedIdleMs, read by the harness
+// from globalThis.googleTtsForNvdaDrainIdleMs. It defaults to 80 ms when the global is
+// absent, so the browser path is numerically identical to before.
 //
 // Protocol — one JSON object per line.
 //
@@ -39,6 +43,12 @@ const BINDING_NAME = process.env.GTTS_BINDING_NAME || "googleTtsForNvdaBridge";
 const WEB_DIR = process.env.GTTS_WEB_DIR || "";
 const MAIN_ENTRY = process.env.GTTS_MAIN_ENTRY || "";
 const PREVIOUS_SPEAK_SETTLE_TIMEOUT_MS = Number(process.env.GTTS_SPEAK_SETTLE_TIMEOUT_MS) || 1000;
+// The Chromium renderer gets a dedicated, priority-elevated process; Bun shares one
+// event loop with the engine's WASM pthread pool, so the 80 ms drain idle the harness
+// defaults to can be exceeded mid-utterance and truncate speech. Raise it here, before
+// bridgeHarness.js is evaluated. Tunable so the trade-off can be measured on real
+// hardware: larger is safer against truncation, smaller returns from speak() sooner.
+const DRAIN_IDLE_MS = Number(process.env.GTTS_DRAIN_IDLE_MS) || 250;
 
 function log(...args) {
 	console.error("[bunRuntime]", ...args);
@@ -92,6 +102,8 @@ try {
 	// shim.js is loaded first so window/self, the Worker shim and the indexedDB
 	// stub exist before the engine evaluates.
 	require(path.join(__dirname, "shim.js"));
+	// Must be set before bridgeHarness.js reads it into a const.
+	globalThis.googleTtsForNvdaDrainIdleMs = DRAIN_IDLE_MS;
 	// bridgeHarness.js installs window.AudioContext / AudioWorkletNode / chrome and
 	// the googleTtsForNvda* entry points. It must run before the engine so that
 	// `new AudioContext({sampleRate:24000})` inside the engine picks up the fake.
