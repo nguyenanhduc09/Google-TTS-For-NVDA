@@ -15,7 +15,7 @@ Technical code map indexing the codebase architecture, modules, classes, functio
   - **synthDrivers/googleTtsForNvda/** — Synthesizer driver and runtime bridge
     - **__init__.py** — `SynthDriver` implementation, NVDA settings ring, speech loop, rate factor tables, audio cache
     - **audio_math.py** — Pure audio math, rate/pitch conversions, SeaNet rate protection, speech options builder
-    - **bridge.py** — `ChromeTtsBridge`, `BrowserProcessManager`, `CdpClient`, `CdpDispatcher`, HTTP server, browser lifecycle, speech-runtime selection (`configured_speech_runtime()`, `effective_speech_runtime()`, `speech_runtime_snapshot()`)
+    - **bridge.py** — `ChromeTtsBridge`, `BrowserProcessManager`, `CdpClient`, `CdpDispatcher`, HTTP server, browser lifecycle, runtime selection (`BROWSER_RUNTIME_BUN`, `CHROMIUM_RUNTIMES`, `effective_speech_runtime()`, `speech_runtime_executable()`, `bun_runtime_available()`)
     - **bun_bridge.py** — Bundled Bun runtime: `BunProcessManager`, `BunClient`, `classify_expression()`, `find_bun()`/`bun_candidates()`. Presents the `BrowserProcessManager`/`CdpClient` duck-typed surface so `ChromeTtsBridge` and all of `WasmTtsEngineBridge` are shared with the browser path
     - **bun_bootstrap.py** — `generate()`, `find_engine_global()`, `harness_probe_names()`: builds `engine_boot.js` + `pthread_worker.js` from the pristine engine sources into `<CONFIG>/googleTtsForNvda/runtime/bunBootstrap/`
     - **bunRuntime/** — Bun host shims: `shim.js` (parentPort→`onmessage` bridge, `Worker` shim, in-memory `indexedDB`, relative-URL `fetch`), `worker.js` (stdin/stdout line protocol; reuses `../web/bridgeHarness.js` verbatim)
@@ -70,9 +70,9 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 | Runtime voices.json | `<CONFIG>/googleTtsForNvda/runtime/voices.json` | Dynamic JSON catalog served via local HTTP bridge (`bridge.py:BrowserProcessManager.start_server()`). |
 | NVDA configuration file | `<CONFIG>/nvda.ini` | Main NVDA config storing settings under `[googleTtsForNvda]` (`bridge.py:CONFIG_SECTION`). |
 | Voice dictionaries | `<CONFIG>/speechDicts/` | Per-voice pronunciation dictionaries (`globalPlugins/__init__.py:_load_voice_dictionary_for_voice()`). |
+| Bundled Bun executable | `<ADDON>/synthDrivers/googleTtsForNvda/runtime/bun.exe` | Build-time payload placed by `fetch_bun_runtime.py`; resolved by `bridge.bun_executable_path()` / `bun_bridge.find_bun()`, overridable with `GTTS_BUN_PATH`. |
 | Browser persistent profiles | `<PROFILES_ROOT>/persistentSession/` | Isolated persistent browser user data directories (`bridge.py:BrowserProcessManager._browser_profile_root()`). |
 | Browser temporary profiles | `<PROFILES_ROOT>/session-<pid>-<timestamp>/` | Ephemeral sessions spawned when persistent profile is locked (`bridge.py:BrowserProcessManager._start_browser_choice()`). Chromium runtime only. |
-| Bundled Bun executable | `<ADDON>/synthDrivers/googleTtsForNvda/runtime/bun.exe` | Build-time payload placed by `fetch_bun_runtime.py`; discovered by `bun_bridge.find_bun()`, overridable with `GTTS_BUN_PATH`. |
 | Generated Bun bootstrap | `<CONFIG>/googleTtsForNvda/runtime/bunBootstrap/` | `engine_boot.js`, `pthread_worker.js`, `bootstrap_manifest.json`; regenerated only when an input hash changes (`bun_bootstrap.generate()`). |
 | Profile size tracker | `<PROFILES_ROOT>/profile_size_check.json` | 24-hour periodic profile size check tracker (`bridge.py:_persistent_profile_size_check_due()`). |
 | Updater download directory | `%TEMP%/googleTtsForNvda-updates/` | Staging folder for `stable.json` and `.nvda-addon` installers (`updater.py:_update_download_dir()`). |

@@ -80,10 +80,16 @@ class NormalizeBrowserRuntimeTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual("brave", bridge._normalize_browser_runtime(value))
 
-    def test_unknown_defaults_to_chrome(self) -> None:
-        self.assertEqual("chrome", bridge._normalize_browser_runtime("unknown"))
-        self.assertEqual("chrome", bridge._normalize_browser_runtime(""))
-        self.assertEqual("chrome", bridge._normalize_browser_runtime(None))
+    def test_bun_variants(self) -> None:
+        for value in ("bun", "Bun", "BUN", " bun "):
+            with self.subTest(value=value):
+                self.assertEqual("bun", bridge._normalize_browser_runtime(value))
+
+    def test_unknown_defaults_to_the_bundled_runtime(self) -> None:
+        self.assertEqual(bridge.DEFAULT_BROWSER_RUNTIME, bridge._normalize_browser_runtime("unknown"))
+        self.assertEqual(bridge.DEFAULT_BROWSER_RUNTIME, bridge._normalize_browser_runtime(""))
+        self.assertEqual(bridge.DEFAULT_BROWSER_RUNTIME, bridge._normalize_browser_runtime(None))
+        self.assertEqual("bun", bridge.DEFAULT_BROWSER_RUNTIME)
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +98,7 @@ class NormalizeBrowserRuntimeTests(unittest.TestCase):
 
 
 class RuntimeFallbackOrderTests(unittest.TestCase):
-    """Verify _runtime_fallback_order puts preferred first, then chrome, edge, brave."""
+    """Verify _runtime_fallback_order puts the preferred runtime first, then the rest."""
 
     def test_preferred_is_first(self) -> None:
         order = bridge._runtime_fallback_order("edge")
@@ -105,10 +111,16 @@ class RuntimeFallbackOrderTests(unittest.TestCase):
 
     def test_all_runtimes_present(self) -> None:
         order = bridge._runtime_fallback_order("brave")
-        self.assertEqual(3, len(order))
+        self.assertEqual(4, len(order))
         self.assertIn("chrome", order)
         self.assertIn("edge", order)
         self.assertIn("brave", order)
+        self.assertIn("bun", order)
+
+    def test_bundled_runtime_is_last_so_the_browser_order_is_unchanged(self) -> None:
+        """chrome -> edge -> brave must stay the browser fallback order."""
+        self.assertEqual(("chrome", "edge", "brave", "bun"), bridge._runtime_fallback_order("chrome"))
+        self.assertEqual(("bun", "chrome", "edge", "brave"), bridge._runtime_fallback_order("bun"))
 
     def test_no_duplicates(self) -> None:
         order = bridge._runtime_fallback_order("chrome")

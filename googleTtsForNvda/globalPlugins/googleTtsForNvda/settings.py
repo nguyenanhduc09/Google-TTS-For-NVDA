@@ -110,33 +110,11 @@ def _open_synthesizer_dialog(parent: wx.Window | None = None) -> bool:
 def _save_browser_runtime(runtime: str) -> None:
     saved = browserBridge.set_configured_browser_runtime(runtime)
     ui.message(
-        _("Google TTS For NVDA will use {runtime} as its Chromium browser runtime.").format(
+        _("Google TTS For NVDA will use {runtime} as its speech runtime.").format(
             runtime=_runtime_label(saved),
         ),
     )
-    standby.refresh_async("Chromium browser runtime setting changed")
-
-
-def _speech_runtime_label(runtime: str) -> str:
-    return browserBridge.SPEECH_RUNTIME_LABELS.get(runtime, runtime)
-
-
-def _save_speech_runtime(runtime: str) -> str:
-    """Persist the selected speech host and report when it takes effect."""
-    saved = browserBridge.set_configured_speech_runtime(runtime)
-    if _is_google_synth_current():
-        ui.message(
-            _(
-                "Google TTS For NVDA will use the {runtime}. "
-                "Switch to another synthesizer and back, or restart NVDA, for this to take effect."
-            ).format(runtime=_speech_runtime_label(saved)),
-        )
-    else:
-        ui.message(
-            _("Google TTS For NVDA will use the {runtime}.").format(runtime=_speech_runtime_label(saved)),
-        )
     standby.refresh_async("Speech runtime setting changed")
-    return saved
 
 
 def _configured_keep_browser_runtime_ready() -> bool:
@@ -150,9 +128,7 @@ def _save_keep_browser_runtime_ready(enabled: bool) -> None:
 def _schedule_runtime_change_after_synth_switch(runtime: str, parent: wx.Window | None = None) -> None:
     global _pendingRuntimeChange
     _pendingRuntimeChange = runtime
-    ui.message(
-        _("Waiting for you to switch away from Google TTS For NVDA before changing the Chromium browser runtime.")
-    )
+    ui.message(_("Waiting for you to switch away from Google TTS For NVDA before changing the speech runtime."))
 
     def open_dialog_and_wait() -> None:
         if _open_synthesizer_dialog(parent):
@@ -180,9 +156,7 @@ def _apply_runtime_after_synth_switch(runtime: str, attempts: int) -> None:
     if attempts >= 600:
         _pendingRuntimeChange = None
         ui.message(
-            _(
-                "The Chromium browser runtime was left unchanged because Google TTS For NVDA is still the current synthesizer."
-            )
+            _("The speech runtime was left unchanged because Google TTS For NVDA is still the current synthesizer.")
         )
         return
     wx.CallLater(500, _apply_runtime_after_synth_switch, runtime, attempts + 1)
@@ -230,10 +204,10 @@ class GoogleTtsSettingsPanel(SettingsPanel):
 
     def makeSettings(self, settingsSizer: wx.Sizer, *args: object, **kwargs: object) -> None:
         self._settingsSizer = settingsSizer
-        self._runtimeValues = list(browserBridge.BROWSER_RUNTIMES)
-        self._speechRuntimeValues = list(browserBridge.SPEECH_RUNTIMES)
-        self._savedSpeechRuntime = browserBridge.configured_speech_runtime()
-        self._speechRuntimeSnapshot = browserBridge.speech_runtime_snapshot()
+        # Bundled runtime first: it is the default and needs nothing installed.
+        self._runtimeValues = [
+            runtime for runtime in (browserBridge.BROWSER_RUNTIME_BUN, *browserBridge.BROWSER_RUNTIMES)
+        ][: len(browserBridge.BROWSER_RUNTIMES)]
         self._refresh_runtime_snapshot()
         self._savedRuntime = self._runtimeSnapshot["selectedRuntime"]
         self._savedKeepBrowserRuntimeReady = _configured_keep_browser_runtime_ready()
@@ -262,39 +236,23 @@ class GoogleTtsSettingsPanel(SettingsPanel):
         self._preferredLanguageValues = self._enabled_auto_language_candidates()
 
         helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
-        speechRuntimeGroup = self._add_settings_group(helper, _("Speech runtime"))
-        self.speechRuntimeChoice = speechRuntimeGroup.addLabeledControl(
-            _("&Speech runtime:"),
-            wx.Choice,
-            choices=[_speech_runtime_label(runtime) for runtime in self._speechRuntimeValues],
-        )
-        self.speechRuntimeChoice.SetSelection(self._speechRuntimeValues.index(self._savedSpeechRuntime))
-        self.speechRuntimeChoice.SetName(_("Speech runtime"))
-        self.speechRuntimeStatusText = speechRuntimeGroup.addLabeledControl(
-            _("Speech runtime status") + ":",
-            wx.TextCtrl,
-            value=self._speech_runtime_message(),
-            style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
-        )
-        self.speechRuntimeStatusText.SetName(_("Speech runtime status"))
-        bind_read_only_text_focus_announcement(self.speechRuntimeStatusText, minLines=2, maxLines=5)
-        runtimeGroup = self._add_settings_group(helper, _("Chromium browser runtime"))
+        runtimeGroup = self._add_settings_group(helper, _("Speech runtime"))
         choices = [self._format_runtime_choice(runtime) for runtime in self._runtimeValues]
         self.runtimeChoice = runtimeGroup.addLabeledControl(
-            _("Chromium browser &runtime:"),
+            _("&Speech runtime:"),
             wx.Choice,
             choices=choices,
         )
         self.runtimeChoice.SetSelection(self._runtimeValues.index(self._savedRuntime))
-        self.runtimeChoice.SetName(_("Chromium browser runtime"))
+        self.runtimeChoice.SetName(_("Speech runtime"))
         self.runtimeChoice.Bind(wx.EVT_CHOICE, self.on_runtime_choice_changed)
         self.effectiveRuntimeText = runtimeGroup.addLabeledControl(
-            _("Chromium browser runtime status") + ":",
+            _("Speech runtime status") + ":",
             wx.TextCtrl,
             value=self._effective_runtime_message(),
             style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
         )
-        self.effectiveRuntimeText.SetName(_("Chromium browser runtime status"))
+        self.effectiveRuntimeText.SetName(_("Speech runtime status"))
         bind_read_only_text_focus_announcement(self.effectiveRuntimeText, minLines=2, maxLines=5)
         self.keepBrowserRuntimeReadyCheck = runtimeGroup.addCheckBox(
             _("&Keep Google TTS browser runtime ready in the background")
@@ -453,18 +411,7 @@ class GoogleTtsSettingsPanel(SettingsPanel):
             return self._savedRuntime
         return self._runtimeValues[selection]
 
-    def _selected_speech_runtime_choice(self) -> str:
-        index = self.speechRuntimeChoice.GetSelection()
-        if index == wx.NOT_FOUND or index >= len(self._speechRuntimeValues):
-            return self._savedSpeechRuntime
-        return self._speechRuntimeValues[index]
-
     def onSave(self, *args: object, **kwargs: object) -> None:
-        selectedSpeechRuntime = self._selected_speech_runtime_choice()
-        if selectedSpeechRuntime != self._savedSpeechRuntime:
-            self._savedSpeechRuntime = _save_speech_runtime(selectedSpeechRuntime)
-            self._speechRuntimeSnapshot = browserBridge.speech_runtime_snapshot()
-            self.speechRuntimeStatusText.SetValue(self._speech_runtime_message())
         selectedRuntime = self._selected_runtime_choice()
         self._store_selected_auto_language_profile(self._selectedAutoLanguageProfileIndex)
         self._save_auto_language_settings()
@@ -486,16 +433,14 @@ class GoogleTtsSettingsPanel(SettingsPanel):
                 ui.message(
                     _(
                         "Microsoft Edge was found, but Microsoft Edge WebView2 Runtime was not found. "
-                        "Keeping the current Google TTS For NVDA Chromium browser runtime setting."
+                        "Keeping the current Google TTS For NVDA speech runtime setting."
                     ),
                 )
                 self._select_saved_runtime()
                 self._refresh_runtime_status(self._savedRuntime)
                 return
             ui.message(
-                _(
-                    "{runtime} was not found. Keeping the current Google TTS For NVDA Chromium browser runtime setting."
-                ).format(
+                _("{runtime} was not found. Keeping the current Google TTS For NVDA speech runtime setting.").format(
                     runtime=_runtime_label(selectedRuntime),
                 ),
             )
@@ -507,10 +452,10 @@ class GoogleTtsSettingsPanel(SettingsPanel):
         if _is_google_synth_current() and selectedRuntime != effectiveRuntime:
             answer = gui.messageBox(
                 _(
-                    "Google TTS For NVDA is using the selected Chromium browser runtime now. "
+                    "Google TTS For NVDA is using the selected speech runtime now. "
                     "To change it safely, switch to another synthesizer first.\n\n"
                     "Choose OK to open Select Synthesizer. "
-                    "Choose Cancel to keep the current Chromium browser runtime."
+                    "Choose Cancel to keep the current speech runtime."
                 ),
                 _("Google TTS For NVDA"),
                 wx.OK | wx.CANCEL | wx.ICON_WARNING,
@@ -603,37 +548,20 @@ class GoogleTtsSettingsPanel(SettingsPanel):
             status = _("Available") if self._availability.get(runtime, False) else _("Unavailable")
         return _("{runtime} ({status})").format(runtime=_runtime_label(runtime), status=status)
 
-    def _speech_runtime_message(self) -> str:
-        snapshot = self._speechRuntimeSnapshot
-        selected = snapshot["selectedRuntime"]
-        bunAvailable = bool(snapshot["bunAvailable"])
-        browserAvailable = bool(snapshot["browserAvailable"])
-        if selected == browserBridge.SPEECH_RUNTIME_BUN:
-            if bunAvailable:
-                return _("The bundled speech runtime is installed. No browser is required.")
-            if browserAvailable:
-                return _(
-                    "The bundled speech runtime was not found, so Google TTS For NVDA will use a Chromium browser runtime instead."
-                )
-            return _("The bundled speech runtime was not found. Reinstall Google TTS For NVDA.")
-        if browserAvailable:
-            return _("Google TTS For NVDA will use a Chromium browser runtime.")
-        if bunAvailable:
-            return _(
-                "No Chromium browser runtime was found, so Google TTS For NVDA will use the bundled speech runtime."
-            )
-        return _("Neither the bundled speech runtime nor a Chromium browser runtime was found.")
-
     def _effective_runtime_message(self) -> str:
         selectedRuntime = self._runtimeSnapshot["selectedRuntime"]
         selectedLabel = _runtime_label(selectedRuntime)
         selectedExecutableStatus = (
             _("found") if self._browserExecutableAvailability.get(selectedRuntime, False) else _("not found")
         )
-        if selectedRuntime == browserBridge.BROWSER_RUNTIME_EDGE:
+        if selectedRuntime == browserBridge.BROWSER_RUNTIME_BUN:
+            selectedMessage = _("Selected speech runtime: {runtime}. Bundled runtime: {browserStatus}.").format(
+                runtime=selectedLabel, browserStatus=selectedExecutableStatus
+            )
+        elif selectedRuntime == browserBridge.BROWSER_RUNTIME_EDGE:
             webView2Status = _("found") if self._edgeWebView2Available else _("not found")
             selectedMessage = _(
-                "Selected Chromium browser runtime: {runtime}. Microsoft Edge: {edgeStatus}. "
+                "Selected speech runtime: {runtime}. Microsoft Edge: {edgeStatus}. "
                 "Microsoft Edge WebView2 Runtime: {webView2Status}."
             ).format(
                 runtime=selectedLabel,
@@ -641,19 +569,17 @@ class GoogleTtsSettingsPanel(SettingsPanel):
                 webView2Status=webView2Status,
             )
         else:
-            selectedMessage = _("Selected Chromium browser runtime: {runtime}. {browser}: {browserStatus}.").format(
+            selectedMessage = _("Selected speech runtime: {runtime}. {browser}: {browserStatus}.").format(
                 runtime=selectedLabel, browser=selectedLabel, browserStatus=selectedExecutableStatus
             )
         if self._effectiveRuntime is None:
-            return _("{selectedStatus} No supported Chromium browser runtime was found.").format(
-                selectedStatus=selectedMessage
-            )
+            return _("{selectedStatus} No supported speech runtime was found.").format(selectedStatus=selectedMessage)
         if self._effectiveRuntime == selectedRuntime:
-            return _("{selectedStatus} Active Chromium browser runtime: {runtime}.").format(
+            return _("{selectedStatus} Active speech runtime: {runtime}.").format(
                 selectedStatus=selectedMessage,
                 runtime=_runtime_label(self._effectiveRuntime),
             )
-        return _("{selectedStatus} Falling back to active Chromium browser runtime: {runtime}.").format(
+        return _("{selectedStatus} Falling back to active speech runtime: {runtime}.").format(
             selectedStatus=selectedMessage,
             runtime=_runtime_label(self._effectiveRuntime),
         )

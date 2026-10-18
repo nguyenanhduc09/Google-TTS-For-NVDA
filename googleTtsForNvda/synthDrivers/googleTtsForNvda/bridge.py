@@ -74,7 +74,6 @@ RUNTIME_PRIVATE_BYTES_RECYCLE_THRESHOLD = 1280 * 1024 * 1024
 RUNTIME_WORKING_SET_BYTES_RECYCLE_THRESHOLD = 1024 * 1024 * 1024
 RUNTIME_MEMORY_RECYCLE_CONFIRMATIONS = 2
 CONFIG_SECTION = "googleTtsForNvda"
-CONFIG_SPEECH_RUNTIME = "speechRuntime"
 CONFIG_BROWSER_RUNTIME = "browserRuntime"
 CONFIG_AUTO_LANGUAGE_DETECTION = "autoLanguageDetection"
 CONFIG_AUTO_LANGUAGE_PREFERRED = "autoLanguagePreferred"
@@ -84,28 +83,29 @@ CONFIG_KEEP_BROWSER_RUNTIME_READY = "keepBrowserRuntimeReady"
 BROWSER_RUNTIME_EDGE = "edge"
 BROWSER_RUNTIME_CHROME = "chrome"
 BROWSER_RUNTIME_BRAVE = "brave"
-DEFAULT_BROWSER_RUNTIME = BROWSER_RUNTIME_CHROME
+# The bundled Bun executable that hosts the WASM engine, selectable alongside the
+# three Chromium browsers. It is the default, so no browser install is required.
+BROWSER_RUNTIME_BUN = "bun"
+DEFAULT_BROWSER_RUNTIME = BROWSER_RUNTIME_BUN
+BUN_PATH_ENV_VAR = "GTTS_BUN_PATH"
 DEFAULT_AUTO_LANGUAGE_DETECTION = False
 DEFAULT_AUTO_LANGUAGE_PREFERRED = ""
 DEFAULT_AUTO_LANGUAGE_CANDIDATES = ""
 DEFAULT_AUTO_LANGUAGE_PROFILES = ""
 DEFAULT_KEEP_BROWSER_RUNTIME_READY = False
 BROWSER_RUNTIME_LABELS = {
+    BROWSER_RUNTIME_BUN: "Bundled runtime (no browser required)",
     BROWSER_RUNTIME_EDGE: "Microsoft Edge",
     BROWSER_RUNTIME_CHROME: "Google Chrome",
     BROWSER_RUNTIME_BRAVE: "Brave",
 }
-BROWSER_RUNTIMES = (BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE)
-# Which host runs the WASM TTS engine: the bundled Bun executable, or a headless
-# Chromium browser. Bun is the default so no browser needs to be installed.
-SPEECH_RUNTIME_BUN = "bun"
-SPEECH_RUNTIME_BROWSER = "browser"
-SPEECH_RUNTIMES = (SPEECH_RUNTIME_BUN, SPEECH_RUNTIME_BROWSER)
-DEFAULT_SPEECH_RUNTIME = SPEECH_RUNTIME_BUN
-SPEECH_RUNTIME_LABELS = {
-    SPEECH_RUNTIME_BUN: "Bundled runtime (no browser required)",
-    SPEECH_RUNTIME_BROWSER: "Chromium browser runtime",
-}
+# Every selectable runtime. Browsers come first so the existing Chromium fallback
+# order (chrome -> edge -> brave) is preserved, with the bundled runtime appended.
+BROWSER_RUNTIMES = (BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE, BROWSER_RUNTIME_BUN)
+# The subset actually launched as a headless browser speaking CDP. The bundled
+# runtime is driven over stdin/stdout by bun_bridge instead, so it must never
+# reach BrowserProcessManager's launch path.
+CHROMIUM_RUNTIMES = (BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE)
 
 
 class CdpError(Exception):
@@ -575,98 +575,62 @@ def set_keep_browser_runtime_ready(enabled: bool) -> bool:
     return enabled
 
 
-def _normalize_speech_runtime(runtime: str | None) -> str:
-    runtime = str(runtime or "").strip().lower()
-    if runtime in SPEECH_RUNTIMES:
-        return runtime
-    return DEFAULT_SPEECH_RUNTIME
-
-
-def configured_speech_runtime() -> str:
-    """The host the user selected for the WASM TTS engine."""
-    if config is None:
-        return DEFAULT_SPEECH_RUNTIME
+def bun_executable_path() -> str | None:
+    """Path to the bundled Bun runtime, or ``None`` when it is not installed."""
     try:
-        return _normalize_speech_runtime(config.conf[CONFIG_SECTION][CONFIG_SPEECH_RUNTIME])
+        from .bun_bridge import find_bun
     except Exception:
-        return DEFAULT_SPEECH_RUNTIME
-
-
-def set_configured_speech_runtime(runtime: str) -> str:
-    runtime = _normalize_speech_runtime(runtime)
-    _set_config_value(CONFIG_SPEECH_RUNTIME, runtime)
-    return runtime
+        log.debug("Google TTS bundled speech runtime module is unavailable.", exc_info=True)
+        return None
+    try:
+        return find_bun()
+    except Exception:
+        log.debug("Google TTS could not probe the bundled speech runtime.", exc_info=True)
+        return None
 
 
 def bun_runtime_available() -> bool:
-    """Whether the bundled Bun speech runtime can be located."""
-    try:
-        from .bun_bridge import bun_runtime_available as _available
-    except Exception:
-        log.debug("Google TTS bundled speech runtime is unavailable.", exc_info=True)
-        return False
-    try:
-        return bool(_available())
-    except Exception:
-        log.debug("Google TTS could not probe the bundled speech runtime.", exc_info=True)
-        return False
+    return bun_executable_path() is not None
 
 
-def speech_runtime_available(runtime: str | None = None) -> bool:
-    """Whether the requested speech host is usable right now."""
-    selected = _normalize_speech_runtime(runtime if runtime is not None else configured_speech_runtime())
-    if selected == SPEECH_RUNTIME_BUN:
-        return bun_runtime_available()
-    return browser_runtime_available()
+def effective_speech_runtime(runtime: str | None = None) -> str:
+    """Resolve which host will actually run the engine.
 
-
-def effective_speech_runtime() -> str:
-    """Resolve the configured speech host, falling back if it is missing.
-
-    A source checkout that has not been packaged has no ``runtime/bun.exe``, so
-    falling back to an installed browser keeps the add-on usable and mirrors the
-    existing browser-candidate fallback behaviour.
+    Falls back when the selected host is missing, so an unbuilt source checkout
+    (no ``runtime/bun.exe``) still works where a browser is installed, and a
+    machine without any browser still works from the bundled runtime.
     """
-    configured = configured_speech_runtime()
-    if configured == SPEECH_RUNTIME_BUN:
+    selected = _normalize_browser_runtime(runtime or configured_browser_runtime())
+    if selected == BROWSER_RUNTIME_BUN:
         if bun_runtime_available():
-            return SPEECH_RUNTIME_BUN
-        if browser_runtime_available():
-            log.debug("Google TTS bundled speech runtime is missing; falling back to a Chromium browser runtime.")
-            return SPEECH_RUNTIME_BROWSER
-        return SPEECH_RUNTIME_BUN
-    if browser_runtime_available():
-        return SPEECH_RUNTIME_BROWSER
+            return BROWSER_RUNTIME_BUN
+        choice = _find_browser_choice(None)
+        if choice is not None:
+            log.debug("Google TTS bundled speech runtime is missing; falling back to %s.", choice[0])
+            return choice[0]
+        return BROWSER_RUNTIME_BUN
+    if browser_runtime_available(selected):
+        return selected
+    choice = _find_browser_choice(selected)
+    if choice is not None:
+        return choice[0]
     if bun_runtime_available():
         log.debug("No Chromium browser runtime is available; falling back to the bundled speech runtime.")
-        return SPEECH_RUNTIME_BUN
-    return configured
+        return BROWSER_RUNTIME_BUN
+    return selected
 
 
-def speech_runtime_snapshot(runtime: str | None = None) -> dict[str, Any]:
-    """Diagnostics for the settings panel."""
-    selected = _normalize_speech_runtime(runtime if runtime is not None else configured_speech_runtime())
-    effective = effective_speech_runtime()
-    bunPath: str | None = None
-    try:
-        from .bun_bridge import find_bun
-
-        bunPath = find_bun()
-    except Exception:
-        bunPath = None
-    return {
-        "selectedRuntime": selected,
-        "effectiveRuntime": effective,
-        "fellBack": effective != selected,
-        "bunAvailable": bunPath is not None,
-        "bunPath": bunPath,
-        "browserAvailable": browser_runtime_available(),
-    }
+def speech_runtime_executable(runtime: str | None = None) -> str | None:
+    """Executable path for the host that will actually run the engine."""
+    effective = effective_speech_runtime(runtime)
+    if effective == BROWSER_RUNTIME_BUN:
+        return bun_executable_path()
+    return browser_path_for_runtime(effective)
 
 
 def _runtime_fallback_order(runtime: str | None = None) -> tuple[str, ...]:
     preferred = _normalize_browser_runtime(runtime)
-    return tuple(dict.fromkeys((preferred, BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE)))
+    return tuple(dict.fromkeys((preferred, *BROWSER_RUNTIMES)))
 
 
 def _edge_webview2_candidates() -> list[str]:
@@ -763,6 +727,15 @@ def _registry_app_paths(executableName: str) -> list[str]:
 
 def _browser_candidates(runtime: str) -> list[str]:
     runtime = _normalize_browser_runtime(runtime)
+    if runtime == BROWSER_RUNTIME_BUN:
+        # Mirrors the CHROME_PATH / EDGE_PATH / BRAVE_PATH convention. The bundled
+        # copy lives in runtime/ next to the driver; bun_bridge.find_bun() adds the
+        # platform-specific executable names and a PATH lookup on top of these.
+        return [
+            os.environ.get(BUN_PATH_ENV_VAR, ""),
+            str(BASE_DIR / "runtime" / "bun.exe"),
+            str(BASE_DIR / "runtime" / "bun"),
+        ]
     if runtime == BROWSER_RUNTIME_EDGE:
         executableName = "msedge.exe"
         envPath = os.environ.get("EDGE_PATH", "")
@@ -834,7 +807,7 @@ def edge_webview2_available() -> bool:
 
 def browser_runtime_available(runtime: str | None = None) -> bool:
     if runtime is None:
-        return find_browser() is not None
+        return bun_runtime_available() or find_browser() is not None
     normalized = str(runtime).strip().lower()
     if normalized not in BROWSER_RUNTIMES:
         return False
@@ -856,7 +829,7 @@ def _browser_choices(
     skipRuntimes = skipRuntimes or set()
     choices: list[tuple[str, str]] = []
     for candidateRuntime in _runtime_fallback_order(runtime or configured_browser_runtime()):
-        if candidateRuntime in skipRuntimes:
+        if candidateRuntime in skipRuntimes or candidateRuntime not in CHROMIUM_RUNTIMES:
             continue
         path = browser_path_for_runtime(candidateRuntime)
         if not path:
@@ -927,6 +900,10 @@ def find_browser(runtime: str | None = None) -> str | None:
 def edge_webview2_blocks_effective_runtime(runtime: str | None = None) -> bool:
     selectedRuntime = _normalize_browser_runtime(runtime or configured_browser_runtime())
     if edge_webview2_available():
+        return False
+    if effective_speech_runtime(selectedRuntime) == BROWSER_RUNTIME_BUN:
+        # The bundled runtime does not need WebView2, and neither does any browser
+        # it could fall back to, so a missing WebView2 Runtime is not fatal here.
         return False
     if _find_browser_choice(selectedRuntime) is not None:
         return False
@@ -2044,7 +2021,7 @@ class ChromeTtsBridge:
         # duck-typed surface as BrowserProcessManager/CdpClient, so
         # WasmTtsEngineBridge -- including speak() and handle_event() -- is shared.
         self._speechRuntime = effective_speech_runtime()
-        if self._speechRuntime == SPEECH_RUNTIME_BUN:
+        if self._speechRuntime == BROWSER_RUNTIME_BUN:
             from .bun_bridge import BunClient, BunProcessManager
 
             self._process_manager = BunProcessManager(self.catalog)
@@ -2071,14 +2048,14 @@ class ChromeTtsBridge:
         return BrowserProcessManager.browser_runtime_available(runtime)
 
     @classmethod
-    def speech_runtime_available(cls, runtime: str | None = None) -> bool:
-        """Whether the host that will actually run the engine is usable."""
-        return speech_runtime_available(runtime)
+    def speech_runtime_executable(cls, runtime: str | None = None) -> str | None:
+        """Executable for the host that will actually run the engine."""
+        return speech_runtime_executable(runtime)
 
     @property
     def speech_runtime(self) -> str:
-        """The resolved host this bridge drives ("bun" or "browser")."""
-        return str(getattr(self, "_speechRuntime", SPEECH_RUNTIME_BROWSER))
+        """The resolved host this bridge drives; one of ``BROWSER_RUNTIMES``."""
+        return str(getattr(self, "_speechRuntime", DEFAULT_BROWSER_RUNTIME))
 
     @property
     def _ws(self) -> websocket.WebSocket | None:
@@ -2245,7 +2222,9 @@ class ChromeTtsBridge:
                         self._process_manager.terminate()
                     # The bundled runtime has no candidate list to fall back
                     # through; retrying would loop on the same missing executable.
-                    usingBundledRuntime = getattr(self, "_speechRuntime", SPEECH_RUNTIME_BROWSER) == SPEECH_RUNTIME_BUN
+                    usingBundledRuntime = (
+                        getattr(self, "_speechRuntime", DEFAULT_BROWSER_RUNTIME) == BROWSER_RUNTIME_BUN
+                    )
                     if runtime and not usingBundledRuntime:
                         runtime = _normalize_browser_runtime(runtime)
                         skipRuntimes.add(runtime)

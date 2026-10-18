@@ -1,29 +1,53 @@
-# NVDA + Chromium manual test checklist
+# NVDA + speech runtime manual test checklist
 
-Static checks cannot prove that Chromium/WASM starts reliably, that audio is
-clean and level, or that NVDA announces dynamic controls correctly. Run this
-checklist on a real installed add-on. Leave every box unchecked until that test
-has actually been performed.
+Static checks cannot prove that the speech runtime and its WASM engine start
+reliably, that audio is clean and level, or that NVDA announces dynamic controls
+correctly. Run this checklist on a real installed add-on. Leave every box
+unchecked until that test has actually been performed.
+
+Four runtimes are selectable: the **bundled runtime** (`runtime/bun.exe`, the
+default) and the three Chromium browsers. Cover the bundled runtime first; the
+browser items apply only when a Chromium runtime is selected.
 
 ## Test record
 
 Record one row per meaningful configuration.
 
-| Date | Add-on revision | NVDA/version/arch | Chromium runtime/version | Voice package/speaker | Output device | Cold/warm/standby | Result/evidence |
+| Date | Add-on revision | NVDA/version/arch | Speech runtime/version | Voice package/speaker | Output device | Cold/warm/standby | Result/evidence |
 |---|---|---|---|---|---|---|---|
 | | | | | | | | |
 
-Also record whether Edge WebView2 Runtime is installed, whether automatic
-language profiles are enabled, and relevant NVDA log/audio captures.
+Also record the NVDA architecture (x86/x64) and whether Windows is 64-bit, since
+the bundled runtime is a 64-bit process; whether Edge WebView2 Runtime is
+installed; whether automatic language profiles are enabled; and relevant NVDA
+log/audio captures. For the bundled runtime, record the version reported by
+`runtime/bun_version.json`.
 
-## 1. Synth loading and Chromium/WASM startup
+## 1. Synth loading and runtime/WASM startup
 
-- [ ] Start each supported NVDA version with Google TTS selected and verify a cold first utterance.
-- [ ] Verify warm speech and startup with **Keep Chromium browser runtime ready** both off and on.
+### Bundled runtime (default)
+
+- [ ] Install the packaged add-on on a machine with **no browser installed** and verify speech works.
+- [ ] Verify the settings panel lists four runtimes with the bundled one first and marked Available.
+- [ ] Verify a cold first utterance, then warm speech, and record time to first audio for each.
+- [ ] Verify **Keep Google TTS browser runtime ready** both off and on.
+- [ ] Verify no console window flashes at NVDA startup or during speech.
+- [ ] Verify cancellation while speaking: interrupt mid-utterance repeatedly and confirm speech stops promptly with no leaked or trailing audio.
+- [ ] Verify the sign-in screen / secure desktop behaviour and record it; do not assume it works.
+- [ ] Verify antivirus and Windows SmartScreen do not quarantine or block `runtime/bun.exe`, and that the add-on is signed/trusted as expected.
+- [ ] Terminate `bun.exe` from Task Manager while NVDA is idle, then speak; verify recovery without a stale process.
+- [ ] Set `GTTS_BUN_PATH` to a valid Bun executable and verify it is used; set it to an invalid path and verify the diagnostic and fallback.
+- [ ] Delete `runtime/bun.exe` and verify the bundled-runtime error message, then verify fallback to an installed browser when one exists.
+- [ ] On 32-bit (x86) NVDA over 64-bit Windows, verify the bundled runtime still works.
+- [ ] Verify peak memory of the runtime process over a long SayAll session and compare against the recycle thresholds.
+
+### Chromium runtimes
+
 - [ ] Exercise Chrome, Edge, and Brave separately when installed.
 - [ ] Make the saved runtime unavailable and verify fallback order, diagnostics, and eventual speech.
 - [ ] With Edge selected, verify both the usable WebView2 path and the missing/broken WebView2 prompt and links.
-- [ ] Switch synthesizers during browser startup and during voice-package preload; NVDA must remain responsive and cancellation must not be reported as a speech failure.
+- [ ] Verify a missing WebView2 Runtime does **not** block a user who selected the bundled runtime.
+- [ ] Switch synthesizers during runtime startup and during voice-package preload; NVDA must remain responsive and cancellation must not be reported as a speech failure.
 - [ ] Terminate the managed browser unexpectedly and verify a later utterance recovers without stale processes or profiles.
 
 ## 2. PCM, pause shortening, segmentation, and cache behavior

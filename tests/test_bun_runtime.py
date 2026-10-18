@@ -238,79 +238,179 @@ class BunDiscoveryTests(unittest.TestCase):
         self.assertEqual(fetch_bun_runtime.default_destination().resolve(), bun_bridge.RUNTIME_DIR.resolve())
 
 
-class SpeechRuntimeConfigTests(unittest.TestCase):
-    """The new speechRuntime setting, which sits beside the untouched browserRuntime."""
+class UnifiedRuntimeSelectionTests(unittest.TestCase):
+    """The bundled runtime is the fourth entry in the existing runtime setting.
 
-    def test_browser_runtimes_are_unchanged(self) -> None:
-        """Adding the Bun runtime must not disturb the browser fallback order."""
-        self.assertEqual(("chrome", "edge", "brave"), bridge.BROWSER_RUNTIMES)
-        self.assertEqual(3, len(bridge._runtime_fallback_order("brave")))
+    There is deliberately no separate "speech runtime" config key: ``browserRuntime``
+    accepts ``bun`` alongside ``chrome``/``edge``/``brave``, so the settings panel
+    shows one dropdown with four entries and the standby signature, config
+    normalisation and fallback order all keep working unchanged.
+    """
 
-    def test_speech_runtimes_and_default(self) -> None:
-        self.assertEqual(("bun", "browser"), bridge.SPEECH_RUNTIMES)
-        self.assertEqual(bridge.SPEECH_RUNTIME_BUN, bridge.DEFAULT_SPEECH_RUNTIME)
+    def test_four_runtimes_are_selectable(self) -> None:
+        self.assertEqual(("chrome", "edge", "brave", "bun"), bridge.BROWSER_RUNTIMES)
+        self.assertEqual(4, len(bridge._runtime_fallback_order("brave")))
+
+    def test_bundled_runtime_is_the_default(self) -> None:
+        self.assertEqual("bun", bridge.DEFAULT_BROWSER_RUNTIME)
+        with mock.patch.object(bridge, "config", None):
+            self.assertEqual("bun", bridge.configured_browser_runtime())
 
     def test_labels_cover_every_runtime(self) -> None:
-        self.assertEqual(set(bridge.SPEECH_RUNTIMES), set(bridge.SPEECH_RUNTIME_LABELS))
-        for label in bridge.SPEECH_RUNTIME_LABELS.values():
+        self.assertEqual(set(bridge.BROWSER_RUNTIMES), set(bridge.BROWSER_RUNTIME_LABELS))
+        for label in bridge.BROWSER_RUNTIME_LABELS.values():
             self.assertTrue(label)
+        self.assertIn("Bundled", bridge.BROWSER_RUNTIME_LABELS["bun"])
 
-    def test_normalize_speech_runtime(self) -> None:
-        self.assertEqual("bun", bridge._normalize_speech_runtime("BUN"))
-        self.assertEqual("browser", bridge._normalize_speech_runtime(" browser "))
-        self.assertEqual(bridge.DEFAULT_SPEECH_RUNTIME, bridge._normalize_speech_runtime("nonsense"))
-        self.assertEqual(bridge.DEFAULT_SPEECH_RUNTIME, bridge._normalize_speech_runtime(None))
+    def test_chromium_subset_excludes_the_bundled_runtime(self) -> None:
+        self.assertEqual(("chrome", "edge", "brave"), bridge.CHROMIUM_RUNTIMES)
+        self.assertNotIn("bun", bridge.CHROMIUM_RUNTIMES)
 
-    def test_configured_speech_runtime_without_nvda_config_is_the_default(self) -> None:
-        with mock.patch.object(bridge, "config", None):
-            self.assertEqual(bridge.DEFAULT_SPEECH_RUNTIME, bridge.configured_speech_runtime())
+    def test_browser_choices_never_offers_the_bundled_runtime(self) -> None:
+        """BrowserProcessManager must never try to launch bun.exe with --headless."""
+        with (
+            mock.patch.object(bridge, "browser_path_for_runtime", return_value="/somewhere/executable"),
+            mock.patch.object(bridge, "edge_webview2_available", return_value=True),
+        ):
+            for selected in ("bun", "chrome", "edge", "brave", None):
+                with self.subTest(selected=selected):
+                    choices = bridge._browser_choices(selected)
+                    self.assertTrue(choices)
+                    for runtime, _path in choices:
+                        self.assertIn(runtime, bridge.CHROMIUM_RUNTIMES)
+                        self.assertNotEqual("bun", runtime)
 
-    def test_set_configured_speech_runtime_normalises(self) -> None:
-        with mock.patch.object(bridge, "config", None):
-            self.assertEqual("browser", bridge.set_configured_speech_runtime("BROWSER"))
+    def test_browser_candidates_for_bun_honour_the_env_override_and_bundled_copy(self) -> None:
+        with mock.patch.dict(os.environ, {bridge.BUN_PATH_ENV_VAR: "/custom/bun.exe"}, clear=False):
+            candidates = bridge._browser_candidates("bun")
+        self.assertEqual("/custom/bun.exe", candidates[0])
+        self.assertIn(str(bridge.BASE_DIR / "runtime" / "bun.exe"), candidates)
 
-    def test_speech_runtime_available_delegates_per_runtime(self) -> None:
-        with mock.patch.object(bridge, "bun_runtime_available", return_value=True):
-            self.assertTrue(bridge.speech_runtime_available("bun"))
-        with mock.patch.object(bridge, "bun_runtime_available", return_value=False):
-            self.assertFalse(bridge.speech_runtime_available("bun"))
-        with mock.patch.object(bridge, "browser_runtime_available", return_value=True):
-            self.assertTrue(bridge.speech_runtime_available("browser"))
+    def test_browser_candidates_for_bun_never_returns_a_browser(self) -> None:
+        candidates = bridge._browser_candidates("bun")
+        for candidate in candidates:
+            self.assertNotIn("chrome", candidate.lower())
+            self.assertNotIn("msedge", candidate.lower())
+            self.assertNotIn("brave", candidate.lower())
+
+    def test_path_for_runtime_resolves_bun(self) -> None:
+        with tempfile.TemporaryDirectory() as staging:
+            real = Path(staging) / "bun.exe"
+            real.write_bytes(b"MZ")
+            with mock.patch.object(bridge, "_browser_candidates", return_value=["/does/not/exist", str(real)]):
+                self.assertEqual(str(real), bridge.browser_path_for_runtime("bun"))
+
+    def test_path_for_runtime_returns_none_when_bun_is_absent(self) -> None:
+        with mock.patch.object(bridge, "_browser_candidates", return_value=["/does/not/exist"]):
+            self.assertIsNone(bridge.browser_path_for_runtime("bun"))
+
+    def test_availability_reports_the_bundled_runtime(self) -> None:
+        availability = bridge.browser_availability()
+        self.assertEqual(set(bridge.BROWSER_RUNTIMES), set(availability))
+        for runtime, available in availability.items():
+            with self.subTest(runtime=runtime):
+                self.assertIsInstance(available, bool)
+
+    def test_browser_runtime_available_counts_the_bundled_runtime(self) -> None:
+        with (
+            mock.patch.object(bridge, "bun_runtime_available", return_value=True),
+            mock.patch.object(bridge, "find_browser", return_value=None),
+        ):
+            self.assertTrue(bridge.browser_runtime_available())
+        with (
+            mock.patch.object(bridge, "bun_runtime_available", return_value=False),
+            mock.patch.object(bridge, "find_browser", return_value=None),
+        ):
+            self.assertFalse(bridge.browser_runtime_available())
+
+    def test_browser_runtime_available_for_bun_needs_no_webview2(self) -> None:
+        with (
+            mock.patch.object(bridge, "browser_executable_available", return_value=True),
+            mock.patch.object(bridge, "edge_webview2_available", return_value=False),
+        ):
+            self.assertTrue(bridge.browser_runtime_available("bun"))
+
+    def test_snapshot_reports_bun_alongside_the_browsers(self) -> None:
+        snapshot = bridge.browser_runtime_snapshot("bun")
+        for key in ("selectedRuntime", "paths", "executableAvailability", "availability", "effectiveRuntime"):
+            self.assertIn(key, snapshot)
+        self.assertEqual("bun", snapshot["selectedRuntime"])
+        self.assertEqual(set(bridge.BROWSER_RUNTIMES), set(snapshot["paths"]))
+        self.assertEqual(set(bridge.BROWSER_RUNTIMES), set(snapshot["availability"]))
+
+    def test_effective_runtime_prefers_bun_when_it_is_installed(self) -> None:
+        with (
+            mock.patch.object(bridge, "configured_browser_runtime", return_value="bun"),
+            mock.patch.object(bridge, "bun_runtime_available", return_value=True),
+        ):
+            self.assertEqual("bun", bridge.effective_speech_runtime())
 
     def test_effective_runtime_falls_back_to_a_browser_when_bun_is_missing(self) -> None:
         with (
-            mock.patch.object(bridge, "configured_speech_runtime", return_value="bun"),
+            mock.patch.object(bridge, "configured_browser_runtime", return_value="bun"),
             mock.patch.object(bridge, "bun_runtime_available", return_value=False),
-            mock.patch.object(bridge, "browser_runtime_available", return_value=True),
+            mock.patch.object(bridge, "_find_browser_choice", return_value=("chrome", "/x/chrome.exe")),
         ):
-            self.assertEqual("browser", bridge.effective_speech_runtime())
+            self.assertEqual("chrome", bridge.effective_speech_runtime())
+
+    def test_effective_runtime_stays_bun_when_nothing_is_installed(self) -> None:
+        """So the user gets the bundled-runtime error, not a confusing browser one."""
+        with (
+            mock.patch.object(bridge, "configured_browser_runtime", return_value="bun"),
+            mock.patch.object(bridge, "bun_runtime_available", return_value=False),
+            mock.patch.object(bridge, "_find_browser_choice", return_value=None),
+        ):
+            self.assertEqual("bun", bridge.effective_speech_runtime())
 
     def test_effective_runtime_falls_back_to_bun_when_no_browser_exists(self) -> None:
         with (
-            mock.patch.object(bridge, "configured_speech_runtime", return_value="browser"),
+            mock.patch.object(bridge, "configured_browser_runtime", return_value="chrome"),
             mock.patch.object(bridge, "browser_runtime_available", return_value=False),
+            mock.patch.object(bridge, "_find_browser_choice", return_value=None),
             mock.patch.object(bridge, "bun_runtime_available", return_value=True),
         ):
             self.assertEqual("bun", bridge.effective_speech_runtime())
 
-    def test_effective_runtime_prefers_bun_when_both_exist(self) -> None:
+    def test_effective_runtime_keeps_a_usable_selected_browser(self) -> None:
         with (
-            mock.patch.object(bridge, "configured_speech_runtime", return_value="bun"),
-            mock.patch.object(bridge, "bun_runtime_available", return_value=True),
+            mock.patch.object(bridge, "configured_browser_runtime", return_value="edge"),
             mock.patch.object(bridge, "browser_runtime_available", return_value=True),
         ):
-            self.assertEqual("bun", bridge.effective_speech_runtime())
+            self.assertEqual("edge", bridge.effective_speech_runtime())
 
-    def test_snapshot_exposes_the_keys_the_settings_panel_reads(self) -> None:
-        with mock.patch.object(bridge, "bun_runtime_available", return_value=True):
-            snapshot = bridge.speech_runtime_snapshot()
-        for key in ("selectedRuntime", "effectiveRuntime", "fellBack", "bunAvailable", "bunPath", "browserAvailable"):
-            self.assertIn(key, snapshot)
-        self.assertIn(snapshot["selectedRuntime"], bridge.SPEECH_RUNTIMES)
+    def test_speech_runtime_executable_returns_the_bun_path(self) -> None:
+        with (
+            mock.patch.object(bridge, "effective_speech_runtime", return_value="bun"),
+            mock.patch.object(bridge, "bun_executable_path", return_value="/opt/bun.exe"),
+        ):
+            self.assertEqual("/opt/bun.exe", bridge.speech_runtime_executable())
+
+    def test_speech_runtime_executable_returns_the_browser_path(self) -> None:
+        with (
+            mock.patch.object(bridge, "effective_speech_runtime", return_value="chrome"),
+            mock.patch.object(bridge, "browser_path_for_runtime", return_value="/opt/chrome.exe") as pathMock,
+        ):
+            self.assertEqual("/opt/chrome.exe", bridge.speech_runtime_executable())
+            pathMock.assert_called_once_with("chrome")
+
+    def test_webview2_does_not_block_the_bundled_runtime(self) -> None:
+        """A missing WebView2 Runtime must not stop a user who never asked for Edge."""
+        with (
+            mock.patch.object(bridge, "configured_browser_runtime", return_value="bun"),
+            mock.patch.object(bridge, "edge_webview2_available", return_value=False),
+            mock.patch.object(bridge, "bun_runtime_available", return_value=True),
+        ):
+            self.assertFalse(bridge.edge_webview2_blocks_effective_runtime())
+
+    def test_set_configured_runtime_persists_bun(self) -> None:
+        with mock.patch.object(bridge, "config", None):
+            self.assertEqual("bun", bridge.set_configured_browser_runtime("BUN"))
+            self.assertEqual("edge", bridge.set_configured_browser_runtime("edge"))
 
     def test_bun_availability_swallows_a_broken_import(self) -> None:
         with mock.patch.dict("sys.modules", {"_google_tts_for_nvda_test_driver.bun_bridge": None}):
             self.assertIsInstance(bridge.bun_runtime_available(), bool)
+            self.assertIsNone(bridge.bun_executable_path())
 
 
 class EngineGlobalDiscoveryTests(unittest.TestCase):

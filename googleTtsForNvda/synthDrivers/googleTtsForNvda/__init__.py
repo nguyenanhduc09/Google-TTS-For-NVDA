@@ -35,6 +35,7 @@ from synthDriverHandler import VoiceInfo, synthDoneSpeaking, synthIndexReached
 
 from . import audio_math, language_detector, language_utils, standby, voice_store
 from .bridge import (
+    BROWSER_RUNTIME_BUN,
     CONFIG_AUTO_LANGUAGE_CANDIDATES,
     CONFIG_AUTO_LANGUAGE_DETECTION,
     CONFIG_AUTO_LANGUAGE_PREFERRED,
@@ -45,13 +46,10 @@ from .bridge import (
     DEFAULT_AUTO_LANGUAGE_PREFERRED,
     DEFAULT_AUTO_LANGUAGE_PROFILES,
     SAMPLE_RATE,
-    SPEECH_RUNTIME_BROWSER,
     CdpCancelled,
     ChromeTtsBridge,
-    bun_runtime_available,
+    configured_browser_runtime,
     edge_webview2_blocks_effective_runtime,
-    effective_speech_runtime,
-    speech_runtime_available,
 )
 from .catalog import EngineLibraryError, VoiceCatalog, engine_library_error_message
 from .language_profiles import (
@@ -271,29 +269,28 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     "Open Google TTS Voice Manager to install another voice package."
                 )
             )
-        if effective_speech_runtime() == SPEECH_RUNTIME_BROWSER:
-            if edge_webview2_blocks_effective_runtime():
-                wx.CallAfter(self._prompt_for_edge_webview2_install)
-                raise RuntimeError(
-                    _(
-                        "Microsoft Edge WebView2 Runtime was not found. "
-                        "Install it before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
-                    )
-                )
-            if ChromeTtsBridge.find_browser() is None:
-                wx.CallAfter(self._show_missing_chrome_error)
-                raise RuntimeError(
-                    _(
-                        "No supported Chromium browser runtime was found. "
-                        "Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
-                    )
-                )
-        elif not bun_runtime_available():
-            wx.CallAfter(self._show_missing_bun_error)
+        if edge_webview2_blocks_effective_runtime():
+            wx.CallAfter(self._prompt_for_edge_webview2_install)
             raise RuntimeError(
                 _(
-                    "The bundled Google TTS speech runtime was not found. "
-                    "Reinstall Google TTS For NVDA, or set GTTS_BUN_PATH to a Bun executable."
+                    "Microsoft Edge WebView2 Runtime was not found. "
+                    "Install it before using Microsoft Edge as the Google TTS For NVDA Chromium browser runtime."
+                )
+            )
+        if ChromeTtsBridge.speech_runtime_executable() is None:
+            if configured_browser_runtime() == BROWSER_RUNTIME_BUN:
+                wx.CallAfter(self._show_missing_bun_error)
+                raise RuntimeError(
+                    _(
+                        "The bundled Google TTS speech runtime was not found. "
+                        "Reinstall Google TTS For NVDA, or set GTTS_BUN_PATH to a Bun executable."
+                    )
+                )
+            wx.CallAfter(self._show_missing_chrome_error)
+            raise RuntimeError(
+                _(
+                    "No supported Chromium browser runtime was found. "
+                    "Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
                 )
             )
         self._speakersByLanguage = self.catalog.voices_by_language()
@@ -1191,7 +1188,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     "Google TTS For NVDA could not start speech in the Chromium browser runtime."
                 )
                 try:
-                    runtimeAvailable = speech_runtime_available()
+                    runtimeAvailable = ChromeTtsBridge.browser_runtime_available()
                 except Exception:
                     runtimeAvailable = False
                 unrecoverable = not runtimeAvailable or self._consecutiveRuntimeErrors >= 2
