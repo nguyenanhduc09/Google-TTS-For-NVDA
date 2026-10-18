@@ -27,7 +27,7 @@
 	<h2>System Requirements</h2>
 	<ul>
 		<li><strong>NVDA:</strong> Version 2024.1 or newer. The add-on supports NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) NVDA builds.</li>
-		<li><strong>Speech runtime:</strong> None. The add-on bundles its own runtime. Only if you deliberately select a Chromium browser in the settings do you need Google Chrome, Microsoft Edge, or Brave installed; Microsoft Edge additionally requires the Microsoft Edge WebView2 Runtime.</li>
+		<li><strong>Speech runtime:</strong> None on 64-bit Windows 10 version 1809 or later, where the add-on uses the runtime it bundles. On 32-bit Windows there is no bundled runtime available, so the add-on falls back automatically to an installed Chromium browser &mdash; Google Chrome, Microsoft Edge, or Brave; Microsoft Edge additionally requires the Microsoft Edge WebView2 Runtime.</li>
 		<li><strong>Interactive Windows user session:</strong> Do not rely on this add-on where its background speech runtime process cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.</li>
 	</ul>
 

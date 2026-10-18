@@ -60,7 +60,9 @@ Version 1.0 marks a significant step in the project's maturity. With its own bun
 ## System Requirements
 
 * **NVDA:** Version 2024.1 or newer. The add-on supports NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) NVDA builds.
-* **Speech runtime:** The bundled runtime ships inside the add-on, so nothing else needs to be installed. It is a separate 64-bit process, which works under both 64-bit (x64) and 32-bit (x86) NVDA as long as Windows itself is 64-bit. On 32-bit Windows, select a Chromium browser runtime (Google Chrome, Microsoft Edge, or Brave) in the add-on settings instead; Microsoft Edge additionally requires the Microsoft Edge WebView2 Runtime.
+* **Windows:** Windows 10 version 1809 or later, or Windows 11.
+* **Speech runtime:** The bundled runtime ships inside the add-on, so nothing else needs to be installed. It requires **64-bit Windows 10 version 1809 or later**, and needs a CPU supporting SSE4.2 (Intel Nehalem / 1st-gen Core or newer, AMD Bulldozer or newer). It is a separate 64-bit process, so it works under both 64-bit (x64) and 32-bit (x86) NVDA builds — NVDA's own bitness does not matter, only the operating system's.
+* **32-bit Windows:** Bun publishes no 32-bit Windows build, so the bundled runtime cannot run there. The add-on detects this and **automatically falls back to an installed Chromium browser** (Google Chrome, Microsoft Edge, or Brave); the settings panel shows the bundled runtime as Unavailable. Microsoft Edge additionally requires the Microsoft Edge WebView2 Runtime. If no browser is installed either, a Chromium browser must be installed on 32-bit Windows.
 * **Interactive Windows user session:** The add-on depends on a background speech runtime process. Do not rely on it where that process cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.
 
 ---

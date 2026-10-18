@@ -1,6 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes a standalone test suite comprising **852 unit tests** in **146 test classes** across **18 test modules**, supplemented by shared test helpers (`test_support.py`), a multilingual segmentation corpus (`segmentation_corpus.json`), static NVDA API contract verification (`check_nvda_api_contracts.py`), bundled-runtime integration checkers (`check_bun_runtime.py`, `check_interrupt_truncation.py`, `check_synthesis_variance.py`), and an interactive manual release checklist (`NVDA_CHROMIUM_MANUAL_CHECKLIST.md`).
+Google TTS For NVDA includes a standalone test suite comprising **865 unit tests** in **147 test classes** across **18 test modules**, supplemented by shared test helpers (`test_support.py`), a multilingual segmentation corpus (`segmentation_corpus.json`), static NVDA API contract verification (`check_nvda_api_contracts.py`), bundled-runtime integration checkers (`check_bun_runtime.py`, `check_interrupt_truncation.py`, `check_synthesis_variance.py`), and an interactive manual release checklist (`NVDA_CHROMIUM_MANUAL_CHECKLIST.md`).
 
 All unit tests run **without importing NVDA** or requiring an active NVDA installation (via `test_support.load_driver_module()`, a standalone `importlib` loader in `test_updater_security.py`, and local manager fixtures in `test_standby_concurrency.py`).
 
@@ -30,7 +30,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | :--- | :---: | :---: | :--- |
 | `test_audio_math.py` | 6 | 1 | `rate_to_chrome`, `pitch_to_chrome`, `uses_protected_engine_rate` (`PROTECTED_ENGINE_RATE`), `build_speech_options` payloads and gain makeup. |
 | `test_bridge_concurrency.py` | 17 | 5 | `_connectionLock` scope across fallbacks, engine reference capture, `_runtimeBusyLock`, cancellation, pre-audio retry vs. post-audio recycling. |
-| `test_bun_runtime.py` | 114 | 12 | Bundled Bun speech runtime: `classify_expression` CDP-expression translation, the `BunClient`/`BunProcessManager` duck-typing contract against `bridge.py`, `GTTS_BUN_PATH` discovery, the unified four-runtime selection model (`BROWSER_RUNTIMES`, `CHROMIUM_RUNTIMES`, `_browser_choices` never offering the bundled runtime, and the deterministic `supports_runtime_fallback` retry guard), minified engine-global discovery, bootstrap generation and caching, harness-reuse guarantees, `fetch_bun_runtime` download/extract/verify, the Bun redistribution obligations (license notice, manifest wording, archive verification), the interrupt/respeak serialisation, and the drain-idle override that prevents the harness mistaking an audio-pump stall for end-of-utterance. |
+| `test_bun_runtime.py` | 127 | 13 | Bundled Bun speech runtime: `classify_expression` CDP-expression translation, the `BunClient`/`BunProcessManager` duck-typing contract against `bridge.py`, `GTTS_BUN_PATH` discovery, the unified four-runtime selection model (`BROWSER_RUNTIMES`, `CHROMIUM_RUNTIMES`, `_browser_choices` never offering the bundled runtime, and the deterministic `supports_runtime_fallback` retry guard), minified engine-global discovery, bootstrap generation and caching, harness-reuse guarantees, `fetch_bun_runtime` download/extract/verify, the Bun redistribution obligations (license notice, manifest wording, archive verification), the interrupt/respeak serialisation, and the drain-idle override that prevents the harness mistaking an audio-pump stall for end-of-utterance, and 32-bit Windows detection with browser fallback. |
 | `test_bridge_helpers.py` | 60 | 21 | Runtime discovery & fallback order, Edge WebView2 checks, hidden process startup, priority elevation, profile-lock recovery, `_safe_join`, transient/recycle error classification, and CDP error formatting. |
 | `test_build_i18n.py` | 35 | 2 | End-to-end POT extraction, PO merge, MO compilation, manifest sync, and Markdown/HTML documentation build pipelines. |
 | `test_build_i18n_helpers.py` | 210 | 25 | PO parsing/escaping, fuzzy & obsolete entry handling, format/HTML interpolation checks, PO syntax fallback, Markdown↔HTML conversion, RTL rendering, and CLI/menu options. |
@@ -47,7 +47,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | `test_updater_security.py` | 77 | 15 | SHA-256 verification, HTTPS-only enforcement, path traversal & size bounds, manifest/release-notes parsing, and version/build comparison. |
 | `test_voice_package_lifecycle.py` | 24 | 7 | Voice package download guards, SHA-256 verification cache, copy/remove lifecycle, and `VoiceCatalog` validation. |
 | `test_watcher.py` | 17 | 4 | `DirectoryChangeWatcher` start/stop lifecycle, callbacks, error recovery, and live filesystem integration. |
-| **Total** | **852** | **146** | **Standalone regression test suite** |
+| **Total** | **865** | **147** | **Standalone regression test suite** |
 
 ---
 

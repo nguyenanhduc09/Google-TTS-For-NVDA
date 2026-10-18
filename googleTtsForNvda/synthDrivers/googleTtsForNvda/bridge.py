@@ -734,9 +734,33 @@ def _registry_app_paths(executableName: str) -> list[str]:
     return paths
 
 
+def _windows_is_64bit() -> bool:
+    """Whether the *operating system* is 64-bit, not whether this Python process is.
+
+    NVDA runs 32-bit Python, so ``sys.maxsize`` and ``platform.machine()`` describe
+    the process rather than the OS. Under WOW64 Windows sets
+    ``PROCESSOR_ARCHITEW6432`` to the real architecture, which is the reliable
+    signal; ``PROCESSOR_ARCHITECTURE`` alone would report ``x86``.
+
+    The bundled Bun runtime has no 32-bit Windows build (its releases are x64 and
+    ARM64 only), so on 32-bit Windows ``bun.exe`` would exist on disk yet fail to
+    execute. Availability is gated here so ``effective_speech_runtime()`` falls back
+    to an installed Chromium browser instead of selecting a runtime that cannot run.
+    """
+    if os.name != "nt":
+        return True
+    architecture = os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get("PROCESSOR_ARCHITECTURE") or ""
+    return architecture.strip().upper() in ("AMD64", "ARM64", "IA64")
+
+
 def _browser_candidates(runtime: str) -> list[str]:
     runtime = _normalize_browser_runtime(runtime)
     if runtime == BROWSER_RUNTIME_BUN:
+        if not _windows_is_64bit():
+            # No 32-bit Bun build exists, so the bundled runtime cannot run here.
+            # Reporting no candidates makes browser_runtime_available("bun") False,
+            # which is what routes effective_speech_runtime() to a browser.
+            return []
         # Mirrors the CHROME_PATH / EDGE_PATH / BRAVE_PATH convention. The bundled
         # copy lives in runtime/ next to the driver; bun_bridge.find_bun() adds the
         # platform-specific executable names and a PATH lookup on top of these.

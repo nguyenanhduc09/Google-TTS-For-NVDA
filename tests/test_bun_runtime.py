@@ -891,6 +891,119 @@ class InterruptAndAccountingTests(unittest.TestCase):
         client._report_audio_accounting(None)
 
 
+class _WindowsArch:
+    """Combined patch for os.name and the PROCESSOR_ARCHITECTURE* environment."""
+
+    def __init__(self, environ: dict[str, str]) -> None:
+        self._environ = environ
+        self._name = mock.patch.object(bridge.os, "name", "nt")
+        self._env = mock.patch.dict(os.environ, environ, clear=True)
+
+    def __enter__(self) -> _WindowsArch:
+        self._name.start()
+        self._env.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._env.stop()
+        self._name.stop()
+
+
+class ThirtyTwoBitWindowsTests(unittest.TestCase):
+    """Bun publishes no 32-bit Windows build, so the bundled runtime must not be
+    offered there -- and must not be *reported* available, or the browser fallback
+    never engages and speech fails at spawn time with no recovery."""
+
+    def _with_arch(self, architecture: str | None, wow64: str | None = None):
+        """Patch the environment AND os.name; without the latter the non-Windows
+        early return makes every case pass vacuously."""
+        environ = {"PROCESSOR_ARCHITECTURE": architecture} if architecture else {}
+        if wow64 is not None:
+            environ["PROCESSOR_ARCHITEW6432"] = wow64
+        return _WindowsArch(environ)
+
+    def test_64_bit_windows_is_detected(self) -> None:
+        with self._with_arch("AMD64"):
+            self.assertTrue(bridge._windows_is_64bit())
+
+    def test_32_bit_windows_is_detected(self) -> None:
+        with self._with_arch("x86"):
+            self.assertFalse(bridge._windows_is_64bit())
+
+    def test_32_bit_process_on_64_bit_windows_is_detected_as_64_bit(self) -> None:
+        """NVDA is 32-bit Python, so PROCESSOR_ARCHITEW6432 is the signal that matters."""
+        with self._with_arch("x86", wow64="AMD64"):
+            self.assertTrue(bridge._windows_is_64bit())
+
+    def test_arm64_windows_counts_as_64_bit(self) -> None:
+        with self._with_arch("ARM64"):
+            self.assertTrue(bridge._windows_is_64bit())
+
+    def test_missing_architecture_is_treated_as_32_bit_on_windows(self) -> None:
+        with self._with_arch(None), mock.patch.object(bridge.os, "name", "nt"):
+            self.assertFalse(bridge._windows_is_64bit())
+
+    def test_non_windows_is_not_gated(self) -> None:
+        """Development and CI run the checker on Linux, where the OS bitness is not the issue."""
+        with mock.patch.object(bridge.os, "name", "posix"):
+            self.assertTrue(bridge._windows_is_64bit())
+
+    def test_bun_offers_no_candidates_on_32_bit_windows(self) -> None:
+        with (
+            mock.patch.object(bridge, "_windows_is_64bit", return_value=False),
+            mock.patch.dict(os.environ, {bridge.BUN_PATH_ENV_VAR: "/custom/bun.exe"}, clear=False),
+        ):
+            self.assertEqual([], bridge._browser_candidates("bun"))
+
+    def test_bun_offers_candidates_on_64_bit_windows(self) -> None:
+        with mock.patch.object(bridge, "_windows_is_64bit", return_value=True):
+            self.assertTrue(bridge._browser_candidates("bun"))
+
+    def test_bun_reports_unavailable_on_32_bit_windows(self) -> None:
+        with mock.patch.object(bridge, "_windows_is_64bit", return_value=False):
+            self.assertFalse(bridge.browser_runtime_available("bun"))
+            self.assertFalse(bridge.browser_availability()["bun"])
+            self.assertIsNone(bridge.browser_path_for_runtime("bun"))
+
+    def test_find_bun_returns_none_on_32_bit_windows_even_when_the_file_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as staging:
+            fake = Path(staging) / "bun.exe"
+            fake.write_bytes(b"MZ")
+            with (
+                # bun_bridge did `from .bridge import _windows_is_64bit`, so its own
+                # namespace holds the reference and that is the one to patch.
+                mock.patch.object(bun_bridge, "_windows_is_64bit", return_value=False),
+                mock.patch.dict(os.environ, {bun_bridge.BUN_PATH_ENV_VAR: str(fake)}, clear=False),
+            ):
+                self.assertIsNone(bun_bridge.find_bun())
+                self.assertFalse(bun_bridge.bun_runtime_available())
+
+    def test_effective_runtime_chooses_a_browser_on_32_bit_windows(self) -> None:
+        """The whole point: a 32-bit Windows user still gets speech."""
+        with (
+            mock.patch.object(bridge, "configured_browser_runtime", return_value="bun"),
+            mock.patch.object(bridge, "_windows_is_64bit", return_value=False),
+            mock.patch.object(bridge, "_find_browser_choice", return_value=("chrome", "C:/chrome.exe")),
+            mock.patch.object(bridge, "browser_path_for_runtime", return_value="C:/chrome.exe"),
+        ):
+            self.assertEqual("chrome", bridge.effective_speech_runtime())
+            self.assertEqual("C:/chrome.exe", bridge.speech_runtime_executable())
+
+    def test_effective_runtime_still_prefers_bun_on_64_bit_windows(self) -> None:
+        with (
+            mock.patch.object(bridge, "configured_browser_runtime", return_value="bun"),
+            mock.patch.object(bridge, "_windows_is_64bit", return_value=True),
+            mock.patch.object(bun_bridge, "find_bun", return_value="C:/runtime/bun.exe"),
+        ):
+            self.assertEqual("bun", bridge.effective_speech_runtime())
+
+    def test_settings_panel_shows_the_bundled_runtime_unavailable_on_32_bit_windows(self) -> None:
+        with mock.patch.object(bridge, "_windows_is_64bit", return_value=False):
+            snapshot = bridge.browser_runtime_snapshot("bun")
+        self.assertFalse(snapshot["availability"]["bun"])
+        self.assertNotEqual("bun", snapshot["effectiveRuntime"])
+
+
 class DrainIdleOverrideTests(unittest.TestCase):
     """Truncated speech: the harness treats an 80 ms pump stall as end-of-utterance.
 

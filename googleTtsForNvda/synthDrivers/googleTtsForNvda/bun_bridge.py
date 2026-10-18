@@ -64,6 +64,7 @@ from .bridge import (
     _hidden_chrome_startup_kwargs,
     _process_tree_memory_usage,
     _raise_if_cancelled,
+    _windows_is_64bit,
 )
 from .catalog import VoiceCatalog
 
@@ -111,7 +112,17 @@ def bun_candidates() -> tuple[str, ...]:
 
 
 def find_bun() -> str | None:
-    """Return the first existing Bun executable, or ``None``."""
+    """Return the first existing Bun executable, or ``None``.
+
+    Returns ``None`` on 32-bit Windows regardless of what is on disk: Bun publishes
+    no 32-bit Windows build, so a bundled ``bun.exe`` there would be found by
+    ``os.path.isfile`` yet fail to execute. Reporting it as absent is what lets
+    ``bridge.effective_speech_runtime()`` fall back to an installed browser instead
+    of failing at spawn time with no fallback (this manager sets
+    ``supports_runtime_fallback = False``).
+    """
+    if not _windows_is_64bit():
+        return None
     for candidate in bun_candidates():
         if candidate and os.path.isfile(candidate):
             return candidate
