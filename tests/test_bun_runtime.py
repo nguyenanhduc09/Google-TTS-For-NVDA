@@ -24,6 +24,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -803,6 +804,90 @@ class FetchBunRuntimeTests(unittest.TestCase):
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("runtime/", gitignore)
         self.assertIn("bun.exe", gitignore)
+
+
+class InterruptAndAccountingTests(unittest.TestCase):
+    """The truncation-on-interrupt defect and the instrumentation that localises it.
+
+    Two compounding defects cut the tail off an utterance that follows an interrupt:
+    BunClient.send_command_async() wrote {"op": "stop"} with no id and worker.js
+    dropped id-less messages, so send_fast_stop() never reached the engine; and
+    web/bridgeHarness.js's speak() success tail fences everything with sessionToken
+    except its final `await stopActiveSynthesis()`, which bumps the token, resets the
+    audio queue and stops the engine. A superseded invocation unwinding after the next
+    session began therefore truncated the *new* utterance.
+    """
+
+    def setUp(self) -> None:
+        self.workerSource = WORKER_JS.read_text(encoding="utf-8")
+
+    def test_worker_runs_commands_that_carry_no_id(self) -> None:
+        """send_fast_stop() is fire-and-forget, so id-less messages must not be dropped."""
+        dispatch = self.workerSource[self.workerSource.index("function dispatch(line)") :]
+        dispatch = dispatch[: dispatch.index("let pending")]
+        self.assertIn("runOp(null, message)", dispatch)
+        # the old guard returned before reaching runOp
+        self.assertNotIn("if (id === undefined || id === null) {\n\t\treturn;\n\t}", dispatch)
+
+    def test_worker_serialises_concurrent_speak(self) -> None:
+        """Two harness invocations must never overlap, or the unfenced tail races."""
+        self.assertIn("async function speakExclusive(payload)", self.workerSource)
+        self.assertIn("activeSpeak", self.workerSource)
+        self.assertIn("googleTtsForNvdaStop", self.workerSource)
+        # the in-flight promise is awaited (with a bound) before the next one starts
+        self.assertIn("settleWithBound(previous", self.workerSource)
+        self.assertIn('if (op === "speak") {\n\t\treturn await speakExclusive(payload);', self.workerSource)
+
+    def test_worker_reports_what_it_emitted(self) -> None:
+        self.assertIn("jsAudioPackets", self.workerSource)
+        self.assertIn("jsAudioSamples", self.workerSource)
+
+    def test_delivered_audio_is_counted(self) -> None:
+        client = bun_bridge.BunClient.__new__(bun_bridge.BunClient)
+        client._lock = threading.RLock()
+        client._deliveredAudioPackets = 0
+        client._deliveredAudioSamples = 0
+        payload = json.dumps({"type": "audio", "sampleRate": 24000, "data": "AAAAAA=="})
+        client._count_delivered_audio(payload)
+        self.assertEqual(1, client._deliveredAudioPackets)
+        self.assertEqual(2, client._deliveredAudioSamples)  # 4 bytes of base64 -> 2 samples
+
+    def test_non_audio_and_malformed_payloads_are_ignored(self) -> None:
+        client = bun_bridge.BunClient.__new__(bun_bridge.BunClient)
+        client._lock = threading.RLock()
+        client._deliveredAudioPackets = 0
+        client._deliveredAudioSamples = 0
+        for payload in (None, 42, "not json", json.dumps({"type": "mark", "charIndex": 3})):
+            client._count_delivered_audio(payload)
+        self.assertEqual(0, client._deliveredAudioPackets)
+        self.assertEqual(0, client._deliveredAudioSamples)
+
+    def test_accounting_mismatch_is_reported_as_a_warning(self) -> None:
+        client = bun_bridge.BunClient.__new__(bun_bridge.BunClient)
+        client._lock = threading.RLock()
+        client._deliveredAudioPackets = 5
+        client._deliveredAudioSamples = 1200
+        with self.assertLogs(bun_bridge.log, level="WARNING") as captured:
+            client._report_audio_accounting({"jsAudioPackets": 9, "jsAudioSamples": 2400})
+        self.assertTrue(any("mismatch" in line for line in captured.output))
+
+    def test_accounting_agreement_is_not_a_warning(self) -> None:
+        client = bun_bridge.BunClient.__new__(bun_bridge.BunClient)
+        client._lock = threading.RLock()
+        client._deliveredAudioPackets = 9
+        client._deliveredAudioSamples = 2400
+        with self.assertLogs(bun_bridge.log, level="DEBUG") as captured:
+            client._report_audio_accounting({"jsAudioPackets": 9, "jsAudioSamples": 2400})
+        self.assertFalse(any("mismatch" in line for line in captured.output))
+
+    def test_accounting_is_skipped_when_the_worker_reports_nothing(self) -> None:
+        """Older generated workers do not report counts; that must not warn."""
+        client = bun_bridge.BunClient.__new__(bun_bridge.BunClient)
+        client._lock = threading.RLock()
+        client._deliveredAudioPackets = 3
+        client._deliveredAudioSamples = 900
+        client._report_audio_accounting({"success": True})
+        client._report_audio_accounting(None)
 
 
 class RedistributionAndDocsTests(unittest.TestCase):

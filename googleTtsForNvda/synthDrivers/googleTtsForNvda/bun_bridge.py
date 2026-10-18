@@ -347,6 +347,8 @@ class BunClient:
         self._readerThread: threading.Thread | None = None
         self._stopped = threading.Event()
         self._pending: dict[int, threading.Event] = {}
+        self._deliveredAudioPackets = 0
+        self._deliveredAudioSamples = 0
         self._responses: dict[int, dict[str, Any]] = {}
         self._eventHandlers: dict[int, Callable[[dict[str, Any]], None]] = {}
         self._handlerErrors: dict[int, BaseException] = {}
@@ -465,6 +467,7 @@ class BunClient:
         if method == "Runtime.bindingCalled":
             params = message.get("params")
             if isinstance(params, dict) and params.get("name") == BINDING_NAME:
+                self._count_delivered_audio(params.get("payload"))
                 envelope = {"method": "Runtime.bindingCalled", "params": params}
                 self._fan_out(envelope)
             return
@@ -477,6 +480,61 @@ class BunClient:
                 self._responses[int(msgId)] = message
         if event is not None:
             event.set()
+
+    def _count_delivered_audio(self, rawPayload: Any) -> None:
+        """Track audio packets handed to handle_event(), for loss detection."""
+        if not isinstance(rawPayload, str):
+            return
+        try:
+            event = json.loads(rawPayload)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(event, dict) or event.get("type") != "audio":
+            return
+        data = event.get("data")
+        if not isinstance(data, str):
+            return
+        # Mirror worker.js exactly: base64 length less padding, then s16 samples.
+        padding = len(data) - len(data.rstrip("="))
+        samples = max(0, (len(data) * 3 // 4 - padding) // 2)
+        with self._lock:
+            self._deliveredAudioPackets += 1
+            self._deliveredAudioSamples += samples
+
+    def _report_audio_accounting(self, value: Any) -> None:
+        """Warn when the worker emitted audio that never reached handle_event().
+
+        A truncated utterance is ambiguous without this: the tail was either lost
+        between the worker and Python, or it was never synthesised at all. The
+        worker reports what it emitted, so a mismatch localises the fault instead
+        of leaving it to guesswork.
+        """
+        if not isinstance(value, dict):
+            return
+        jsPackets = value.get("jsAudioPackets")
+        if not isinstance(jsPackets, int):
+            return
+        with self._lock:
+            deliveredPackets = self._deliveredAudioPackets
+            deliveredSamples = self._deliveredAudioSamples
+        jsSamples = value.get("jsAudioSamples")
+        samplesDiffer = isinstance(jsSamples, int) and abs(jsSamples - deliveredSamples) > 8
+        if jsPackets != deliveredPackets or samplesDiffer:
+            log.warning(
+                "Google TTS bundled speech runtime audio accounting mismatch: worker emitted %d "
+                "packets / %s samples but Python delivered %d packets / %d samples. Audio was "
+                "lost between the runtime and NVDA.",
+                jsPackets,
+                jsSamples,
+                deliveredPackets,
+                deliveredSamples,
+            )
+        else:
+            log.debug(
+                "Google TTS bundled speech runtime audio accounting agrees: %d packets, %d samples.",
+                deliveredPackets,
+                deliveredSamples,
+            )
 
     def _fan_out(self, message: dict[str, Any]) -> None:
         with self._lock:
@@ -536,6 +594,9 @@ class BunClient:
         if method in ("Runtime.enable", "Page.enable", "Runtime.addBinding"):
             return {"id": self.next_msg_id(), "result": {}}
         msgId = self.next_msg_id()
+        with self._lock:
+            self._deliveredAudioPackets = 0
+            self._deliveredAudioSamples = 0
         event = threading.Event()
         with self._lock:
             self._pending[msgId] = event
@@ -594,6 +655,7 @@ class BunClient:
                 ready = self._ready
             return {"id": msgId, "result": {"result": {"value": ready}}}
         value = response.get("result")
+        self._report_audio_accounting(value)
         return {"id": msgId, "result": {"result": {"value": value if isinstance(value, dict) else {}}}}
 
     def _is_ready_probe(self, params: dict[str, Any] | None) -> bool:

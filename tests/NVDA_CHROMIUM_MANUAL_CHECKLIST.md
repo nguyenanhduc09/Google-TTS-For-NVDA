@@ -33,6 +33,8 @@ log/audio captures. For the bundled runtime, record the version reported by
 - [ ] Verify **Keep Google TTS speech runtime ready** both off and on.
 - [ ] Verify no console window flashes at NVDA startup or during speech.
 - [ ] Verify cancellation while speaking: interrupt mid-utterance repeatedly and confirm speech stops promptly with no leaked or trailing audio.
+- [ ] Interrupt and immediately speak again (repeated `NVDA+f12`, or arrow keys while reading), and confirm the *following* utterance is complete — no missing final word. With debug logging on, `bun_bridge` logs `audio accounting agrees: N packets, M samples`; a line saying `audio accounting mismatch` means audio was lost between the runtime and NVDA rather than never being synthesised.
+- [ ] Read a long paragraph and a date/number-heavy paragraph end to end and confirm nothing is cut off at the end. `tests/check_interrupt_truncation.py` stress-tests the interrupt path offline.
 - [ ] Verify the sign-in screen / secure desktop behaviour and record it; do not assume it works.
 - [ ] Verify antivirus and Windows SmartScreen do not quarantine or block `runtime/bun.exe`, and that the add-on is signed/trusted as expected.
 - [ ] Terminate `bun.exe` from Task Manager while NVDA is idle, then speak; verify recovery without a stale process.
