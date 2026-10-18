@@ -29,6 +29,7 @@ from .bridge import (
     ChromeTtsBridge,
     configured_browser_runtime,
     configured_keep_browser_runtime_ready,
+    configured_speech_runtime,
 )
 from .catalog import CATALOG_PATH, ENGINE_DIR, ENGINE_VERSION, VoiceCatalog
 from .watcher import DirectoryChangeWatcher
@@ -110,7 +111,13 @@ def _catalog_signature(catalog: VoiceCatalog) -> tuple[Any, ...]:
     except Exception:
         log.debug("Could not build Google TTS standby warmup signature.", exc_info=True)
         warmupSignature = ()
-    return (configured_browser_runtime(), _wasm_engine_signature(), packageSignature, warmupSignature)
+    return (
+        configured_speech_runtime(),
+        configured_browser_runtime(),
+        _wasm_engine_signature(),
+        packageSignature,
+        warmupSignature,
+    )
 
 
 def _speakers_by_package(catalog: VoiceCatalog) -> dict[str, list[Any]]:

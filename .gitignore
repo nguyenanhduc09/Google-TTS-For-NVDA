@@ -42,6 +42,15 @@ session-*/
 runtime/
 google tts voices.json
 
+# The bundled Bun speech runtime is fetched at build time by fetch_bun_runtime.py
+# (see build.bat / build.sh / .github/workflows/build.yml). It lands in
+# googleTtsForNvda/synthDrivers/googleTtsForNvda/runtime/, which the `runtime/`
+# rule above already excludes; these entries document that and cover the cache.
+bun.exe
+bun_version.json
+googleTtsForNvda-bun-cache/
+bunBootstrap/
+
 # Editor / IDE configuration
 .vscode/
 .idea/

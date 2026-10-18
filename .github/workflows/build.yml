@@ -1,0 +1,126 @@
+# Packages the .nvda-addon, bundling the Bun speech runtime that replaces the
+# headless Chromium browser.
+#
+# The add-on drives Google's WASM TTS engine through a bundled bun.exe (see
+# googleTtsForNvda/synthDrivers/googleTtsForNvda/bun_bridge.py), so the runtime has
+# to be inside the shipped archive. fetch_bun_runtime.py performs the download,
+# extraction, executable discovery and placement; it is the same implementation
+# build.bat and build.sh call, so CI and local builds cannot drift.
+#
+# The Bun release archive contains a single executable nested in a top-level
+# folder (bun-windows-x64/bun.exe). That folder name follows the platform triple
+# rather than a documented stable contract, so the executable is located by a
+# recursive search for "bun.exe" instead of a hardcoded path.
+
+name: Build add-on
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      bun_url:
+        description: "Bun release archive URL to bundle"
+        required: false
+        default: "https://github.com/oven-sh/bun/releases/latest/download/bun-windows-x64.zip"
+
+permissions:
+  # `write` is only needed by the tag-gated "Create release" step at the end.
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_URL: ${{ github.event.inputs.bun_url || 'https://github.com/oven-sh/bun/releases/latest/download/bun-windows-x64.zip' }}
+  ADDON_RUNTIME_DIR: googleTtsForNvda/synthDrivers/googleTtsForNvda/runtime
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Show tool versions
+        run: |
+          python --version
+          node --version
+
+      # ---------------------------------------------------------------------
+      # Download the Bun release archive, extract it, find bun.exe and copy it
+      # into the add-on payload where bun_bridge.find_bun() looks for it.
+      # ---------------------------------------------------------------------
+      - name: Download and bundle the Bun speech runtime
+        run: python fetch_bun_runtime.py --url "$env:BUN_URL"
+
+      - name: Verify bun.exe was placed in the add-on payload
+        run: |
+          $exe = Join-Path "$env:ADDON_RUNTIME_DIR" "bun.exe"
+          if (-not (Test-Path $exe)) { throw "Missing $exe" }
+          $bytes = [System.IO.File]::ReadAllBytes($exe)[0..1]
+          if ([System.Text.Encoding]::ASCII.GetString($bytes) -ne "MZ") { throw "$exe is not a PE executable" }
+          $size = (Get-Item $exe).Length
+          Write-Host "Found $exe ($size bytes)"
+          if ($size -lt 20MB) { throw "$exe is suspiciously small ($size bytes)" }
+          & $exe --version
+          Get-Content (Join-Path "$env:ADDON_RUNTIME_DIR" "bun_version.json")
+
+      # ---------------------------------------------------------------------
+      # Package. SKIP_BUN_RUNTIME=1 because the step above already bundled it.
+      # ---------------------------------------------------------------------
+      - name: Build the add-on package
+        env:
+          SKIP_BUN_RUNTIME: "1"
+        run: ./build.bat
+
+      - name: Verify the runtime is inside the .nvda-addon
+        run: |
+          $addon = Get-ChildItem dist -Filter *.nvda-addon | Select-Object -First 1
+          if (-not $addon) { throw "No .nvda-addon was produced in dist/" }
+          Write-Host "Package: $($addon.FullName) ($($addon.Length) bytes)"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($addon.FullName)
+          try {
+            $names = $zip.Entries | ForEach-Object { $_.FullName }
+            foreach ($required in @(
+              "manifest.ini",
+              "synthDrivers/googleTtsForNvda/runtime/bun.exe",
+              "synthDrivers/googleTtsForNvda/bun_bridge.py",
+              "synthDrivers/googleTtsForNvda/bun_bootstrap.py",
+              "synthDrivers/googleTtsForNvda/bunRuntime/shim.js",
+              "synthDrivers/googleTtsForNvda/bunRuntime/worker.js",
+              "synthDrivers/googleTtsForNvda/web/bridgeHarness.js",
+              "synthDrivers/googleTtsForNvda/WasmTtsEngine/20260917.1/bindings_main.wasm"
+            )) {
+              if ($names -notcontains $required) { throw "Archive is missing $required" }
+            }
+            if ($names | Where-Object { $_ -like "*.zvoice" }) { throw "Archive must not contain .zvoice files" }
+            Write-Host "Archive contains all required entries ($($names.Count) total)."
+          } finally { $zip.Dispose() }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nvda-addon
+          path: dist/*.nvda-addon
+          if-no-files-found: error
+
+      # ---------------------------------------------------------------------
+      # Publish a GitHub Release when building a version tag.
+      # ---------------------------------------------------------------------
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = "${{ github.ref_name }}"
+          gh release create $version dist/*.nvda-addon `
+            --title "Google TTS For NVDA $version" `
+            --generate-notes

@@ -74,6 +74,7 @@ RUNTIME_PRIVATE_BYTES_RECYCLE_THRESHOLD = 1280 * 1024 * 1024
 RUNTIME_WORKING_SET_BYTES_RECYCLE_THRESHOLD = 1024 * 1024 * 1024
 RUNTIME_MEMORY_RECYCLE_CONFIRMATIONS = 2
 CONFIG_SECTION = "googleTtsForNvda"
+CONFIG_SPEECH_RUNTIME = "speechRuntime"
 CONFIG_BROWSER_RUNTIME = "browserRuntime"
 CONFIG_AUTO_LANGUAGE_DETECTION = "autoLanguageDetection"
 CONFIG_AUTO_LANGUAGE_PREFERRED = "autoLanguagePreferred"
@@ -95,6 +96,16 @@ BROWSER_RUNTIME_LABELS = {
     BROWSER_RUNTIME_BRAVE: "Brave",
 }
 BROWSER_RUNTIMES = (BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE)
+# Which host runs the WASM TTS engine: the bundled Bun executable, or a headless
+# Chromium browser. Bun is the default so no browser needs to be installed.
+SPEECH_RUNTIME_BUN = "bun"
+SPEECH_RUNTIME_BROWSER = "browser"
+SPEECH_RUNTIMES = (SPEECH_RUNTIME_BUN, SPEECH_RUNTIME_BROWSER)
+DEFAULT_SPEECH_RUNTIME = SPEECH_RUNTIME_BUN
+SPEECH_RUNTIME_LABELS = {
+    SPEECH_RUNTIME_BUN: "Bundled runtime (no browser required)",
+    SPEECH_RUNTIME_BROWSER: "Chromium browser runtime",
+}
 
 
 class CdpError(Exception):
@@ -562,6 +573,95 @@ def set_keep_browser_runtime_ready(enabled: bool) -> bool:
     enabled = bool(enabled)
     _set_config_value(CONFIG_KEEP_BROWSER_RUNTIME_READY, enabled)
     return enabled
+
+
+def _normalize_speech_runtime(runtime: str | None) -> str:
+    runtime = str(runtime or "").strip().lower()
+    if runtime in SPEECH_RUNTIMES:
+        return runtime
+    return DEFAULT_SPEECH_RUNTIME
+
+
+def configured_speech_runtime() -> str:
+    """The host the user selected for the WASM TTS engine."""
+    if config is None:
+        return DEFAULT_SPEECH_RUNTIME
+    try:
+        return _normalize_speech_runtime(config.conf[CONFIG_SECTION][CONFIG_SPEECH_RUNTIME])
+    except Exception:
+        return DEFAULT_SPEECH_RUNTIME
+
+
+def set_configured_speech_runtime(runtime: str) -> str:
+    runtime = _normalize_speech_runtime(runtime)
+    _set_config_value(CONFIG_SPEECH_RUNTIME, runtime)
+    return runtime
+
+
+def bun_runtime_available() -> bool:
+    """Whether the bundled Bun speech runtime can be located."""
+    try:
+        from .bun_bridge import bun_runtime_available as _available
+    except Exception:
+        log.debug("Google TTS bundled speech runtime is unavailable.", exc_info=True)
+        return False
+    try:
+        return bool(_available())
+    except Exception:
+        log.debug("Google TTS could not probe the bundled speech runtime.", exc_info=True)
+        return False
+
+
+def speech_runtime_available(runtime: str | None = None) -> bool:
+    """Whether the requested speech host is usable right now."""
+    selected = _normalize_speech_runtime(runtime if runtime is not None else configured_speech_runtime())
+    if selected == SPEECH_RUNTIME_BUN:
+        return bun_runtime_available()
+    return browser_runtime_available()
+
+
+def effective_speech_runtime() -> str:
+    """Resolve the configured speech host, falling back if it is missing.
+
+    A source checkout that has not been packaged has no ``runtime/bun.exe``, so
+    falling back to an installed browser keeps the add-on usable and mirrors the
+    existing browser-candidate fallback behaviour.
+    """
+    configured = configured_speech_runtime()
+    if configured == SPEECH_RUNTIME_BUN:
+        if bun_runtime_available():
+            return SPEECH_RUNTIME_BUN
+        if browser_runtime_available():
+            log.debug("Google TTS bundled speech runtime is missing; falling back to a Chromium browser runtime.")
+            return SPEECH_RUNTIME_BROWSER
+        return SPEECH_RUNTIME_BUN
+    if browser_runtime_available():
+        return SPEECH_RUNTIME_BROWSER
+    if bun_runtime_available():
+        log.debug("No Chromium browser runtime is available; falling back to the bundled speech runtime.")
+        return SPEECH_RUNTIME_BUN
+    return configured
+
+
+def speech_runtime_snapshot(runtime: str | None = None) -> dict[str, Any]:
+    """Diagnostics for the settings panel."""
+    selected = _normalize_speech_runtime(runtime if runtime is not None else configured_speech_runtime())
+    effective = effective_speech_runtime()
+    bunPath: str | None = None
+    try:
+        from .bun_bridge import find_bun
+
+        bunPath = find_bun()
+    except Exception:
+        bunPath = None
+    return {
+        "selectedRuntime": selected,
+        "effectiveRuntime": effective,
+        "fellBack": effective != selected,
+        "bunAvailable": bunPath is not None,
+        "bunPath": bunPath,
+        "browserAvailable": browser_runtime_available(),
+    }
 
 
 def _runtime_fallback_order(runtime: str | None = None) -> tuple[str, ...]:
@@ -1939,8 +2039,19 @@ class ChromeTtsBridge:
 
     def __init__(self, catalog: VoiceCatalog | None = None) -> None:
         self.catalog = catalog or VoiceCatalog.load()
-        self._process_manager = BrowserProcessManager(self.catalog)
-        self._cdp_client = CdpClient()
+        # Choosing the host here (rather than inside ensure_connection) keeps every
+        # other method generic: BunProcessManager/BunClient present the same
+        # duck-typed surface as BrowserProcessManager/CdpClient, so
+        # WasmTtsEngineBridge -- including speak() and handle_event() -- is shared.
+        self._speechRuntime = effective_speech_runtime()
+        if self._speechRuntime == SPEECH_RUNTIME_BUN:
+            from .bun_bridge import BunClient, BunProcessManager
+
+            self._process_manager = BunProcessManager(self.catalog)
+            self._cdp_client = BunClient(self._process_manager)
+        else:
+            self._process_manager = BrowserProcessManager(self.catalog)
+            self._cdp_client = CdpClient()
         self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
         self._lock = threading.RLock()
         self._connectionLock = threading.Lock()
@@ -1958,6 +2069,16 @@ class ChromeTtsBridge:
     @classmethod
     def browser_runtime_available(cls, runtime: str | None = None) -> bool:
         return BrowserProcessManager.browser_runtime_available(runtime)
+
+    @classmethod
+    def speech_runtime_available(cls, runtime: str | None = None) -> bool:
+        """Whether the host that will actually run the engine is usable."""
+        return speech_runtime_available(runtime)
+
+    @property
+    def speech_runtime(self) -> str:
+        """The resolved host this bridge drives ("bun" or "browser")."""
+        return str(getattr(self, "_speechRuntime", SPEECH_RUNTIME_BROWSER))
 
     @property
     def _ws(self) -> websocket.WebSocket | None:
@@ -2122,7 +2243,10 @@ class ChromeTtsBridge:
                         self._cdp_client.close()
                         runtime = runtime or self._process_manager.profile_runtime
                         self._process_manager.terminate()
-                    if runtime:
+                    # The bundled runtime has no candidate list to fall back
+                    # through; retrying would loop on the same missing executable.
+                    usingBundledRuntime = getattr(self, "_speechRuntime", SPEECH_RUNTIME_BROWSER) == SPEECH_RUNTIME_BUN
+                    if runtime and not usingBundledRuntime:
                         runtime = _normalize_browser_runtime(runtime)
                         skipRuntimes.add(runtime)
                         if _browser_choices(skipRuntimes=skipRuntimes):

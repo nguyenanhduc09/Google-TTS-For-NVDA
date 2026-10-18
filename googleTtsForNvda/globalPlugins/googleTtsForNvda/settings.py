@@ -117,6 +117,28 @@ def _save_browser_runtime(runtime: str) -> None:
     standby.refresh_async("Chromium browser runtime setting changed")
 
 
+def _speech_runtime_label(runtime: str) -> str:
+    return browserBridge.SPEECH_RUNTIME_LABELS.get(runtime, runtime)
+
+
+def _save_speech_runtime(runtime: str) -> str:
+    """Persist the selected speech host and report when it takes effect."""
+    saved = browserBridge.set_configured_speech_runtime(runtime)
+    if _is_google_synth_current():
+        ui.message(
+            _(
+                "Google TTS For NVDA will use the {runtime}. "
+                "Switch to another synthesizer and back, or restart NVDA, for this to take effect."
+            ).format(runtime=_speech_runtime_label(saved)),
+        )
+    else:
+        ui.message(
+            _("Google TTS For NVDA will use the {runtime}.").format(runtime=_speech_runtime_label(saved)),
+        )
+    standby.refresh_async("Speech runtime setting changed")
+    return saved
+
+
 def _configured_keep_browser_runtime_ready() -> bool:
     return browserBridge.configured_keep_browser_runtime_ready()
 
@@ -209,6 +231,9 @@ class GoogleTtsSettingsPanel(SettingsPanel):
     def makeSettings(self, settingsSizer: wx.Sizer, *args: object, **kwargs: object) -> None:
         self._settingsSizer = settingsSizer
         self._runtimeValues = list(browserBridge.BROWSER_RUNTIMES)
+        self._speechRuntimeValues = list(browserBridge.SPEECH_RUNTIMES)
+        self._savedSpeechRuntime = browserBridge.configured_speech_runtime()
+        self._speechRuntimeSnapshot = browserBridge.speech_runtime_snapshot()
         self._refresh_runtime_snapshot()
         self._savedRuntime = self._runtimeSnapshot["selectedRuntime"]
         self._savedKeepBrowserRuntimeReady = _configured_keep_browser_runtime_ready()
@@ -237,6 +262,22 @@ class GoogleTtsSettingsPanel(SettingsPanel):
         self._preferredLanguageValues = self._enabled_auto_language_candidates()
 
         helper = guiHelper.BoxSizerHelper(self, sizer=settingsSizer)
+        speechRuntimeGroup = self._add_settings_group(helper, _("Speech runtime"))
+        self.speechRuntimeChoice = speechRuntimeGroup.addLabeledControl(
+            _("&Speech runtime:"),
+            wx.Choice,
+            choices=[_speech_runtime_label(runtime) for runtime in self._speechRuntimeValues],
+        )
+        self.speechRuntimeChoice.SetSelection(self._speechRuntimeValues.index(self._savedSpeechRuntime))
+        self.speechRuntimeChoice.SetName(_("Speech runtime"))
+        self.speechRuntimeStatusText = speechRuntimeGroup.addLabeledControl(
+            _("Speech runtime status") + ":",
+            wx.TextCtrl,
+            value=self._speech_runtime_message(),
+            style=wx.TE_READONLY | wx.TE_MULTILINE | wx.TE_WORDWRAP,
+        )
+        self.speechRuntimeStatusText.SetName(_("Speech runtime status"))
+        bind_read_only_text_focus_announcement(self.speechRuntimeStatusText, minLines=2, maxLines=5)
         runtimeGroup = self._add_settings_group(helper, _("Chromium browser runtime"))
         choices = [self._format_runtime_choice(runtime) for runtime in self._runtimeValues]
         self.runtimeChoice = runtimeGroup.addLabeledControl(
@@ -412,7 +453,18 @@ class GoogleTtsSettingsPanel(SettingsPanel):
             return self._savedRuntime
         return self._runtimeValues[selection]
 
+    def _selected_speech_runtime_choice(self) -> str:
+        index = self.speechRuntimeChoice.GetSelection()
+        if index == wx.NOT_FOUND or index >= len(self._speechRuntimeValues):
+            return self._savedSpeechRuntime
+        return self._speechRuntimeValues[index]
+
     def onSave(self, *args: object, **kwargs: object) -> None:
+        selectedSpeechRuntime = self._selected_speech_runtime_choice()
+        if selectedSpeechRuntime != self._savedSpeechRuntime:
+            self._savedSpeechRuntime = _save_speech_runtime(selectedSpeechRuntime)
+            self._speechRuntimeSnapshot = browserBridge.speech_runtime_snapshot()
+            self.speechRuntimeStatusText.SetValue(self._speech_runtime_message())
         selectedRuntime = self._selected_runtime_choice()
         self._store_selected_auto_language_profile(self._selectedAutoLanguageProfileIndex)
         self._save_auto_language_settings()
@@ -550,6 +602,27 @@ class GoogleTtsSettingsPanel(SettingsPanel):
         else:
             status = _("Available") if self._availability.get(runtime, False) else _("Unavailable")
         return _("{runtime} ({status})").format(runtime=_runtime_label(runtime), status=status)
+
+    def _speech_runtime_message(self) -> str:
+        snapshot = self._speechRuntimeSnapshot
+        selected = snapshot["selectedRuntime"]
+        bunAvailable = bool(snapshot["bunAvailable"])
+        browserAvailable = bool(snapshot["browserAvailable"])
+        if selected == browserBridge.SPEECH_RUNTIME_BUN:
+            if bunAvailable:
+                return _("The bundled speech runtime is installed. No browser is required.")
+            if browserAvailable:
+                return _(
+                    "The bundled speech runtime was not found, so Google TTS For NVDA will use a Chromium browser runtime instead."
+                )
+            return _("The bundled speech runtime was not found. Reinstall Google TTS For NVDA.")
+        if browserAvailable:
+            return _("Google TTS For NVDA will use a Chromium browser runtime.")
+        if bunAvailable:
+            return _(
+                "No Chromium browser runtime was found, so Google TTS For NVDA will use the bundled speech runtime."
+            )
+        return _("Neither the bundled speech runtime nor a Chromium browser runtime was found.")
 
     def _effective_runtime_message(self) -> str:
         selectedRuntime = self._runtimeSnapshot["selectedRuntime"]

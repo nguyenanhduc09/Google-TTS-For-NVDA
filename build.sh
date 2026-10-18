@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Google TTS For NVDA - Add-on Builder (WSL/Linux)
 #
-# Linux/WSL counterpart to build.bat. Mirrors the same 7 steps and the same
-# [n/7] / [ERROR] output so the two builds can be compared line for line.
+# Linux/WSL counterpart to build.bat. Mirrors the same 8 steps and the same
+# [n/8] / [ERROR] output so the two builds can be compared line for line.
 # WSL/Linux can build, check, and package the add-on, but NVDA and the
 # Chromium browser runtime only run on Windows -- this script cannot test
 # either. Keep build.bat and build.sh in sync when the build steps change.
@@ -39,7 +39,7 @@ echo "Version: $VERSION"
 echo
 
 # --------------- Clean build artifacts ---------------
-echo "[1/7] Cleaning build artifacts..."
+echo "[1/8] Cleaning build artifacts..."
 _clean_pycache
 if [ -f "googleTtsForNvda/googleTtsForNvda.nvda-addon" ]; then
     rm -f "googleTtsForNvda/googleTtsForNvda.nvda-addon"
@@ -52,7 +52,7 @@ echo "      Done."
 echo
 
 # --------------- Merge conflict marker check ---------------
-echo "[2/7] Checking for unresolved merge conflict markers..."
+echo "[2/8] Checking for unresolved merge conflict markers..."
 mapfile -t CONFLICT_FILES < <(find googleTtsForNvda -type f \( \
     -name '*.py' -o -name '*.js' -o -name '*.html' -o -name '*.ini' -o \
     -name '*.json' -o -name '*.bat' -o -name '*.md' -o -name '*.po' -o -name '*.pot' \))
@@ -74,7 +74,7 @@ echo "      Passed."
 echo
 
 # --------------- Python syntax check ---------------
-echo "[3/7] Checking Python syntax..."
+echo "[3/8] Checking Python syntax..."
 if ! python3 -m compileall -q googleTtsForNvda; then
     echo "[ERROR] Python syntax check failed."
     EXIT_CODE=1
@@ -84,17 +84,40 @@ echo "      Passed."
 echo
 
 # --------------- JavaScript syntax check ---------------
-echo "[4/7] Checking JavaScript syntax..."
-if ! node --check googleTtsForNvda/synthDrivers/googleTtsForNvda/web/bridgeHarness.js; then
-    echo "[ERROR] JavaScript syntax check failed."
-    EXIT_CODE=1
-    exit "$EXIT_CODE"
-fi
+echo "[4/8] Checking JavaScript syntax..."
+for jsFile in \
+    googleTtsForNvda/synthDrivers/googleTtsForNvda/web/bridgeHarness.js \
+    googleTtsForNvda/synthDrivers/googleTtsForNvda/bunRuntime/shim.js \
+    googleTtsForNvda/synthDrivers/googleTtsForNvda/bunRuntime/worker.js; do
+    if ! node --check "$jsFile"; then
+        echo "[ERROR] JavaScript syntax check failed: $jsFile"
+        EXIT_CODE=1
+        exit "$EXIT_CODE"
+    fi
+done
 echo "      Passed."
 echo
 
+# --------------- Bundle the Bun speech runtime ---------------
+# The add-on runs Google's WASM TTS engine inside a bundled Bun executable rather
+# than a headless Chromium browser, so bun.exe has to ship inside the .nvda-addon.
+# fetch_bun_runtime.py is shared with build.bat and the GitHub Actions build so the
+# three cannot drift. The Windows archive is fetched regardless of host OS, since
+# NVDA only runs on Windows.
+echo "[5/8] Bundling the Bun speech runtime..."
+if [ "${SKIP_BUN_RUNTIME:-0}" = "1" ]; then
+    echo "      Skipped (SKIP_BUN_RUNTIME=1)."
+elif ! python3 fetch_bun_runtime.py ${BUN_RUNTIME_URL:+--url "$BUN_RUNTIME_URL"}; then
+    echo "[ERROR] Could not bundle the Bun speech runtime."
+    echo "        Set SKIP_BUN_RUNTIME=1 to build without it, or BUN_RUNTIME_URL to override the download."
+    EXIT_CODE=1
+    exit "$EXIT_CODE"
+fi
+echo "      Done."
+echo
+
 # --------------- Verify no .zvoice in source ---------------
-echo "[5/7] Verifying no .zvoice files in source tree..."
+echo "[6/8] Verifying no .zvoice files in source tree..."
 mapfile -t ZVOICE_FILES < <(find googleTtsForNvda -name '*.zvoice' -type f)
 if [ "${#ZVOICE_FILES[@]}" -gt 0 ]; then
     for f in "${ZVOICE_FILES[@]}"; do
@@ -108,14 +131,14 @@ echo "      Clean - no .zvoice files found."
 echo
 
 # --------------- Clean __pycache__ created by compileall ---------------
-echo "[6/7] Cleaning __pycache__ created by syntax check..."
+echo "[7/8] Cleaning __pycache__ created by syntax check..."
 _clean_pycache
 echo "      Done."
 echo
 
 # --------------- Package the add-on ---------------
 OUTPUT="dist/googleTtsForNvda-$VERSION.nvda-addon"
-echo "[7/7] Packaging add-on to $OUTPUT ..."
+echo "[8/8] Packaging add-on to $OUTPUT ..."
 
 mkdir -p dist
 

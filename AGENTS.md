@@ -15,7 +15,11 @@ Technical code map indexing the codebase architecture, modules, classes, functio
   - **synthDrivers/googleTtsForNvda/** — Synthesizer driver and runtime bridge
     - **__init__.py** — `SynthDriver` implementation, NVDA settings ring, speech loop, rate factor tables, audio cache
     - **audio_math.py** — Pure audio math, rate/pitch conversions, SeaNet rate protection, speech options builder
-    - **bridge.py** — `ChromeTtsBridge`, `BrowserProcessManager`, `CdpClient`, `CdpDispatcher`, HTTP server, browser lifecycle
+    - **bridge.py** — `ChromeTtsBridge`, `BrowserProcessManager`, `CdpClient`, `CdpDispatcher`, HTTP server, browser lifecycle, speech-runtime selection (`configured_speech_runtime()`, `effective_speech_runtime()`, `speech_runtime_snapshot()`)
+    - **bun_bridge.py** — Bundled Bun runtime: `BunProcessManager`, `BunClient`, `classify_expression()`, `find_bun()`/`bun_candidates()`. Presents the `BrowserProcessManager`/`CdpClient` duck-typed surface so `ChromeTtsBridge` and all of `WasmTtsEngineBridge` are shared with the browser path
+    - **bun_bootstrap.py** — `generate()`, `find_engine_global()`, `harness_probe_names()`: builds `engine_boot.js` + `pthread_worker.js` from the pristine engine sources into `<CONFIG>/googleTtsForNvda/runtime/bunBootstrap/`
+    - **bunRuntime/** — Bun host shims: `shim.js` (parentPort→`onmessage` bridge, `Worker` shim, in-memory `indexedDB`, relative-URL `fetch`), `worker.js` (stdin/stdout line protocol; reuses `../web/bridgeHarness.js` verbatim)
+    - **runtime/** — Build-time output only (gitignored): `bun.exe` and `bun_version.json`, placed by `fetch_bun_runtime.py`
     - **standby.py** — `_StandbyRuntimeManager`, background browser-runtime readiness and voice pre-warming manager
     - **watcher.py** — `DirectoryChangeWatcher`, kernel-blocked Win32 directory-change watcher
     - **catalog.py** — `VoiceCatalog`, `VoicePackage`, `Speaker` models, engine library integrity validation
@@ -26,7 +30,7 @@ Technical code map indexing the codebase architecture, modules, classes, functio
     - **speech_processing.py** — `TextSegmenter`, Unicode sentence boundary detection, `PcmSilenceShortener`, `PcmLeadBuffer`, grapheme/emoji cut protection
     - **unicode_data.py** — Pre-generated UCD 17.0 / CLDR 48.2 script/combining/currency/emoji ranges, units, Latin exemplars, sentence terminals, and normalization table
     - **voice_store.py** — Voice package download, copy, verify, remove, persistent verification cache
-    - **web/** — Headless Chromium bridge environment (`index.html`, `bridgeHarness.js`)
+    - **web/** — Bridge environment shared by both runtimes (`index.html` for Chromium; `bridgeHarness.js` is loaded directly by `bunRuntime/worker.js`, so all audio DSP, packet sizing and session fencing live in exactly one place)
     - **WasmTtsEngine/<ENGINE_VERSION>/** — Bundled Chromium WASM TTS engine runtime (`bindings_main.js/.wasm`, `background_compiled.js`, `offscreen.html`, `offscreen_compiled.js`, `manifest.json`, `wasm_tts_manifest_v3.json`, `voices.json`, `streaming_worklet_processor.js`, `_metadata/verified_contents.json`, licenses)
     - **websocketClientRepo/** — Vendored isolated `websocket-client` package (`websocket/`)
   - **globalPlugins/googleTtsForNvda/** — Global plugin integration and UI components
@@ -39,11 +43,13 @@ Technical code map indexing the codebase architecture, modules, classes, functio
   - **doc/** — Localized user documentation (`en/readme.html`, `<locale>/readme.html`)
   - **locale/** — Localized interface catalogs (`<locale>/LC_MESSAGES/nvda.po`, `nvda.mo`, `manifest.ini`, `languageSort.json`)
 - **.github/workflows/test.yml** — Continuous integration workflow (linting, type checking, unit tests)
+- **.github/workflows/build.yml** — Packaging workflow: bundles `bun.exe` from the official Bun release, builds the `.nvda-addon`, verifies the runtime is inside the archive, uploads the artifact, and publishes a release on version tags
 - **tests/** — Automated test suite, benchmarks, and contract checkers (see [tests/README.md](file:///c:/Users/hungv/Documents/Codex/Google-TTS-For-NVDA/tests/README.md))
 - **build.bat** / **build.sh** — Windows and POSIX build scripts (clean, lint, compile i18n/docs, package `.nvda-addon`)
 - **build_i18n.py** — Localization CLI tool (POT/PO extraction, merge, validation, Markdown/HTML doc generation)
 - **generate_voices_json.py** — Upstream voice catalog scraper and generator from ChromeOS/Google textproto
 - **generate_unicode_data.py** — UCD 17.0 and CLDR 48.2 data generator for `unicode_data.py`
+- **fetch_bun_runtime.py** — Downloads, extracts, verifies and installs the bundled Bun runtime (`bun.exe`) into the add-on payload; shared by `build.bat`, `build.sh` and `.github/workflows/build.yml`
 - **make_update_manifest.py** — Release update manifest generator creating `stable.json` for internal updater
 - **AGENTS.md**, **CONTRIBUTING.md**, **TRANSLATING.md**, **UPDATER_RELEASE_GUIDE.md**, **readme.md** — Developer, localization, release, and user documentation
 - **mypy.ini**, **ruff.toml**, **.gitattributes**, **.gitignore**, **LICENSE** — Tooling, Git, and GPL-2.0 license configuration
@@ -65,7 +71,9 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 | NVDA configuration file | `<CONFIG>/nvda.ini` | Main NVDA config storing settings under `[googleTtsForNvda]` (`bridge.py:CONFIG_SECTION`). |
 | Voice dictionaries | `<CONFIG>/speechDicts/` | Per-voice pronunciation dictionaries (`globalPlugins/__init__.py:_load_voice_dictionary_for_voice()`). |
 | Browser persistent profiles | `<PROFILES_ROOT>/persistentSession/` | Isolated persistent browser user data directories (`bridge.py:BrowserProcessManager._browser_profile_root()`). |
-| Browser temporary profiles | `<PROFILES_ROOT>/session-<pid>-<timestamp>/` | Ephemeral sessions spawned when persistent profile is locked (`bridge.py:BrowserProcessManager._start_browser_choice()`). |
+| Browser temporary profiles | `<PROFILES_ROOT>/session-<pid>-<timestamp>/` | Ephemeral sessions spawned when persistent profile is locked (`bridge.py:BrowserProcessManager._start_browser_choice()`). Chromium runtime only. |
+| Bundled Bun executable | `<ADDON>/synthDrivers/googleTtsForNvda/runtime/bun.exe` | Build-time payload placed by `fetch_bun_runtime.py`; discovered by `bun_bridge.find_bun()`, overridable with `GTTS_BUN_PATH`. |
+| Generated Bun bootstrap | `<CONFIG>/googleTtsForNvda/runtime/bunBootstrap/` | `engine_boot.js`, `pthread_worker.js`, `bootstrap_manifest.json`; regenerated only when an input hash changes (`bun_bootstrap.generate()`). |
 | Profile size tracker | `<PROFILES_ROOT>/profile_size_check.json` | 24-hour periodic profile size check tracker (`bridge.py:_persistent_profile_size_check_due()`). |
 | Updater download directory | `%TEMP%/googleTtsForNvda-updates/` | Staging folder for `stable.json` and `.nvda-addon` installers (`updater.py:_update_download_dir()`). |
 
@@ -75,9 +83,11 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 
 1. NVDA calls `SynthDriver.speak()` with a sequence of text segments, pause commands, and speech parameters.
 2. The driver segments text for low-latency streaming, applies pause shortening, builds synthesis options (voice, rate, pitch, volume), and enqueues requests to a background thread.
-3. `ChromeTtsBridge.speak()` verifies the required voice package is installed, ensures the Chromium browser runtime and CDP connection are established, then evaluates `window.googleTtsForNvdaSpeak(...)` via CDP `Runtime.evaluate`.
-4. `bridgeHarness.js` passes text to the bundled Google WASM TTS engine (`onSpeak`), intercepts synthesized `AudioWorkletNode` buffers, applies gain makeup and clipping protection, converts Float32 audio to 16-bit PCM, and transmits base64 PCM chunks back through the `googleTtsForNvdaBridge` CDP binding.
-5. Python receives `Runtime.bindingCalled` events via `CdpDispatcher`, decodes base64 PCM bytes, and feeds audio directly to `nvwave.WavePlayer` for output.
+3. `ChromeTtsBridge.speak()` verifies the required voice package is installed, ensures the speech runtime is connected, then evaluates `window.googleTtsForNvdaSpeak(...)`. With the bundled runtime, `bun_bridge.BunClient.request()` translates that expression through `classify_expression()` into a `{"op":"speak","payload":...}` line on the worker's stdin; with a Chromium runtime it goes over CDP `Runtime.evaluate` instead.
+4. `bridgeHarness.js` — shared verbatim by both runtimes — passes text to the bundled Google WASM TTS engine (`onSpeak`), intercepts synthesized `AudioWorkletNode` buffers, applies gain makeup and clipping protection, converts Float32 audio to 16-bit PCM, and emits base64 PCM chunks through the `googleTtsForNvdaBridge` binding.
+5. Python receives the events as `Runtime.bindingCalled` envelopes (`bunRuntime/worker.js` writes exactly that shape to stdout; `CdpDispatcher` delivers it for the browser path), so the single `WasmTtsEngineBridge.handle_event()` decodes base64 PCM for both and feeds audio directly to `nvwave.WavePlayer` for output.
+
+> **Bundled runtime host requirements.** Bun supplies no Web Audio, no DOM and no `indexedDB`, and — unlike Node — does not deliver `worker_threads` messages to `globalThis.onmessage`. `bunRuntime/shim.js` closes those gaps; see its header comment and `tests/test_bun_runtime.py` for the specific behaviours that are asserted.
 
 ---
 

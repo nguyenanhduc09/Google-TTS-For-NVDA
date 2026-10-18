@@ -26,7 +26,7 @@ echo Version: !VERSION!
 echo.
 
 :: --------------- Clean build artifacts ---------------
-echo [1/7] Cleaning build artifacts...
+echo [1/8] Cleaning build artifacts...
 if exist "__pycache__" (
     rmdir /s /q "__pycache__" 2>nul
     echo       Removed __pycache__
@@ -50,7 +50,7 @@ echo       Done.
 echo.
 
 :: --------------- Merge conflict marker check ---------------
-echo [2/7] Checking for unresolved merge conflict markers...
+echo [2/8] Checking for unresolved merge conflict markers...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$patterns = '*.py','*.js','*.html','*.ini','*.json','*.bat','*.md','*.po','*.pot'; $files = @(Get-ChildItem -Path 'googleTtsForNvda' -Recurse -File -Include $patterns); $files += Get-Item 'build.bat','build.sh','AGENTS.md','readme.md','TRANSLATING.md','build_i18n.py'; $matches = $files | Select-String -Pattern '^(<<<<<<<($| )|=======$|>>>>>>>($| ))'; if ($matches) { $matches | ForEach-Object { Write-Host ('      [ERROR] {0}:{1}: {2}' -f $_.Path, $_.LineNumber, $_.Line.Trim()) }; exit 1 }"
 if errorlevel 1 (
     echo [ERROR] Unresolved merge conflict markers found.
@@ -61,7 +61,7 @@ echo       Passed.
 echo.
 
 :: --------------- Python syntax check ---------------
-echo [3/7] Checking Python syntax...
+echo [3/8] Checking Python syntax...
 python -m compileall -q googleTtsForNvda
 if errorlevel 1 (
     echo [ERROR] Python syntax check failed.
@@ -72,18 +72,53 @@ echo       Passed.
 echo.
 
 :: --------------- JavaScript syntax check ---------------
-echo [4/7] Checking JavaScript syntax...
+echo [4/8] Checking JavaScript syntax...
 node --check googleTtsForNvda\synthDrivers\googleTtsForNvda\web\bridgeHarness.js
 if errorlevel 1 (
-    echo [ERROR] JavaScript syntax check failed.
+    echo [ERROR] JavaScript syntax check failed: bridgeHarness.js
+    set "EXIT_CODE=1"
+    goto cleanup_and_exit
+)
+node --check googleTtsForNvda\synthDrivers\googleTtsForNvda\bunRuntime\shim.js
+if errorlevel 1 (
+    echo [ERROR] JavaScript syntax check failed: bunRuntime\shim.js
+    set "EXIT_CODE=1"
+    goto cleanup_and_exit
+)
+node --check googleTtsForNvda\synthDrivers\googleTtsForNvda\bunRuntime\worker.js
+if errorlevel 1 (
+    echo [ERROR] JavaScript syntax check failed: bunRuntime\worker.js
     set "EXIT_CODE=1"
     goto cleanup_and_exit
 )
 echo       Passed.
 echo.
 
+:: --------------- Bundle the Bun speech runtime ---------------
+:: The add-on runs Google's WASM TTS engine inside a bundled Bun executable rather
+:: than a headless Chromium browser, so bun.exe has to ship inside the .nvda-addon.
+:: fetch_bun_runtime.py is shared with build.sh and the GitHub Actions build so the
+:: three cannot drift.
+echo [5/8] Bundling the Bun speech runtime...
+if "%SKIP_BUN_RUNTIME%"=="1" (
+    echo       Skipped due to SKIP_BUN_RUNTIME=1.
+) else (
+    if defined BUN_RUNTIME_URL (
+        python fetch_bun_runtime.py --url "%BUN_RUNTIME_URL%"
+    ) else (
+        python fetch_bun_runtime.py
+    )
+    if errorlevel 1 (
+        echo [ERROR] Could not bundle the Bun speech runtime.
+        set "EXIT_CODE=1"
+        goto cleanup_and_exit
+    )
+)
+echo       Done.
+echo.
+
 :: --------------- Verify no .zvoice in source ---------------
-echo [5/7] Verifying no .zvoice files in source tree...
+echo [6/8] Verifying no .zvoice files in source tree...
 set "FOUND_ZVOICE=0"
 for /r "googleTtsForNvda" %%F in (*.zvoice) do (
     echo       [ERROR] Found .zvoice file: %%F
@@ -98,7 +133,7 @@ echo       Clean - no .zvoice files found.
 echo.
 
 :: --------------- Clean __pycache__ created by compileall ---------------
-echo [6/7] Cleaning __pycache__ created by syntax check...
+echo [7/8] Cleaning __pycache__ created by syntax check...
 if exist "__pycache__" rmdir /s /q "__pycache__" 2>nul
 for /d /r "googleTtsForNvda" %%D in (__pycache__) do (
     if exist "%%D" rmdir /s /q "%%D" 2>nul
@@ -108,7 +143,7 @@ echo.
 
 :: --------------- Package the add-on ---------------
 set "OUTPUT=dist\googleTtsForNvda-!VERSION!.nvda-addon"
-echo [7/7] Packaging add-on to %OUTPUT% ...
+echo [8/8] Packaging add-on to %OUTPUT% ...
 
 if not exist "dist" mkdir dist
 

@@ -1,6 +1,6 @@
 # Google TTS For NVDA
 
-**Google TTS For NVDA** is an open-source NVDA screen reader synthesizer add-on that brings Google's natural, high-quality WebAssembly (WASM) Text-to-Speech voices to Windows 10 and Windows 11. By running locally in a supported background Chromium browser runtime (Google Chrome, Microsoft Edge, or Brave), it provides fully offline, low-latency, and responsive speech without requiring an active internet connection.
+**Google TTS For NVDA** is an open-source NVDA screen reader synthesizer add-on that brings Google's natural, high-quality WebAssembly (WASM) Text-to-Speech voices to Windows 10 and Windows 11. The engine runs locally inside a **bundled speech runtime**, so it provides fully offline, low-latency, and responsive speech without an active internet connection and **without requiring you to install a web browser**.
 
 For a long time, screen reader users have wished they could use familiar voices from Google's text-to-speech technology on NVDA for Windows, similar to the experience on Android screen readers. Google TTS For NVDA fulfills that wish, delivering responsive, natural speech to enhance daily accessibility. Once your desired voice packages are downloaded, the add-on operates entirely offline on your computer.
 
@@ -49,7 +49,8 @@ Version 1.0 marks a significant step in the project's maturity. With a supported
 * **Diverse languages and voices:** Provides multiple Google TTS voice packages for supported languages with high-quality natural voices.
 * **Fast response and low latency:** Uses text segmentation and audio buffering to improve NVDA responsiveness.
 * **Google TTS Voice Manager:** Browse, download, remove, and inspect voice packages from an accessible dialog.
-* **Chromium browser runtime selection:** Choose Google Chrome, Microsoft Edge, or Brave as the supported background browser runtime, with automatic candidate fallback if the selected browser is unavailable.
+* **Bundled speech runtime:** Google's WASM engine runs inside a Bun executable that ships with the add-on, so no browser installation is required.
+* **Chromium browser runtime selection:** Optionally run the engine in Google Chrome, Microsoft Edge, or Brave instead, with automatic candidate fallback if the selected browser is unavailable.
 * **Automatic language profiles:** Optionally use per-language profiles so different languages can have their own voice and speech values.
 * **Built-in add-on updates:** Check for add-on updates directly from NVDA Settings, with an optional once-per-startup automatic check.
 
@@ -58,8 +59,8 @@ Version 1.0 marks a significant step in the project's maturity. With a supported
 ## System Requirements
 
 * **NVDA:** Version 2024.1 or newer. The add-on supports NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) NVDA builds.
-* **Chromium browser:** Google Chrome, Microsoft Edge, or Brave installed on your computer. If you use Microsoft Edge as the runtime, Microsoft Edge WebView2 Runtime must also be available.
-* **Interactive Windows user session:** The add-on depends on a background Chromium browser runtime. Do not rely on it where that runtime cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.
+* **Speech runtime:** 64-bit NVDA uses the bundled runtime and needs nothing else installed. 32-bit (x86) NVDA has no bundled runtime available, so select a Chromium browser runtime (Google Chrome, Microsoft Edge, or Brave) in the add-on settings; Microsoft Edge additionally requires the Microsoft Edge WebView2 Runtime.
+* **Interactive Windows user session:** The add-on depends on a background speech runtime process. Do not rely on it where that process cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.
 
 ---
 
@@ -122,7 +123,8 @@ NVDA's Speech settings dialog (<kbd>NVDA+Ctrl+V</kbd>) provides **Pauses** for G
 
 Under **NVDA Menu -> Preferences -> Settings -> Google TTS For NVDA**, you can configure:
 
-* **Chromium browser runtime:** Choose Google Chrome, Microsoft Edge, or Brave as the background Chromium browser runtime for the add-on. The settings panel displays browser availability.
+* **Speech runtime:** Choose the **bundled runtime** (default, no browser required) or a **Chromium browser runtime**. The status line reports whether the bundled runtime was found and which runtime will actually be used.
+* **Chromium browser runtime:** When a Chromium browser runtime is selected, choose Google Chrome, Microsoft Edge, or Brave. The settings panel displays browser availability.
 * **Chromium browser runtime status:** Review the selected runtime, browser availability, and the active fallback runtime when one is used.
 * **Keep Google TTS browser runtime ready in the background:** Turn on to let Google TTS prepare the browser runtime and current voice package while another synthesizer is active, making switching back to Google TTS faster. This setting is off by default. After you turn it on and press OK or Apply, it may use more memory and keep runtime files open until you turn it off or exit NVDA.
 * **Background browser runtime status:** Review whether this setting is off, unnecessary because Google TTS is already the current synthesizer, or waiting to start after you press OK or Apply.
@@ -139,6 +141,8 @@ Under **NVDA Menu -> Preferences -> Settings -> Google TTS For NVDA**, you can c
 * **Input Gestures:** You can assign a custom shortcut to open this settings panel directly from **NVDA Menu -> Preferences -> Input Gestures** under the **Google TTS For NVDA** category.
 
 ### Custom Browser Runtime Paths
+
+The bundled speech runtime is shipped inside the add-on and normally needs no configuration. Set `GTTS_BUN_PATH` to the full path of a Bun executable if you want to use your own copy instead (for example to test a newer Bun build).
 
 Google TTS For NVDA automatically discovers Google Chrome, Microsoft Edge, or Brave from standard Windows installation locations and the registry. If you use a portable browser, a custom installation folder, or an enterprise environment where the executable resides elsewhere, set one of these environment variables to the full executable path:
 
