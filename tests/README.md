@@ -1,6 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes a standalone test suite comprising **736 unit tests** in **134 test classes** across **17 test modules**, supplemented by shared test helpers (`test_support.py`), a multilingual segmentation corpus (`segmentation_corpus.json`), static NVDA API contract verification (`check_nvda_api_contracts.py`), and an interactive manual release checklist (`NVDA_CHROMIUM_MANUAL_CHECKLIST.md`).
+Google TTS For NVDA includes a standalone test suite comprising **737 unit tests** in **134 test classes** across **17 test modules**, supplemented by shared test helpers (`test_support.py`), a multilingual segmentation corpus (`segmentation_corpus.json`), static NVDA API contract verification (`check_nvda_api_contracts.py`), and an interactive manual release checklist (`NVDA_CHROMIUM_MANUAL_CHECKLIST.md`).
 
 All unit tests run **without importing NVDA** or requiring an active NVDA installation (via `test_support.load_driver_module()`, a standalone `importlib` loader in `test_updater_security.py`, and local manager fixtures in `test_standby_concurrency.py`).
 
@@ -30,7 +30,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | :--- | :---: | :---: | :--- |
 | `test_audio_math.py` | 6 | 1 | `rate_to_chrome`, `pitch_to_chrome`, `uses_protected_engine_rate` (`PROTECTED_ENGINE_RATE`), `build_speech_options` payloads and gain makeup. |
 | `test_bridge_concurrency.py` | 17 | 5 | `_connectionLock` scope across fallbacks, engine reference capture, `_runtimeBusyLock`, cancellation, pre-audio retry vs. post-audio recycling. |
-| `test_bridge_helpers.py` | 58 | 21 | Runtime discovery & fallback order, Edge WebView2 checks, hidden process startup, priority elevation, profile-lock recovery, `_safe_join`, transient/recycle error classification, and CDP error formatting. |
+| `test_bridge_helpers.py` | 59 | 21 | Runtime discovery & fallback order, Edge WebView2 checks, hidden process startup, priority elevation, profile-lock recovery, `_safe_join`, transient/recycle error classification, and CDP error formatting. |
 | `test_build_i18n.py` | 35 | 2 | End-to-end POT extraction, PO merge, MO compilation, manifest sync, and Markdown/HTML documentation build pipelines. |
 | `test_build_i18n_helpers.py` | 210 | 25 | PO parsing/escaping, fuzzy & obsolete entry handling, format/HTML interpolation checks, PO syntax fallback, Markdown↔HTML conversion, RTL rendering, and CLI/menu options. |
 | `test_dependency_isolation.py` | 10 | 1 | `websocketClientRepo` isolation, package-relative imports, `speechModule`/`sayAllModule` guards in `globalPlugins/__init__.py`, zero-NVDA-import guard in pure modules, and asset/CLD2/WASM path anchoring. |
@@ -46,7 +46,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | `test_updater_security.py` | 77 | 15 | SHA-256 verification, HTTPS-only enforcement, path traversal & size bounds, manifest/release-notes parsing, and version/build comparison. |
 | `test_voice_package_lifecycle.py` | 24 | 7 | Voice package download guards, SHA-256 verification cache, copy/remove lifecycle, and `VoiceCatalog` validation. |
 | `test_watcher.py` | 17 | 4 | `DirectoryChangeWatcher` start/stop lifecycle, callbacks, error recovery, and live filesystem integration. |
-| **Total** | **736** | **134** | **Standalone regression test suite** |
+| **Total** | **737** | **134** | **Standalone regression test suite** |
 
 ---
 

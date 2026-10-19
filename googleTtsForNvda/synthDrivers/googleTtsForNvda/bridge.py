@@ -1074,7 +1074,6 @@ class BrowserProcessManager:
                 "--headless=new",
                 "--remote-debugging-port=0",
                 "--remote-debugging-address=127.0.0.1",
-                "--remote-allow-origins=*",
                 f"--user-data-dir={profileDir}",
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -1503,7 +1502,7 @@ class CdpClient:
     def connect(self, wsUrl: str) -> None:
         with self._lock:
             self.close()
-            self._ws = websocket.create_connection(wsUrl, timeout=15)
+            self._ws = websocket.create_connection(wsUrl, timeout=15, suppress_origin=True)
             self._ws.settimeout(0.05)
             self._dispatcher = CdpDispatcher(self._ws)
             self._dispatcher.start()

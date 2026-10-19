@@ -516,10 +516,33 @@ class BrowserProcessManagerSpawnTests(unittest.TestCase):
                 pm._start_browser_choice("chrome", "placeholder_browser.exe")
 
                 mock_popen.assert_called_once()
-                _, kwargs = mock_popen.call_args
+                pos_args, kwargs = mock_popen.call_args
+                launch_args = pos_args[0]
+                self.assertFalse(any(str(arg).startswith("--remote-allow-origins") for arg in launch_args))
                 self.assertEqual(subprocess.DEVNULL, kwargs.get("stdin"))
                 self.assertEqual(subprocess.DEVNULL, kwargs.get("stdout"))
                 self.assertEqual(subprocess.DEVNULL, kwargs.get("stderr"))
+
+    def test_cdp_client_connect_suppresses_origin_header(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        client = bridge.CdpClient()
+        mock_ws = MagicMock()
+        mock_dispatcher = MagicMock()
+        with (
+            patch.object(
+                bridge.websocket,
+                "create_connection",
+                return_value=mock_ws,
+            ) as mock_create_conn,
+            patch.object(bridge, "CdpDispatcher", return_value=mock_dispatcher),
+        ):
+            client.connect("ws://127.0.0.1:9222/devtools/page/test")
+            mock_create_conn.assert_called_once_with(
+                "ws://127.0.0.1:9222/devtools/page/test",
+                timeout=15,
+                suppress_origin=True,
+            )
 
 
 if __name__ == "__main__":
