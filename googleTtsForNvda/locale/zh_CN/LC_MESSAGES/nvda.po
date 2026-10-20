@@ -3,13 +3,13 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: NVDA 谷歌TTS插件 1.0\n"
+"Project-Id-Version: NVDA 谷歌TTS插件 1.1\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: YEAR-MO-DA HO:MI+ZONE\n"
-"PO-Revision-Date: 2026-08-13 00:00+0700\n"
+"PO-Revision-Date: 2026-10-20 12:21+0700\n"
 "Last-Translator: NVDA 谷歌TTS插件开发团队\n"
 "Language-Team: 越南 NVDA 用户组\n"
-"Language: zh-CN\n"
+"Language: zh_CN\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -22,7 +22,7 @@ msgstr "NVDA 启动时自动检查插件更新(&J)"
 
 #: globalPlugins/googleTtsForNvda/settings.py:397
 msgid "&Check for updates..."
-msgstr "检查更新(&C)……"
+msgstr "检查更新(&C)..."
 
 #: globalPlugins/googleTtsForNvda/__init__.py:309
 msgid "&Close"
@@ -208,7 +208,7 @@ msgstr "保加利亚语"
 
 #: globalPlugins/googleTtsForNvda/updateGui.py:316
 msgid "Cancelling Google TTS For NVDA update download..."
-msgstr "正在取消 NVDA 谷歌TTS插件更新下载……"
+msgstr "正在取消 NVDA 谷歌TTS插件更新下载..."
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:116
 msgid "Cantonese"
@@ -225,7 +225,7 @@ msgstr "选中所有语音包(&A)"
 
 #: globalPlugins/googleTtsForNvda/updateGui.py:370
 msgid "Checking for Google TTS For NVDA updates..."
-msgstr "正在检查 NVDA 谷歌TTS插件更新……"
+msgstr "正在检查 NVDA 谷歌TTS插件更新..."
 
 #: globalPlugins/googleTtsForNvda/settings.py:243
 msgid "Chromium browser &runtime:"
@@ -407,7 +407,7 @@ msgstr ""
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:1158
 msgid "Downloading voice packages..."
-msgstr "正在下载语音包……"
+msgstr "正在下载语音包..."
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:1083
 msgid "Downloading {current}/{total}: {package}"
@@ -650,7 +650,7 @@ msgstr "谷歌TTS管理器"
 
 #: globalPlugins/googleTtsForNvda/__init__.py:1262
 msgid "Google TTS Voice Manager..."
-msgstr "谷歌TTS管理器……"
+msgstr "谷歌TTS管理器..."
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:51
 msgid "Greek"
@@ -984,7 +984,7 @@ msgstr "首选配置文件语言"
 
 #: globalPlugins/googleTtsForNvda/updateGui.py:252
 msgid "Preparing the update download..."
-msgstr "正在准备更新下载……"
+msgstr "正在准备更新下载..."
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:304
 msgid "Progress"
@@ -1037,7 +1037,7 @@ msgstr ""
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:1274
 msgid "Removing voice packages..."
-msgstr "正在移除语音包……"
+msgstr "正在移除语音包..."
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:95
 msgid "Romanian"
@@ -1319,36 +1319,17 @@ msgstr "使用此语言配置文件"
 
 #: manifest.ini:changelog
 msgid ""
-"Version 1.0:\n"
-"- Improved reading responsiveness for medium and long text with faster "
-"starts, smoother audio buffering, and reuse of completed audio held "
-"temporarily in RAM.\n"
-"- Improved multilingual sentence and phrase breaks and the Use automatic "
-"language profiles feature using official Unicode 17.0 and CLDR 48.2 data.\n"
-"- Increased default speech loudness and kept volume steadier without "
-"abnormal rises and falls. The Volume setting remains proportional. "
-"Distortion in some male voices comes from the original WASM TTS engine and "
-"is not addressed by this change.\n"
-"- Improved recovery from failures in the Chromium browser runtime, WASM TTS "
-"engine, and NVDA audio output; prevented Keep Google TTS browser runtime "
-"ready in the background from retaining unhealthy runtimes; and reduced "
-"conflicts with other add-ons.\n"
-"- Updated the bundled WASM TTS engine to version 20260917.1.\n"
-"- Added Spanish and Brazilian Portuguese translations, and rewrote the "
-"Simplified Chinese translation using official NVDA terminology."
+"Version 1.1:\n"
+"- Security update: Protected internal communication with the Chromium "
+"browser runtime by rejecting connections from external web origins.\n"
+"- Compatibility with NVDA 2027.1.\n"
+"- Updated the bundled WASM TTS engine to version 2027xxxx.1."
 msgstr ""
-"版本 1.0：\n"
-"- 提升中长文本的朗读响应速度：更快开始朗读、更顺畅地缓冲音频，并可复用暂存在 "
-"RAM 中的已生成音频。\n"
-"- 使用 Unicode 17.0 和 CLDR 48.2 官方数据改进多语言句子和短语分段，以及“使用"
-"自动语言配置文件”功能。\n"
-"- 提高默认语音音量并保持音量稳定，避免异常的忽高忽低。“音量”设置仍按比例调"
-"节。部分男声的失真来自原始 WASM TTS 引擎，本次更改不处理此问题。\n"
-"- 改进 Chromium 浏览器运行时、WASM TTS 引擎和 NVDA 音频输出发生故障后的恢复能"
-"力；避免“让 谷歌TTS的浏览器运行时在后台保持就绪”继续保留异常的运行时；并减少"
-"与其他插件的冲突。\n"
-"- 将随附的 WASM TTS 引擎更新至 20260917.1 版。\n"
-"- 新增西班牙语和巴西葡萄牙语翻译，并使用 NVDA 官方术语重新翻译简体中文版本。"
+"版本 1.1：\n"
+"- 安全更新：增强与 Chromium 浏览器运行时内部通信的保护，拒绝来自外部网页源的"
+"连接。\n"
+"- 兼容 NVDA 2027.1。\n"
+"- 将随附的 WASM TTS 引擎更新至 2027xxxx.1 版。"
 
 #: globalPlugins/googleTtsForNvda/voiceManager.py:115
 msgid "Vietnamese"

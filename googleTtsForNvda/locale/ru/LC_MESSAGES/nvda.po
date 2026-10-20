@@ -3,7 +3,7 @@
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: GoogleTTSForNVDA\n"
+"Project-Id-Version: Google TTS Для NVDA 1.1\n"
 "Report-Msgid-Bugs-To: \n"
 "POT-Creation-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "PO-Revision-Date: 2026-08-15 14:48+0300\n"

@@ -34,12 +34,10 @@ For a long time, screen reader users have wished they could use familiar voices 
 
 ## Current Status
 
-Latest stable release: **Google TTS For NVDA 1.0**, last updated on **October 12, 2026**.
+Latest beta release: **Google TTS For NVDA 1.1**, last updated on **Mm dd, 2027**.
 
-Version 1.0 marks a significant step in the project's maturity. With a supported Chromium browser runtime available, Google TTS For NVDA is now a dependable choice for everyday NVDA use, offering faster long-text reading, broader multilingual text handling, steady speech output, and resilient runtime recovery.
-
-* Full change log for version 1.0: [Google TTS For NVDA 1.0 release notes](https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/tag/v1.0).
-* Download the latest stable package: [googleTtsForNvda-1.0.nvda-addon](https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/download/v1.0/googleTtsForNvda-1.0.nvda-addon).
+* Full change log for version 1.1: [Google TTS For NVDA 1.1 release notes](https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/tag/v1.1).
+* Download the latest stable package: [googleTtsForNvda-1.1.nvda-addon](https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases/download/v1.1/googleTtsForNvda-1.1.nvda-addon).
 
 ---
 
@@ -57,7 +55,7 @@ Version 1.0 marks a significant step in the project's maturity. With a supported
 
 ## System Requirements
 
-* **NVDA:** Version 2024.1 or newer. The add-on supports NVDA 2024 through 2026 on both 32-bit (x86) and 64-bit (x64) NVDA builds.
+* **NVDA:** Version 2024.1 or newer. The add-on supports NVDA 2024 through 2027 on both 32-bit (x86) and 64-bit (x64) NVDA builds.
 * **Chromium browser:** Google Chrome, Microsoft Edge, or Brave installed on your computer. If you use Microsoft Edge as the runtime, Microsoft Edge WebView2 Runtime must also be available.
 * **Interactive Windows user session:** The add-on depends on a background Chromium browser runtime. Do not rely on it where that runtime cannot start, such as the Windows sign-in screen, secure desktop contexts, Windows PE, recovery environments, or other minimal Windows sessions.
 

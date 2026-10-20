@@ -25,7 +25,7 @@
 
 	<h2>系统要求</h2>
 	<ul>
-		<li><strong>NVDA：</strong>2024.1 或更高版本。本插件支持 NVDA 2024 至 2026，包括 32 位（x86）和 64 位（x64）版本。</li>
+		<li><strong>NVDA：</strong>2024.1 或更高版本。本插件支持 NVDA 2024 至 2027，包括 32 位（x86）和 64 位（x64）版本。</li>
 		<li><strong>Chromium 浏览器：</strong>电脑上需安装 Google Chrome、Microsoft Edge 或 Brave。如果使用 Microsoft Edge 作为浏览器运行时，还必须安装 Microsoft Edge WebView2 运行时。</li>
 		<li><strong>交互式 Windows 用户会话：</strong>请勿在 Chromium 浏览器运行时无法启动的环境中依赖本插件，例如 Windows 登录界面、安全桌面、Windows PE、恢复环境或其他精简 Windows 会话。</li>
 	</ul>
@@ -42,7 +42,7 @@
 	<p>您可以随时打开 谷歌TTS管理器来添加或移除语音包：</p>
 	<ul>
 		<li>按快捷键 <kbd>NVDA+Ctrl+Shift+G</kbd>；或</li>
-		<li>依次打开 <strong>NVDA 菜单 &rarr; 工具 &rarr; 谷歌TTS管理器……</strong></li>
+		<li>依次打开 <strong>NVDA 菜单 &rarr; 工具 &rarr; 谷歌TTS管理器...</strong></li>
 	</ul>
 	<p>谷歌TTS管理器包含两个选项卡：</p>
 	<ul>
@@ -89,14 +89,14 @@
 			<ul>
 				<li><strong>NVDA 启动时自动检查插件更新：</strong>让 NVDA 谷歌TTS插件在下次启动 NVDA 时检查一次更新。此选项默认关闭。</li>
 				<li><strong>插件更新状态：</strong>查看已安装的插件版本、启动时自动检查是开启还是关闭，以及当前是否正在检查。</li>
-				<li><strong>检查更新……：</strong>手动检查最新的稳定版插件。</li>
+				<li><strong>检查更新...：</strong>手动检查最新的稳定版插件。</li>
 			</ul>
 		</li>
 	</ul>
 	<p>也可以通过自定义按键或手势打开 NVDA 谷歌TTS插件设置类别。此命令默认没有分配快捷键；请依次打开 <strong>NVDA 菜单 &rarr; 选项 &rarr; 按键与手势</strong>，在 <strong>NVDA 谷歌TTS插件</strong> 类别中进行分配。</p>
 
 	<h3>插件更新</h3>
-	<p>依次打开 <strong>NVDA 菜单 &rarr; 选项 &rarr; 设置 &rarr; NVDA 谷歌TTS插件</strong>，然后按<strong>检查更新……</strong>以检查最新稳定版。如果插件已是最新版本、无法连接互联网或无法识别服务器返回的更新信息，手动检查都会显示一个带“确定”按钮的对话框。</p>
+	<p>依次打开 <strong>NVDA 菜单 &rarr; 选项 &rarr; 设置 &rarr; NVDA 谷歌TTS插件</strong>，然后按<strong>检查更新...</strong>以检查最新稳定版。如果插件已是最新版本、无法连接互联网或无法识别服务器返回的更新信息，手动检查都会显示一个带“确定”按钮的对话框。</p>
 	<p>有新版本时，NVDA 谷歌TTS插件会显示<strong>更新信息</strong>对话框，其中包含下载大小、最低 NVDA 版本、最近测试的 NVDA 版本和更新日志。选择<strong>是</strong>可在 NVDA 中下载 <code>.nvda-addon</code> 安装包。下载期间，<strong>正在下载 NVDA 谷歌TTS插件更新</strong>对话框会显示<strong>下载状态</strong>、可在大小已知时显示的进度条，以及<strong>取消</strong>按钮。本插件会根据更新清单中的文件大小和 SHA256 校验值验证下载的文件，然后打开 NVDA 的标准插件安装程序。</p>
 	<p>启动时自动检查更新默认关闭。启用后，NVDA 谷歌TTS插件会在下次启动 NVDA 时检查一次，除非发现新版本，否则不会发出提示。无论自动检查是否开启，您都可以手动检查。如果打开设置类别时后台启动检查仍在进行，手动检查按钮将暂时禁用，直到检查完成。更改<strong>NVDA 启动时自动检查插件更新</strong>复选框只会影响以后启动 NVDA 时的行为，不会中断已经开始的检查。</p>
 	<p>更新程序还可以识别同一公开版本号下的小型修补版本。这样，维护者无需更改显示的版本号即可发布兼容性或可靠性修复；如果发布元数据表明已有较新的内部版本，NVDA 仍可提供该更新。</p>
@@ -146,6 +146,13 @@
 	</ul>
 
 	<h2>更新日志</h2>
+	<h3>1.1 版（2026-10-20）</h3>
+	<ul>
+		<li><strong>安全更新：</strong>增强与 Chromium 浏览器运行时内部通信的保护，拒绝来自外部网页源的连接。</li>
+		<li><strong>NVDA 兼容性：</strong>更新对 NVDA 2027.1 的兼容支持。</li>
+		<li><strong>更新引擎：</strong>将随附的 WASM TTS 引擎更新至 2027xxxx.1 版。</li>
+	</ul>
+
 	<h3>1.0 版（2026-10-12）</h3>
 	<ul>
 		<li><strong>朗读启动更快、过程更顺畅：</strong>
@@ -239,6 +246,6 @@
 	<ul>
 		<li>首次发布。</li>
 	</ul>
-	<p>最后编辑日期：2026-10-12</p>
+	<p>最后编辑日期：2026-10-20</p>
 </body>
 </html>
