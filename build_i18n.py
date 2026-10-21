@@ -110,15 +110,15 @@ DANGEROUS_HTML_TAGS = frozenset(
         "source",
     }
 )
-OPEN_HTML_TAG_RE = re.compile(r"<([a-zA-Z0-9]+)(?:[\s/][^>]*)?>")
-CLOSE_HTML_TAG_RE = re.compile(r"</([a-zA-Z0-9]+)\s*>")
-HTML_TAG_TOKEN_RE = re.compile(r"<(/?)([a-zA-Z0-9]+)(?:[\s/][^>]*)?>")
+OPEN_HTML_TAG_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9]*)(?:[\s/][^>]*)?>")
+CLOSE_HTML_TAG_RE = re.compile(r"</([a-zA-Z][a-zA-Z0-9]*)\s*>")
+HTML_TAG_TOKEN_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)(?:[\s/][^>]*)?>")
 HREF_ATTR_RE = re.compile(
     r"""<a[\s/][^>]*?(?<![\w-])href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
     re.IGNORECASE,
 )
-EVENT_HANDLER_ATTR_RE = re.compile(r"""<[a-zA-Z0-9]+[\s/][^>]*?(?<![\w-])on[a-zA-Z]+\s*=""", re.IGNORECASE)
-STYLE_ATTR_RE = re.compile(r"""<[a-zA-Z0-9]+[\s/][^>]*?(?<![\w-])style\s*=""", re.IGNORECASE)
+EVENT_HANDLER_ATTR_RE = re.compile(r"""<[a-zA-Z][a-zA-Z0-9]*[\s/][^>]*?(?<![\w-])on[a-zA-Z]+\s*=""", re.IGNORECASE)
+STYLE_ATTR_RE = re.compile(r"""<[a-zA-Z][a-zA-Z0-9]*[\s/][^>]*?(?<![\w-])style\s*=""", re.IGNORECASE)
 
 
 def _extract_hrefs(text: str) -> list[str]:
@@ -1744,15 +1744,10 @@ def _update_doc_po_from_template(
 # ---------------------------------------------------------------------------
 
 _DOC_MARKDOWN_EXTENSIONS: tuple[str, ...] = (
-    # Supports tables, HTML mixed with markdown, code blocks, custom attributes and more
     "markdown.extensions.extra",
-    # Used to preserve tabs in code blocks
     "pymdownx.superfences",
-    # Allows TOC with [TOC]
     "markdown.extensions.toc",
-    # Makes list behaviour better, including 2 space indents by default
     "mdx_truly_sane_lists",
-    # Adds links to GitHub authors, issues and PRs
     "mdx_gh_links",
 )
 
@@ -1841,7 +1836,7 @@ RE_INLINE_MARKDOWNLINT_COMMENT = re.compile(r"^(.*?)(?:\s*<!--\s*markdownlint.*-
 
 
 def _preprocess_markdown_text(md_text: str) -> str:
-    """Preprocess markdown lines such as removing inline markdownlint comments."""
+    """Preprocess markdown lines such as removing inline linter comments."""
     cleaned_lines = []
     for line in md_text.splitlines():
         cleaned_lines.append(RE_INLINE_MARKDOWNLINT_COMMENT.sub(r"\1\2", line))
@@ -1849,7 +1844,7 @@ def _preprocess_markdown_text(md_text: str) -> str:
 
 
 def _get_title_from_markdown(md_text: str) -> str:
-    """Extract document title from markdown heading or KC:title comment."""
+    """Extract document title from markdown heading or title comment."""
     kc_re = re.compile(r"^<!--\s*(?:KC:)?title:\s*(.+?)\s*-->$", re.IGNORECASE)
     for line in md_text.splitlines():
         stripped = line.strip()
@@ -3031,6 +3026,13 @@ def _parse_checks(
     return checks
 
 
+class _MenuBack:
+    pass
+
+
+_MENU_BACK = _MenuBack()
+
+
 def _prompt_number(prompt: str, minimum: int, maximum: int) -> int:
     while True:
         raw_value = input(prompt).strip()
@@ -3044,15 +3046,19 @@ def _prompt_number(prompt: str, minimum: int, maximum: int) -> int:
         print(f"Enter a number from {minimum} to {maximum}.")
 
 
-def _prompt_language_code() -> str:
+def _prompt_language_code(allow_back: bool = False) -> str | None:
+    prompt = "Language code (0 to go back): " if allow_back else "Language code: "
     while True:
-        language = _normalize_language_code(input("Language code: ").strip())
+        raw = input(prompt).strip()
+        if allow_back and raw == "0":
+            return None
+        language = _normalize_language_code(raw)
         if language:
             return language
         print("Enter a language code.")
 
 
-def _prompt_languages(languages: list[str]) -> list[str] | None:
+def _prompt_languages(languages: list[str], allow_back: bool = True) -> list[str] | None | _MenuBack:
     print("")
     print("Locales:")
     print("  1. All addon locales")
@@ -3060,11 +3066,21 @@ def _prompt_languages(languages: list[str]) -> list[str] | None:
         print(f"  {index}. {language}")
     manual_choice = len(languages) + 2
     print(f"  {manual_choice}. Enter language code manually")
-    choice = _prompt_number(f"Choose 1-{manual_choice}: ", 1, manual_choice)
+    if allow_back:
+        print("  0. Go back")
+        min_choice = 0
+    else:
+        min_choice = 1
+    choice = _prompt_number(f"Choose {min_choice}-{manual_choice}: ", min_choice, manual_choice)
+    if choice == 0:
+        return _MENU_BACK
     if choice == 1:
         return None
     if choice == manual_choice:
-        return [_prompt_language_code()]
+        code = _prompt_language_code(allow_back=allow_back)
+        if code is None:
+            return _MENU_BACK
+        return [code]
     return [languages[choice - 2]]
 
 
@@ -3073,7 +3089,8 @@ def _prompt_checks_generic(
     default_label: str,
     numbered_checks: list[tuple[str, str]],
     available_checks_str: str,
-) -> set[str]:
+    allow_back: bool = True,
+) -> set[str] | _MenuBack:
     print("")
     print("Check mode:")
     print(f"  1. {default_label}")
@@ -3081,17 +3098,33 @@ def _prompt_checks_generic(
         print(f"  {index}. {label}")
     custom_choice = len(numbered_checks) + 2
     print(f"  {custom_choice}. Custom checks")
-    mode = _prompt_number(f"Choose 1-{custom_choice}: ", 1, custom_choice)
+    if allow_back:
+        print("  0. Go back")
+        min_choice = 0
+    else:
+        min_choice = 1
+    mode = _prompt_number(f"Choose {min_choice}-{custom_choice}: ", min_choice, custom_choice)
+    if mode == 0:
+        return _MENU_BACK
     if mode == 1:
         return set(default_checks)
     if mode == custom_choice:
         print(f"Available checks: {available_checks_str}")
-        raw_checks = input("Checks, separated by commas: ")
-        return _parse_checks([raw_checks], strict=False, default_checks=default_checks)
+        if allow_back:
+            print("Enter 0 to go back.")
+        while True:
+            raw_checks = input("Checks, separated by commas: ").strip()
+            if allow_back and raw_checks == "0":
+                return _MENU_BACK
+            try:
+                return _parse_checks([raw_checks], strict=False, default_checks=default_checks)
+            except ValueError as exc:
+                print(f"Error: {exc}")
+                print(f"Enter valid checks ({available_checks_str}) or 0 to go back.")
     return {numbered_checks[mode - 2][0]}
 
 
-def _prompt_checks(default_checks: set[str]) -> set[str]:
+def _prompt_checks(default_checks: set[str], allow_back: bool = True) -> set[str] | _MenuBack:
     return _prompt_checks_generic(
         default_checks=default_checks,
         default_label="Default checks (all categories)",
@@ -3106,10 +3139,11 @@ def _prompt_checks(default_checks: set[str]) -> set[str]:
             (CHECK_FUZZY, "Fuzzy translations only"),
         ],
         available_checks_str="language, manifest, docs, ui, placeholders, sort, obsolete, fuzzy, all",
+        allow_back=allow_back,
     )
 
 
-def _prompt_doc_checks(default_checks: set[str] | None = None) -> set[str]:
+def _prompt_doc_checks(default_checks: set[str] | None = None, allow_back: bool = True) -> set[str] | _MenuBack:
     base_checks = set(default_checks) if default_checks is not None else set(DEFAULT_DOC_CHECKS)
     return _prompt_checks_generic(
         default_checks=base_checks,
@@ -3122,69 +3156,117 @@ def _prompt_doc_checks(default_checks: set[str] | None = None) -> set[str]:
             (CHECK_FUZZY, "Fuzzy translations only"),
         ],
         available_checks_str="language, docs, placeholders, obsolete, fuzzy, all",
+        allow_back=allow_back,
     )
 
 
 def _interactive_options(
     default_checks: set[str],
-) -> tuple[list[str] | None, set[str], bool, bool, bool, bool, bool, bool, bool, bool, bool]:
-    languages = _addon_languages()
-    doc_languages = _addon_doc_languages()
-    print("Google TTS For NVDA translation tools")
-    print("")
-    print("Task:")
-    print("  1. Check or build UI translations (nvda.mo, manifest.ini)")
-    print("  2. Generate UI string template (locale\\nvda.pot)")
-    print("  3. Update UI PO files from the template (locale\\<lang>\\LC_MESSAGES\\nvda.po)")
-    print("  4. Check or build documentation translations (doc\\<lang>\\readme.html)")
-    print("  5. Generate documentation string template (doc\\readme.pot)")
-    print("  6. Update documentation PO files from the template (doc\\<lang>\\readme.po)")
-    print("  7. Convert documentation HTML to Markdown (doc\\<lang>\\readme.html -> readme.md)")
-    print("  8. Convert documentation Markdown to HTML (doc\\<lang>\\readme.md -> readme.html)")
-    task = _prompt_number("Choose 1-8: ", 1, 8)
-    if task == 2:
-        return None, set(default_checks), False, True, False, False, False, False, False, False, False
-    if task == 3:
-        selected_languages = _prompt_languages(languages) if languages else [_prompt_language_code()]
-        return selected_languages, set(default_checks), False, False, True, False, False, False, False, False, False
-    if task == 4:
-        selected_languages = _prompt_languages(doc_languages) if doc_languages else [_prompt_language_code()]
-        checks = _prompt_doc_checks(DEFAULT_DOC_CHECKS)
+) -> tuple[list[str] | None, set[str], bool, bool, bool, bool, bool, bool, bool, bool, bool] | None:
+    while True:
+        languages = _addon_languages()
+        doc_languages = _addon_doc_languages()
+
+        print("Google TTS For NVDA translation tools")
+        print("")
+        print("Task:")
+        print("  1. Check or build UI translations (nvda.mo, manifest.ini)")
+        print("  2. Generate UI string template (locale\\nvda.pot)")
+        print("  3. Update UI PO files from the template (locale\\<lang>\\LC_MESSAGES\\nvda.po)")
+        print("  4. Check or build documentation translations (doc\\<lang>\\readme.html)")
+        print("  5. Generate documentation string template (doc\\readme.pot)")
+        print("  6. Update documentation PO files from the template (doc\\<lang>\\readme.po)")
+        print("  7. Convert documentation HTML to Markdown (doc\\<lang>\\readme.html -> readme.md)")
+        print("  8. Convert documentation Markdown to HTML (doc\\<lang>\\readme.md -> readme.html)")
+        print("  0. Exit")
+        task = _prompt_number("Choose 0-8: ", 0, 8)
+        if task == 0:
+            return None
+        if task == 2:
+            return None, set(default_checks), False, True, False, False, False, False, False, False, False
+        if task == 3:
+            selected_languages = (
+                _prompt_languages(languages, allow_back=True)
+                if languages
+                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
+            )
+            if isinstance(selected_languages, _MenuBack):
+                continue
+            return selected_languages, set(default_checks), False, False, True, False, False, False, False, False, False
+        if task == 4:
+            selected_languages = (
+                _prompt_languages(doc_languages, allow_back=True)
+                if doc_languages
+                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
+            )
+            if isinstance(selected_languages, _MenuBack):
+                continue
+            checks = _prompt_doc_checks(DEFAULT_DOC_CHECKS, allow_back=True)
+            if isinstance(checks, _MenuBack):
+                continue
+            print("")
+            print("Action:")
+            print("  1. Check only")
+            print("  2. Build generated files")
+            print("  0. Go back")
+            action = _prompt_number("Choose 0-2: ", 0, 2)
+            if action == 0:
+                continue
+            if action == 1:
+                return selected_languages, checks, False, False, False, False, False, False, True, False, False
+            return selected_languages, checks, False, False, False, True, False, False, False, False, False
+        if task == 5:
+            return None, set(default_checks), False, False, False, False, True, False, False, False, False
+        if task == 6:
+            selected_languages = (
+                _prompt_languages(doc_languages, allow_back=True)
+                if doc_languages
+                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
+            )
+            if isinstance(selected_languages, _MenuBack):
+                continue
+            return selected_languages, set(default_checks), False, False, False, False, False, True, False, False, False
+        if task == 7:
+            conv_languages = (["en"] if (DOC_DIR / "en").is_dir() else []) + doc_languages
+            selected_languages = (
+                _prompt_languages(conv_languages, allow_back=True)
+                if conv_languages
+                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
+            )
+            if isinstance(selected_languages, _MenuBack):
+                continue
+            return selected_languages, set(default_checks), False, False, False, False, False, False, False, True, False
+        if task == 8:
+            conv_languages = (["en"] if (DOC_DIR / "en").is_dir() else []) + doc_languages
+            selected_languages = (
+                _prompt_languages(conv_languages, allow_back=True)
+                if conv_languages
+                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
+            )
+            if isinstance(selected_languages, _MenuBack):
+                continue
+            return selected_languages, set(default_checks), False, False, False, False, False, False, False, False, True
+
+        selected_languages = (
+            _prompt_languages(languages, allow_back=True)
+            if languages
+            else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
+        )
+        if isinstance(selected_languages, _MenuBack):
+            continue
+        checks = _prompt_checks(default_checks, allow_back=True)
+        if isinstance(checks, _MenuBack):
+            continue
+
         print("")
         print("Action:")
         print("  1. Check only")
         print("  2. Build generated files")
-        action = _prompt_number("Choose 1 or 2: ", 1, 2)
-        if action == 1:
-            return selected_languages, checks, False, False, False, False, False, False, True, False, False
-        return selected_languages, checks, False, False, False, True, False, False, False, False, False
-    if task == 5:
-        return None, set(default_checks), False, False, False, False, True, False, False, False, False
-    if task == 6:
-        selected_languages = _prompt_languages(doc_languages) if doc_languages else [_prompt_language_code()]
-        return selected_languages, set(default_checks), False, False, False, False, False, True, False, False, False
-    if task == 7:
-        conv_languages = (["en"] if (DOC_DIR / "en").is_dir() else []) + [
-            lang for lang in doc_languages if lang != "en"
-        ]
-        selected_languages = _prompt_languages(conv_languages) if conv_languages else [_prompt_language_code()]
-        return selected_languages, set(default_checks), False, False, False, False, False, False, False, True, False
-    if task == 8:
-        conv_languages = (["en"] if (DOC_DIR / "en").is_dir() else []) + [
-            lang for lang in doc_languages if lang != "en"
-        ]
-        selected_languages = _prompt_languages(conv_languages) if conv_languages else [_prompt_language_code()]
-        return selected_languages, set(default_checks), False, False, False, False, False, False, False, False, True
-
-    selected_languages = _prompt_languages(languages) if languages else [_prompt_language_code()]
-    checks = _prompt_checks(default_checks)
-
-    print("")
-    print("Action:")
-    print("  1. Check only")
-    print("  2. Build generated files")
-    action = _prompt_number("Choose 1 or 2: ", 1, 2)
-    return selected_languages, checks, action == 1, False, False, False, False, False, False, False, False
+        print("  0. Go back")
+        action = _prompt_number("Choose 0-2: ", 0, 2)
+        if action == 0:
+            continue
+        return selected_languages, checks, action == 1, False, False, False, False, False, False, False, False
 
 
 def _print_errors(errors: list[str]) -> int:
@@ -3331,6 +3413,9 @@ def main() -> int:
     md_to_html = args.md_to_html
     using_menu = args.menu or len(sys.argv) == 1
     if using_menu:
+        menu_options = _interactive_options(checks)
+        if menu_options is None:
+            return 0
         (
             selected_languages,
             checks,
@@ -3343,7 +3428,7 @@ def main() -> int:
             check_docs,
             html_to_md,
             md_to_html,
-        ) = _interactive_options(checks)
+        ) = menu_options
         if not check_only and not any(
             (
                 extract_template,

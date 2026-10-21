@@ -2634,6 +2634,28 @@ class DocListAndCheckImprovementsTests(unittest.TestCase):
                 self.assertEqual(captured_kwargs.get("errors"), "replace")
                 self.assertTrue(captured_kwargs.get("text"))
 
+    def test_check_html_tag_interpolations_ignores_numbers_and_math_comparisons(self) -> None:
+        msgid = "Latency <100ms or score <50% required"
+        msgstr = "Độ trễ <100ms hoặc điểm <50% là bắt buộc"
+        alerts = build_i18n._check_html_tag_interpolations(msgid, msgstr)
+        self.assertEqual([], alerts)
+
+    def test_prompt_checks_generic_recovers_from_invalid_input(self) -> None:
+        # User enters '3' for Custom checks, then invalid checks 'invalid_check', gets error message, then enters 'fuzzy'
+        with (
+            mock.patch("builtins.input", side_effect=["3", "invalid_check", "fuzzy"]),
+            mock.patch("builtins.print") as print_mock,
+        ):
+            checks = build_i18n._prompt_checks_generic(
+                default_checks={"ui"},
+                default_label="Default checks",
+                numbered_checks=[(build_i18n.CHECK_FUZZY, "Fuzzy only")],
+                available_checks_str="fuzzy, ui",
+                allow_back=True,
+            )
+        self.assertEqual({build_i18n.CHECK_FUZZY}, checks)
+        self.assertTrue(any("Error: unknown check 'invalid_check'" in str(c) for c in print_mock.call_args_list))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -344,6 +344,63 @@ class I18nBuildAndCheckTests(unittest.TestCase):
         self.assertEqual(0, result)
         write_mock.assert_called_once()
 
+    def test_interactive_menu_exit_with_zero(self) -> None:
+        with (
+            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--menu"]),
+            mock.patch("builtins.input", side_effect=["0"]),
+            mock.patch("builtins.print"),
+        ):
+            result = build_i18n.main()
+        self.assertEqual(0, result)
+
+    def test_interactive_menu_sub_menus_go_back_with_zero(self) -> None:
+        inputs = [
+            "1",
+            "0",  # Task 1 -> Lang '0' (Go back) -> back to main menu
+            "1",
+            "1",
+            "0",  # Task 1 -> Lang '1' -> Checks '0' (Go back) -> back to main menu
+            "1",
+            "1",
+            "1",
+            "0",  # Task 1 -> Lang '1' -> Checks '1' -> Action '0' (Go back) -> back to main menu
+            "4",
+            "0",  # Task 4 -> Lang '0' (Go back) -> back to main menu
+            "4",
+            "1",
+            "0",  # Task 4 -> Lang '1' -> Checks '0' (Go back) -> back to main menu
+            "4",
+            "1",
+            "1",
+            "0",  # Task 4 -> Lang '1' -> Checks '1' -> Action '0' (Go back) -> back to main menu
+            "3",
+            "0",  # Task 3 -> Lang '0' (Go back) -> back to main menu
+            "6",
+            "0",  # Task 6 -> Lang '0' (Go back) -> back to main menu
+            "7",
+            "0",  # Task 7 -> Lang '0' (Go back) -> back to main menu
+            "8",
+            "0",  # Task 8 -> Lang '0' (Go back) -> back to main menu
+            "0",  # Main menu -> '0' (Exit)
+        ]
+        with (
+            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--menu"]),
+            mock.patch.object(build_i18n, "_addon_languages", return_value=["vi", "ru"]),
+            mock.patch.object(build_i18n, "_addon_doc_languages", return_value=["vi", "ru"]),
+            mock.patch("builtins.input", side_effect=inputs),
+            mock.patch("builtins.print"),
+        ):
+            result = build_i18n.main()
+        self.assertEqual(0, result)
+
+    def test_prompt_language_code_allows_back_with_zero(self) -> None:
+        with (
+            mock.patch("builtins.input", side_effect=["0"]),
+            mock.patch("builtins.print"),
+        ):
+            res = build_i18n._prompt_language_code(allow_back=True)
+        self.assertIsNone(res)
+
     def test_main_build_docs_succeeds_on_existing_html_without_po(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

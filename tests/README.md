@@ -1,6 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes a standalone test suite comprising **737 unit tests** in **134 test classes** across **17 test modules**, supplemented by shared test helpers (`test_support.py`), a multilingual segmentation corpus (`segmentation_corpus.json`), static NVDA API contract verification (`check_nvda_api_contracts.py`), and an interactive manual release checklist (`NVDA_CHROMIUM_MANUAL_CHECKLIST.md`).
+Google TTS For NVDA includes a standalone test suite comprising **742 unit tests** in **134 test classes** across **17 test modules**, supplemented by shared test helpers (`test_support.py`), a multilingual segmentation corpus (`segmentation_corpus.json`), static NVDA API contract verification (`check_nvda_api_contracts.py`), and an interactive manual release checklist (`NVDA_CHROMIUM_MANUAL_CHECKLIST.md`).
 
 All unit tests run **without importing NVDA** or requiring an active NVDA installation (via `test_support.load_driver_module()`, a standalone `importlib` loader in `test_updater_security.py`, and local manager fixtures in `test_standby_concurrency.py`).
 
@@ -31,8 +31,8 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | `test_audio_math.py` | 6 | 1 | `rate_to_chrome`, `pitch_to_chrome`, `uses_protected_engine_rate` (`PROTECTED_ENGINE_RATE`), `build_speech_options` payloads and gain makeup. |
 | `test_bridge_concurrency.py` | 17 | 5 | `_connectionLock` scope across fallbacks, engine reference capture, `_runtimeBusyLock`, cancellation, pre-audio retry vs. post-audio recycling. |
 | `test_bridge_helpers.py` | 59 | 21 | Runtime discovery & fallback order, Edge WebView2 checks, hidden process startup, priority elevation, profile-lock recovery, `_safe_join`, transient/recycle error classification, and CDP error formatting. |
-| `test_build_i18n.py` | 35 | 2 | End-to-end POT extraction, PO merge, MO compilation, manifest sync, and Markdown/HTML documentation build pipelines. |
-| `test_build_i18n_helpers.py` | 210 | 25 | PO parsing/escaping, fuzzy & obsolete entry handling, format/HTML interpolation checks, PO syntax fallback, Markdown↔HTML conversion, RTL rendering, and CLI/menu options. |
+| `test_build_i18n.py` | 38 | 2 | End-to-end POT extraction, PO merge, MO compilation, manifest sync, interactive menu zero navigation/exit, and Markdown/HTML documentation build pipelines. |
+| `test_build_i18n_helpers.py` | 212 | 25 | PO parsing/escaping, fuzzy & obsolete entry handling, format/HTML tag & math comparison checks, PO syntax fallback, Markdown↔HTML conversion, RTL rendering, and CLI/interactive check recovery. |
 | `test_dependency_isolation.py` | 10 | 1 | `websocketClientRepo` isolation, package-relative imports, `speechModule`/`sayAllModule` guards in `globalPlugins/__init__.py`, zero-NVDA-import guard in pure modules, and asset/CLD2/WASM path anchoring. |
 | `test_generate_voices_json_helpers.py` | 27 | 7 | Version sorting, bundled engine discovery, `voices.json` selection, catalog/engine version alignment, and CLI argument parsing. |
 | `test_language_profiles.py` | 62 | 4 | BCP 47 & NVDA locale mapping, `redirect_language`, catalog aliases, `NORMALIZATION_TABLE` & NFC composition (preserving `U+037E`/`U+0387`), currencies, units, numbers, single-char & spelling routing to `preferredLanguage`, `_CLAUSE_BREAK_PUNCTUATION`, URLs/domains, Latin exemplars, Han disambiguation, and emoji preservation. |
@@ -46,7 +46,7 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | `test_updater_security.py` | 77 | 15 | SHA-256 verification, HTTPS-only enforcement, path traversal & size bounds, manifest/release-notes parsing, and version/build comparison. |
 | `test_voice_package_lifecycle.py` | 24 | 7 | Voice package download guards, SHA-256 verification cache, copy/remove lifecycle, and `VoiceCatalog` validation. |
 | `test_watcher.py` | 17 | 4 | `DirectoryChangeWatcher` start/stop lifecycle, callbacks, error recovery, and live filesystem integration. |
-| **Total** | **737** | **134** | **Standalone regression test suite** |
+| **Total** | **742** | **134** | **Standalone regression test suite** |
 
 ---
 
@@ -63,11 +63,14 @@ The checker inspects NVDA source trees (`2024.4.2`, `2025.3.3`, `2026.2`) withou
 1. **Synth driver**: `SynthDriver` settings/methods, `VoiceInfo`, `LanguageInfo`, `synthIndexReached`, `synthDoneSpeaking`, `getSynth`, `setSynth`, `changeVoice`, `findAndSetNextSynth`, `SynthSettingsRing.updateSupportedSettings`, `DriverSetting` / `AutoSettings.isSupported` / `StringParameterInfo`, and `speech.commands`.
 2. **Audio output**: `nvwave.WavePlayer` / `WinmmWavePlayer` / `WasapiWavePlayer`, `isInError` vs legacy `audioDeviceError`, and `outputDevice` config section (`audio` vs `speech`).
 3. **Global plugin**: `GlobalPlugin`, `core.postNvdaStartup`, `gui.mainFrame` / `messageBox` / `VoiceDictionaryDialog`, `scriptHandler.script`, and `globalCommands` categories.
-4. **Speech hooks and language profiles**: `speech.extensions.filter_speechSequence`, `speech.speech` (`speak`, `processText`, `getSpellingSpeech`), `speech.shortcutKeys.shouldUseSpellingFunctionality`, `speechDictHandler.loadVoiceDict`, voice dictionary storage (`_speechDictDefinitions` vs `dictionaries`), and language switching (`speech.languageHandling` + `speech.manager.shouldSwitchVoice` + `SynthDriver.languageIsSupported` vs `speech.speak` config flags).
+4. **Speech hooks & language profiles**: `speech.extensions.filter_speechSequence`, `speech.speech` (`speak`, `processText`, `getSpellingSpeech`), `speech.shortcutKeys.shouldUseSpellingFunctionality`, `speechDictHandler.loadVoiceDict`, voice dictionary storage (`_speechDictDefinitions` vs `dictionaries`), and language switching (`speech.languageHandling` + `speech.manager.shouldSwitchVoice` + `SynthDriver.languageIsSupported` vs `speech.speak` config flags).
 5. **Settings category**: `SettingsPanel`, `MultiCategorySettingsDialog`, `AutoSettingsMixin` (`_getSettingMaker`, `_updateValueForControl`, `onDiscard`, `refreshGui`), `VoiceSettingsPanel.makeSettings`, `NVDASettingsDialog.categoryClasses`, `guiHelper`, and `SelectOnFocusSpinCtrl`.
-6. **Voice Manager & Updater** (categories 6–7): `DPIScaledDialog`, `languageHandler`, `gui.addonGui` (`installAddon`, `promptUserForRestart`), `ui.message`, and `addonHandler.initTranslation`.
-7. **Browser runtime, standby & shared NVDA state** (categories 8–9): `config.conf`, `globalVars.appArgs` / `appDir`, `logHandler.log`, and `languageHandler.getLanguage`.
-8. **High-risk signatures & Add-on compatibility guards** (categories 10–11): `synthDriverHandler.setSynth` signature, `AutoSettingsMixin.refreshGui(self)`, AST verification of 27 extensible `*args, **kwargs` entry points across `synthDrivers/__init__.py`, `globalPlugins/__init__.py`, and `settings.py`, plus `SynthDriver._current_output_device`, `_audio_device_error`, and `_language_token_signal` fallback guards.
+6. **Voice Manager dialog**: `DPIScaledDialog`, `languageHandler`, and `gui.addonGui.promptUserForRestart`.
+7. **Add-on updater**: `gui.addonGui.installAddon`, `ui.message`, and `addonHandler.initTranslation`.
+8. **Browser runtime & standby**: `config.conf`, `globalVars.appArgs` / `appDir`, and `logHandler.log`.
+9. **Shared NVDA state**: `languageHandler.getLanguage` and configuration section isolation.
+10. **High-risk signatures**: `synthDriverHandler.setSynth` signature compatibility and `AutoSettingsMixin.refreshGui(self)`.
+11. **Compatibility guards**: AST verification of 27 extensible `*args, **kwargs` entry points across `synthDrivers/__init__.py`, `globalPlugins/__init__.py`, and `settings.py`, plus `SynthDriver._current_output_device`, `_audio_device_error`, and `_language_token_signal` fallback guards.
 
 ---
 
