@@ -9,9 +9,9 @@ from __future__ import annotations
 from typing import Any
 
 OUTPUT_GAIN_MAKEUP: float = 1.70
-PROTECTED_ENGINE_RATE: float = 1.18
+PROTECTED_ENGINE_RATE: float = 1.25
 MIN_ARTIFICIAL_RATE: float = 0.5
-MAX_ARTIFICIAL_RATE: float = 2.2
+MAX_ARTIFICIAL_RATE: float = 2.8
 
 
 def rate_to_chrome(value: int, rateBoost: bool = False) -> float:

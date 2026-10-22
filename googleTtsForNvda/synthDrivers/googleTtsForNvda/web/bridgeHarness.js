@@ -188,7 +188,7 @@
 
 	function tempoRateFromPayload(payload) {
 		const rate = Number(payload && payload.artificialRate);
-		const artificialRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2.2, rate)) : 1;
+		const artificialRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2.8, rate)) : 1;
 		const postPitchFactor = Math.max(0.35, Math.min(2.5, currentPostPitchFactor || 1));
 		return Math.max(0.35, Math.min(5.5, artificialRate / postPitchFactor));
 	}
