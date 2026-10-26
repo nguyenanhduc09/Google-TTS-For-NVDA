@@ -26,7 +26,7 @@ echo Version: !VERSION!
 echo.
 
 :: --------------- Clean build artifacts ---------------
-echo [1/7] Cleaning build artifacts...
+echo [1/6] Cleaning build artifacts...
 if exist "__pycache__" (
     rmdir /s /q "__pycache__" 2>nul
     echo       Removed __pycache__
@@ -50,8 +50,8 @@ echo       Done.
 echo.
 
 :: --------------- Merge conflict marker check ---------------
-echo [2/7] Checking for unresolved merge conflict markers...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$patterns = '*.py','*.js','*.html','*.ini','*.json','*.bat','*.md','*.po','*.pot'; $files = @(Get-ChildItem -Path 'googleTtsForNvda' -Recurse -File -Include $patterns); $files += Get-Item 'build.bat','build.sh','AGENTS.md','readme.md','TRANSLATING.md','build_i18n.py'; $matches = $files | Select-String -Pattern '^(<<<<<<<($| )|=======$|>>>>>>>($| ))'; if ($matches) { $matches | ForEach-Object { Write-Host ('      [ERROR] {0}:{1}: {2}' -f $_.Path, $_.LineNumber, $_.Line.Trim()) }; exit 1 }"
+echo [2/6] Checking for unresolved merge conflict markers...
+python -B -c "import pathlib, sys; exts = {'.py', '.js', '.html', '.ini', '.json', '.bat', '.sh', '.md', '.po', '.pot', '.toml'}; files = [p for d in ('googleTtsForNvda', 'tests') if pathlib.Path(d).is_dir() for p in sorted(pathlib.Path(d).rglob('*')) if p.is_file() and p.suffix in exts] + [p for p in sorted(pathlib.Path('.').iterdir()) if p.is_file() and p.suffix in exts]; hits = [(p, i, s) for p in files for i, s in enumerate(p.read_text(encoding='utf-8', errors='replace').splitlines(), 1) if s in ('<<<<<<<', '=======', '>>>>>>>') or s.startswith(('<<<<<<< ', '>>>>>>> '))]; [print(f'      [ERROR] {p}:{i}: {s.strip()}') for p, i, s in hits]; sys.exit(1 if hits else 0)"
 if errorlevel 1 (
     echo [ERROR] Unresolved merge conflict markers found.
     set "EXIT_CODE=1"
@@ -61,8 +61,8 @@ echo       Passed.
 echo.
 
 :: --------------- Python syntax check ---------------
-echo [3/7] Checking Python syntax...
-python -m compileall -q googleTtsForNvda
+echo [3/6] Checking Python syntax...
+python -B -c "import pathlib; [compile(p.read_bytes(), str(p), 'exec') for p in sorted(pathlib.Path('googleTtsForNvda').rglob('*.py'))]"
 if errorlevel 1 (
     echo [ERROR] Python syntax check failed.
     set "EXIT_CODE=1"
@@ -72,7 +72,7 @@ echo       Passed.
 echo.
 
 :: --------------- JavaScript syntax check ---------------
-echo [4/7] Checking JavaScript syntax...
+echo [4/6] Checking JavaScript syntax...
 node --check googleTtsForNvda\synthDrivers\googleTtsForNvda\web\bridgeHarness.js
 if errorlevel 1 (
     echo [ERROR] JavaScript syntax check failed.
@@ -83,7 +83,7 @@ echo       Passed.
 echo.
 
 :: --------------- Verify no .zvoice in source ---------------
-echo [5/7] Verifying no .zvoice files in source tree...
+echo [5/6] Verifying no .zvoice files in source tree...
 set "FOUND_ZVOICE=0"
 for /r "googleTtsForNvda" %%F in (*.zvoice) do (
     echo       [ERROR] Found .zvoice file: %%F
@@ -97,39 +97,21 @@ if "!FOUND_ZVOICE!"=="1" (
 echo       Clean - no .zvoice files found.
 echo.
 
-:: --------------- Clean __pycache__ created by compileall ---------------
-echo [6/7] Cleaning __pycache__ created by syntax check...
-if exist "__pycache__" rmdir /s /q "__pycache__" 2>nul
-for /d /r "googleTtsForNvda" %%D in (__pycache__) do (
-    if exist "%%D" rmdir /s /q "%%D" 2>nul
-)
-echo       Done.
-echo.
-
 :: --------------- Package the add-on ---------------
 set "OUTPUT=dist\googleTtsForNvda-!VERSION!.nvda-addon"
-echo [7/7] Packaging add-on to %OUTPUT% ...
+echo [6/6] Packaging add-on to %OUTPUT% ...
 
 if not exist "dist" mkdir dist
 
 :: Remove old build with same version if present
 if exist "!OUTPUT!" del /f /q "!OUTPUT!"
 
-:: Use PowerShell to create a temporary ZIP archive first, as Compress-Archive requires .zip extension
-set "TEMP_ZIP=dist\temp_build.zip"
-if exist "!TEMP_ZIP!" del /f /q "!TEMP_ZIP!"
-
-powershell -NoProfile -Command "Compress-Archive -Path 'googleTtsForNvda\*' -DestinationPath '!TEMP_ZIP!' -Force"
+:: Package the contents of googleTtsForNvda/ at the archive root (manifest.ini
+:: must land at the top level) using Python's standard zipfile with DEFLATE
+:: level 9 compression, excluding dotfiles/dotdirs.
+python -B -c "import pathlib, sys, zipfile; root = pathlib.Path('googleTtsForNvda'); zf = zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED, compresslevel=9); [zf.write(p, p.relative_to(root).as_posix()) for p in sorted(root.rglob('*')) if p.is_file() and not any(part.startswith('.') for part in p.relative_to(root).parts)]; zf.close()" "!OUTPUT!"
 if errorlevel 1 (
     echo [ERROR] Packaging failed.
-    set "EXIT_CODE=1"
-    goto cleanup_and_exit
-)
-
-:: Move/Rename the temporary zip to the final destination
-move /y "!TEMP_ZIP!" "!OUTPUT!" >nul
-if errorlevel 1 (
-    echo [ERROR] Failed to rename package to .nvda-addon.
     set "EXIT_CODE=1"
     goto cleanup_and_exit
 )

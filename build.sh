@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Google TTS For NVDA - Add-on Builder (WSL/Linux)
 #
-# Linux/WSL counterpart to build.bat. Mirrors the same 7 steps and the same
-# [n/7] / [ERROR] output so the two builds can be compared line for line.
+# Linux/WSL counterpart to build.bat. Mirrors the same 6 steps and the same
+# [n/6] / [ERROR] output so the two builds can be compared line for line.
 # WSL/Linux can build, check, and package the add-on, but NVDA and the
 # Chromium browser runtime only run on Windows -- this script cannot test
 # either. Keep build.bat and build.sh in sync when the build steps change.
@@ -39,7 +39,7 @@ echo "Version: $VERSION"
 echo
 
 # --------------- Clean build artifacts ---------------
-echo "[1/7] Cleaning build artifacts..."
+echo "[1/6] Cleaning build artifacts..."
 _clean_pycache
 if [ -f "googleTtsForNvda/googleTtsForNvda.nvda-addon" ]; then
     rm -f "googleTtsForNvda/googleTtsForNvda.nvda-addon"
@@ -52,20 +52,8 @@ echo "      Done."
 echo
 
 # --------------- Merge conflict marker check ---------------
-echo "[2/7] Checking for unresolved merge conflict markers..."
-mapfile -t CONFLICT_FILES < <(find googleTtsForNvda -type f \( \
-    -name '*.py' -o -name '*.js' -o -name '*.html' -o -name '*.ini' -o \
-    -name '*.json' -o -name '*.bat' -o -name '*.md' -o -name '*.po' -o -name '*.pot' \))
-for extra in build.bat build.sh AGENTS.md readme.md TRANSLATING.md build_i18n.py; do
-    [ -f "$extra" ] && CONFLICT_FILES+=("$extra")
-done
-
-CONFLICT_MATCHES=""
-if [ "${#CONFLICT_FILES[@]}" -gt 0 ]; then
-    CONFLICT_MATCHES="$(grep -nE '^(<<<<<<<($| )|=======$|>>>>>>>($| ))' "${CONFLICT_FILES[@]}" 2>/dev/null || true)"
-fi
-if [ -n "$CONFLICT_MATCHES" ]; then
-    echo "$CONFLICT_MATCHES" | sed 's/^/      [ERROR] /'
+echo "[2/6] Checking for unresolved merge conflict markers..."
+if ! python3 -B -c "import pathlib, sys; exts = {'.py', '.js', '.html', '.ini', '.json', '.bat', '.sh', '.md', '.po', '.pot', '.toml'}; files = [p for d in ('googleTtsForNvda', 'tests') if pathlib.Path(d).is_dir() for p in sorted(pathlib.Path(d).rglob('*')) if p.is_file() and p.suffix in exts] + [p for p in sorted(pathlib.Path('.').iterdir()) if p.is_file() and p.suffix in exts]; hits = [(p, i, s) for p in files for i, s in enumerate(p.read_text(encoding='utf-8', errors='replace').splitlines(), 1) if s in ('<<<<<<<', '=======', '>>>>>>>') or s.startswith(('<<<<<<< ', '>>>>>>> '))]; [print(f'      [ERROR] {p}:{i}: {s.strip()}') for p, i, s in hits]; sys.exit(1 if hits else 0)"; then
     echo "[ERROR] Unresolved merge conflict markers found."
     EXIT_CODE=1
     exit "$EXIT_CODE"
@@ -74,8 +62,8 @@ echo "      Passed."
 echo
 
 # --------------- Python syntax check ---------------
-echo "[3/7] Checking Python syntax..."
-if ! python3 -m compileall -q googleTtsForNvda; then
+echo "[3/6] Checking Python syntax..."
+if ! python3 -B -c "import pathlib; [compile(p.read_bytes(), str(p), 'exec') for p in sorted(pathlib.Path('googleTtsForNvda').rglob('*.py'))]"; then
     echo "[ERROR] Python syntax check failed."
     EXIT_CODE=1
     exit "$EXIT_CODE"
@@ -84,7 +72,7 @@ echo "      Passed."
 echo
 
 # --------------- JavaScript syntax check ---------------
-echo "[4/7] Checking JavaScript syntax..."
+echo "[4/6] Checking JavaScript syntax..."
 if ! node --check googleTtsForNvda/synthDrivers/googleTtsForNvda/web/bridgeHarness.js; then
     echo "[ERROR] JavaScript syntax check failed."
     EXIT_CODE=1
@@ -94,7 +82,7 @@ echo "      Passed."
 echo
 
 # --------------- Verify no .zvoice in source ---------------
-echo "[5/7] Verifying no .zvoice files in source tree..."
+echo "[5/6] Verifying no .zvoice files in source tree..."
 mapfile -t ZVOICE_FILES < <(find googleTtsForNvda -name '*.zvoice' -type f)
 if [ "${#ZVOICE_FILES[@]}" -gt 0 ]; then
     for f in "${ZVOICE_FILES[@]}"; do
@@ -107,38 +95,25 @@ fi
 echo "      Clean - no .zvoice files found."
 echo
 
-# --------------- Clean __pycache__ created by compileall ---------------
-echo "[6/7] Cleaning __pycache__ created by syntax check..."
-_clean_pycache
-echo "      Done."
-echo
-
 # --------------- Package the add-on ---------------
 OUTPUT="dist/googleTtsForNvda-$VERSION.nvda-addon"
-echo "[7/7] Packaging add-on to $OUTPUT ..."
+echo "[6/6] Packaging add-on to $OUTPUT ..."
 
 mkdir -p dist
 
 # Remove old build with same version if present
 rm -f "$OUTPUT"
 
-if ! command -v zip >/dev/null 2>&1; then
-    echo "[ERROR] 'zip' command not found. Install it (e.g. 'sudo apt install zip') and retry."
-    EXIT_CODE=1
-    exit "$EXIT_CODE"
-fi
-
-# Zip the contents of googleTtsForNvda/ at the archive root (manifest.ini
-# must land at the top level, matching what
-# `Compress-Archive -Path 'googleTtsForNvda\*'` produces on Windows).
-# Exclude dotfiles/dotdirs the same way Windows wildcard expansion would.
-if ! (cd googleTtsForNvda && zip -rXq "../$OUTPUT" . -x ".*" -x "*/.*"); then
+# Package the contents of googleTtsForNvda/ at the archive root (manifest.ini
+# must land at the top level) using Python's standard zipfile with DEFLATE
+# level 9 compression, excluding dotfiles/dotdirs.
+if ! python3 -B -c "import pathlib, sys, zipfile; root = pathlib.Path('googleTtsForNvda'); zf = zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED, compresslevel=9); [zf.write(p, p.relative_to(root).as_posix()) for p in sorted(root.rglob('*')) if p.is_file() and not any(part.startswith('.') for part in p.relative_to(root).parts)]; zf.close()" "$OUTPUT"; then
     echo "[ERROR] Packaging failed."
     EXIT_CODE=1
     exit "$EXIT_CODE"
 fi
 
-SIZE="$(du -b "$OUTPUT" 2>/dev/null | cut -f1)"
+SIZE="$(wc -c < "$OUTPUT" 2>/dev/null | tr -d ' ')"
 echo "      Created: $OUTPUT"
 echo "      Size:    ${SIZE:-unknown} bytes"
 echo

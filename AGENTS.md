@@ -40,7 +40,7 @@ Technical code map indexing the codebase architecture, modules, classes, functio
   - **locale/** — Localized interface catalogs (`<locale>/LC_MESSAGES/nvda.po`, `nvda.mo`, `manifest.ini`, `languageSort.json`)
 - **.github/workflows/test.yml** — Continuous integration workflow (linting, type checking, unit tests)
 - **tests/** — Automated test suite, benchmarks, and contract checkers (see [tests/README.md](file:///c:/Users/hungv/Documents/Codex/Google-TTS-For-NVDA/tests/README.md))
-- **build.bat** / **build.sh** — Windows and POSIX build scripts (clean, lint, compile i18n/docs, package `.nvda-addon`)
+- **build.bat** / **build.sh** — Windows and POSIX 6-step build scripts (artifact cleanup, merge-conflict check, in-memory Python & Node.js syntax checks, `.zvoice` guard, and `zipfile` level-9 `.nvda-addon` packaging)
 - **build_i18n.py** — Localization CLI tool (POT/PO extraction, merge, validation, Markdown/HTML doc generation)
 - **generate_voices_json.py** — Upstream voice catalog scraper and generator from ChromeOS/Google textproto
 - **generate_unicode_data.py** — UCD 17.0 and CLDR 48.2 data generator for `unicode_data.py`
