@@ -69,7 +69,7 @@ You can install Google TTS For NVDA in one of these ways:
 
 1. **Direct download:** Download the latest `.nvda-addon` file from the [Releases](https://github.com/nguyenanhduc09/Google-TTS-For-NVDA/releases) page. While NVDA is running, open the downloaded file directly from File Explorer and follow the prompts.
 2. **NVDA Add-on Store (External source):** In NVDA, open **NVDA Menu -> Tools -> Add-on Store**, choose **Install from external source**, select the downloaded `.nvda-addon` file, and confirm.
-3. **NVDA Add-on Store (Direct):** Once approved by NV Access, search for **Google TTS For NVDA** in the **Available add-ons** tab, press <kbd>Enter</kbd>, choose **Install**, and restart NVDA when prompted.
+3. **NVDA Add-on Store (Direct):** In NVDA, open **NVDA Menu -> Tools -> Add-on Store**, search for **Google TTS For NVDA** in the **Available add-ons** tab, press <kbd>Enter</kbd>, choose **Install**, and restart NVDA when prompted.
 
 ### First Run Setup
 
@@ -167,7 +167,7 @@ setx BRAVE_PATH "C:\Path\To\brave.exe"
 * **Manual Checks:** Open **NVDA Menu -> Preferences -> Settings -> Google TTS For NVDA** and press **Check for updates...**. If an update is available, the **Update information** dialog displays the release notes, download size, and version requirements. Choosing **Yes** downloads the package, then opens NVDA's standard add-on installer.
 * **Automatic Checks:** Enabling **Automatically check for add-on updates when NVDA starts** checks once silently after startup and notifies you only when a new release is available.
 * **Hotfix Builds:** The updater recognizes small hotfix builds within the same public version number, delivering urgent compatibility or stability fixes without waiting for a new major release.
-* **NVDA Add-on Store:** Once published in the Add-on Store, updates can also be installed directly from **NVDA Menu -> Tools -> Add-on Store -> Updatable add-ons**.
+* **NVDA Add-on Store:** Updates can also be installed directly from **NVDA Menu -> Tools -> Add-on Store -> Updatable add-ons**.
 
 ### Automatic Language Profiles
 
