@@ -11,9 +11,9 @@ import argparse
 import ast
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_NVDA_ROOT = REPO_ROOT.parent / "NVDA source code"

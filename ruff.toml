@@ -12,7 +12,7 @@ builtins = ["_", "ngettext", "pgettext", "npgettext"]
 
 [lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
-ignore = ["W191", "E101", "E501", "UP035", "SIM102", "B904"]
+ignore = ["E501", "SIM102"]
 
 [lint.per-file-ignores]
 "__init__.py" = ["F401"]

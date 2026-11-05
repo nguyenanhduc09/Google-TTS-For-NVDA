@@ -16,8 +16,8 @@ import sys
 import unicodedata
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_ENGINE_ROOT = ROOT / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "WasmTtsEngine"

@@ -1566,7 +1566,7 @@ class CdpClient:
                 dispatcher.send(command)
             except Exception:
                 if cancelEvent is not None and cancelEvent.is_set():
-                    raise CdpCancelled()
+                    raise CdpCancelled() from None
                 raise
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:

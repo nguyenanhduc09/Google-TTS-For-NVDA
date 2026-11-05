@@ -23,8 +23,9 @@ import sys
 import threading
 import time
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 try:
     import requests

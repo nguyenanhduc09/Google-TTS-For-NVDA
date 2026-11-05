@@ -15,9 +15,10 @@ from __future__ import annotations
 import ctypes
 import logging
 import threading
+from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 log = logging.getLogger(__name__)
 

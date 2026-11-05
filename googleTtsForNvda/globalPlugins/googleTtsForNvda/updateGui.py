@@ -4,7 +4,7 @@ import builtins
 import contextlib
 import threading
 import weakref
-from typing import Callable
+from collections.abc import Callable
 
 import addonHandler
 import config

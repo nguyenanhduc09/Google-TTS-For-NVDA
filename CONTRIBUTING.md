@@ -2,15 +2,20 @@
 
 Thanks for your interest in helping out! Whether you're fixing a bug, adding a feature, improving translations, or just cleaning up docs, every contribution counts.
 
-This guide covers CI testing, how to verify changes locally, and what criteria are required for pull requests to be accepted.
+This guide explains how to set up your environment, run checks locally, understand continuous integration (CI), and submit pull requests.
+
+> [!NOTE]
+> - **End-users**: If you are looking for installation, usage instructions, or voice configuration, please refer to [readme.md](readme.md).
+> - **Translators**: If you are translating interface messages or documentation, see [TRANSLATING.md](TRANSLATING.md). You do not need to install Python linting or test tools.
+> - **Bug reports & suggestions**: If you found a bug or have an idea, you can open an issue on GitHub directly without touching code.
 
 ---
 
 ## How CI Works
 
-Every push and every pull request triggers the **Tests** workflow on GitHub Actions (`.github/workflows/test.yml`). It runs on **Windows** (`windows-latest`) against two Python versions in parallel: **Python 3.11** and **Python 3.12**. Both must pass for a PR to be mergeable.
+Every push and every pull request triggers the **Tests** workflow on GitHub Actions (`.github/workflows/test.yml`). It runs on **Windows** (`windows-latest`) against four Python versions in parallel: **Python 3.11**, **Python 3.12**, **Python 3.13**, and **Python 3.14**. All must pass for a PR to be mergeable.
 
-The workflow uses `fail-fast: false`, so if Python 3.11 fails, 3.12 still finishes running — you'll see all failures at once instead of having to fix them one at a time. It also enforces `permissions: contents: read` for least-privilege security and uses `concurrency` with `cancel-in-progress: true` to automatically cancel obsolete in-flight runs when new commits are pushed.
+The workflow uses `fail-fast: false`, so if one Python version fails, the others still finish running — you'll see all failures at once instead of having to fix them one at a time. It also enforces `permissions: contents: read` for least-privilege security and uses `concurrency` with `cancel-in-progress: true` to automatically cancel obsolete in-flight runs when new commits are pushed.
 
 ### CI Steps (in order)
 
@@ -20,7 +25,7 @@ The workflow runs these checks in sequence:
 
 2. **Ruff format** — `python -m ruff format --check` verifies code formatting. If your code isn't formatted, the check fails. Run `python -m ruff format` to fix it automatically.
 
-3. **Mypy type check** — catches type inconsistencies across `synthDrivers/`, `tests/`, and all six `globalPlugins/` files (including `__init__.py`). The `--explicit-package-bases` flag prevents a duplicate module name conflict between the two `googleTtsForNvda` packages. Missing imports are ignored (`ignore_missing_imports = true` in `mypy.ini`), and many common error codes are disabled (`name-defined`, `attr-defined`, `arg-type`, `index`, `assignment`, `return`, `union-attr`, `operator`, `var-annotated`, `no-redef`). Mypy catches the remaining type inconsistencies — actual errors within checked modules will fail the build.
+3. **Mypy type check** — validates type hints across `synthDrivers/`, `tests/`, and all `globalPlugins/` modules. Because NVDA core APIs are external and untyped during standalone testing, `mypy.ini` ignores external missing imports and focuses strictly on internal type consistency within add-on code.
 
 4. **Unit tests** — `python -m unittest discover -s tests -v` runs all standalone tests. These don't need NVDA installed, so they work on any Windows machine (and Linux/macOS with the right setup).
 
@@ -30,7 +35,7 @@ After all checks finish, CI runs `git clean -fdX` to remove all files listed in 
 
 | Event | Branch | Runs? |
 |---|---|---|
-| Push | `main` or `master` | Yes |
+| Push | Any branch | Yes |
 | Pull request (any branch) | — | Yes |
 
 ---
@@ -57,24 +62,15 @@ You only need to do this once (or when the project updates its tool versions).
 
 ### Auto-fix and run all checks (Recommended)
 
-To automatically fix auto-fixable lint issues and formatting, then run type checks, unit tests, and cache cleanup:
+To automatically apply safe lint fixes and formatting, followed by type checking, unit tests, and temporary cache cleanup:
 
 ```powershell
 python -m ruff check --fix ; python -m ruff format ; python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py ; python -m unittest discover -s tests -v ; git clean -fdX
 ```
 
-Or define a PowerShell `$mypy` helper first:
-
-```powershell
-$mypy = "python -m mypy --config-file mypy.ini --explicit-package-bases --exclude websocketClientRepo googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py"
-
-# Auto-fix, format, type-check, test, and clean:
-python -m ruff check --fix ; python -m ruff format ; $mypy ; python -m unittest discover -s tests -v ; git clean -fdX
-```
-
 ### Strict verification check (CI-style)
 
-To verify without modifying any files (matching CI behavior):
+To verify the codebase without modifying any files (matching the exact sequence run by CI):
 
 ```powershell
 python -m ruff check ; python -m ruff format --check ; python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py ; python -m unittest discover -s tests -v ; git clean -fdX
@@ -82,16 +78,21 @@ python -m ruff check ; python -m ruff format --check ; python -m mypy --config-f
 
 ### Individual checks
 
-Run any single check by typing the command and pressing **Enter**:
+You can also run any check independently:
 
 ```powershell
-python -m ruff check --fix      # lint & auto-fix
-python -m ruff format           # format code
-python -m ruff check            # lint check only
-python -m ruff format --check   # format check only
-python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py   # types
-python -m unittest discover -s tests -v   # tests
-git clean -fdX                            # clean temporary caches
+# Linting & code formatting
+python -m ruff check --fix      # check lint rules and auto-fix safe issues
+python -m ruff format           # format code to project standard
+
+# Type checking
+python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py
+
+# Standalone unit tests
+python -m unittest discover -s tests -v
+
+# Clean temporary build/cache files
+git clean -fdX
 ```
 
 ---
@@ -123,7 +124,7 @@ Before opening a PR, run through this:
 4. **Build succeeds** — run `build.bat` (Windows) or `build.sh` (Linux/macOS) and verify no errors.
 5. **Code matches the existing style.** Ruff handles most of this, but also check naming conventions, docstrings, and comment style against nearby code.
 6. **User-facing strings use `_()` for translation** where applicable in NVDA UI code.
-7. **Hands-on testing performed.** Install and test the built add-on in a live NVDA session before submitting. Do not submit AI-generated code without testing it yourself.
+7. **Hands-on testing performed.** Install and test the built add-on in a live NVDA session before submitting.
 8. **Meets acceptance criteria.** Review your changes against the [Contribution Acceptance Criteria](#contribution-acceptance-criteria) above.
 
 ---
@@ -131,7 +132,7 @@ Before opening a PR, run through this:
 ## What Happens After You Open a PR
 
 1. **CI runs automatically.** You'll see the workflow status directly on your PR page (a checkmark or red X).
-2. **Both Python versions must pass.** With `fail-fast: false`, both 3.11 and 3.12 run to completion even if one fails, so you'll see all issues at once.
+2. **All Python versions must pass.** With `fail-fast: false`, all versions (3.11 through 3.14) run to completion even if one fails, so you'll see all issues at once.
 3. **Reviewers will verify** that the workflow is green and that the contribution meets all [acceptance criteria](#contribution-acceptance-criteria) before approving.
 4. **If CI fails**, read the logs from the failed job, fix it locally, and push again — CI re-runs on every new push.
 
