@@ -1,10 +1,12 @@
 import errno
 import selectors
+import math
 import socket
 from typing import Optional, Union, Any
 
 from ._exceptions import (
     WebSocketConnectionClosedException,
+    WebSocketException,
     WebSocketTimeoutException,
 )
 from ._ssl_compat import SSLError, SSLEOFError, SSLWantReadError, SSLWantWriteError
@@ -14,7 +16,7 @@ from ._utils import extract_error_code, extract_err_message
 _socket.py
 websocket - WebSocket client library for Python
 
-Copyright 2025 engn33r
+Copyright 2026 engn33r
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -38,6 +40,12 @@ if hasattr(socket, "TCP_KEEPINTVL"):
     DEFAULT_SOCKET_OPTION.append((socket.SOL_TCP, socket.TCP_KEEPINTVL, 10))
 if hasattr(socket, "TCP_KEEPCNT"):
     DEFAULT_SOCKET_OPTION.append((socket.SOL_TCP, socket.TCP_KEEPCNT, 3))
+MAX_LINE_BYTES = 65536
+
+# Raised by a retried recv()/send() whose socket the selector reported ready
+# but which still cannot make progress. BlockingIOError covers EAGAIN and
+# EWOULDBLOCK; a TLS socket may want either direction on either call.
+_WOULD_BLOCK = (BlockingIOError, SSLWantReadError, SSLWantWriteError)
 
 _default_timeout = None
 
@@ -65,6 +73,19 @@ class sock_opt:
         self.timeout: Optional[Union[int, float]] = None
 
 
+def _validate_timeout(timeout: Optional[Union[int, float]]) -> None:
+    """Reject timeouts that the socket layer would misread or reject late."""
+    if timeout is None:
+        return
+    # bool subclasses int; True would become 1.0s on the socket
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise TypeError(
+            "timeout must be an int or float, not %r" % (type(timeout).__name__,)
+        )
+    if not math.isfinite(timeout):
+        raise ValueError("timeout must be a finite number, got %r" % (timeout,))
+
+
 def setdefaulttimeout(timeout: Optional[Union[int, float]]) -> None:
     """
     Set the global timeout setting to connect.
@@ -72,9 +93,11 @@ def setdefaulttimeout(timeout: Optional[Union[int, float]]) -> None:
     Parameters
     ----------
     timeout: int or float
-        default socket timeout time (in seconds)
+        default socket timeout time (in seconds).
+        None clears the default timeout.
     """
     global _default_timeout
+    _validate_timeout(timeout)
     _default_timeout = timeout
 
 
@@ -108,23 +131,28 @@ def recv(sock: socket.socket, bufsize: int) -> bytes:
 
         # Retry logic using selector for both SSLWantReadError and EAGAIN/EWOULDBLOCK
         sel = selectors.DefaultSelector()
-        sel.register(sock, selectors.EVENT_READ)
-
-        r = sel.select(sock.gettimeout())
-        sel.close()
+        try:
+            sel.register(sock, selectors.EVENT_READ)
+            r = sel.select(sock.gettimeout())
+        finally:
+            sel.close()
 
         if r:
-            return sock.recv(bufsize)
+            try:
+                return sock.recv(bufsize)
+            except _WOULD_BLOCK as e:
+                # Ready but still nothing to read (e.g. a partial TLS record on
+                # a non-blocking socket): a timeout, not a raw socket error.
+                raise WebSocketTimeoutException(
+                    "Connection timed out waiting for data"
+                ) from e
         else:
             # Selector timeout should raise WebSocketTimeoutException
             # not return None which gets misclassified as connection closed
             raise WebSocketTimeoutException("Connection timed out waiting for data")
 
     try:
-        if sock.gettimeout() == 0:
-            bytes_ = sock.recv(bufsize)
-        else:
-            bytes_ = _recv()
+        bytes_ = _recv()
     except TimeoutError:
         raise WebSocketTimeoutException("Connection timed out")
     except socket.timeout as e:
@@ -152,6 +180,8 @@ def recv_line(sock: socket.socket) -> bytes:
         line.append(c)
         if c == b"\n":
             break
+        if len(line) > MAX_LINE_BYTES:
+            raise WebSocketException(f"Header line exceeds {MAX_LINE_BYTES} bytes")
     return b"".join(line)
 
 
@@ -177,20 +207,23 @@ def send(sock: socket.socket, data: Union[bytes, str]) -> int:
                 raise
 
         sel = selectors.DefaultSelector()
-        sel.register(sock, selectors.EVENT_WRITE)
-
-        w = sel.select(sock.gettimeout())
-        sel.close()
+        try:
+            sel.register(sock, selectors.EVENT_WRITE)
+            w = sel.select(sock.gettimeout())
+        finally:
+            sel.close()
 
         if w:
-            return sock.send(data)
-        return 0
+            try:
+                return sock.send(data)
+            except _WOULD_BLOCK as e:
+                raise WebSocketTimeoutException(
+                    "Connection timed out waiting to send data"
+                ) from e
+        raise WebSocketTimeoutException("Connection timed out waiting to send data")
 
     try:
-        if sock.gettimeout() == 0:
-            return sock.send(data)
-        else:
-            return _send()
+        return _send()
     except socket.timeout as e:
         message = extract_err_message(e)
         raise WebSocketTimeoutException(message)

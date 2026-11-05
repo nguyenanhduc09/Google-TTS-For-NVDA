@@ -3,6 +3,7 @@ import struct
 import threading
 import time
 from typing import Any, Callable, Optional, Type, Union
+from urllib.parse import urlparse
 
 # websocket modules
 from ._abnf import ABNF, STATUS_NORMAL, continuous_frame, frame_buffer
@@ -15,7 +16,7 @@ from ._exceptions import (
 from ._handshake import SUPPORTED_REDIRECT_STATUSES, handshake, handshake_response
 from ._http import connect, proxy_info
 from ._logging import debug, error, trace, isEnabledForError, isEnabledForTrace
-from ._socket import getdefaulttimeout, recv, send, sock_opt
+from ._socket import _validate_timeout, getdefaulttimeout, recv, send, sock_opt
 from ._ssl_compat import ssl
 from ._utils import NoLock
 from ._dispatcher import DispatcherBase, WrappedDispatcher
@@ -24,7 +25,7 @@ from ._dispatcher import DispatcherBase, WrappedDispatcher
 _core.py
 websocket - WebSocket client library for Python
 
-Copyright 2025 engn33r
+Copyright 2026 engn33r
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -42,6 +43,68 @@ limitations under the License.
 __all__ = ["WebSocket", "create_connection"]
 
 
+def _normalize_close_reason(reason: Union[str, bytes, None]) -> bytes:
+    """Convert a close reason into the UTF-8 bytes for a close-frame payload."""
+    if reason is None:
+        return b""
+    if isinstance(reason, str):
+        return reason.encode("utf-8")
+    if isinstance(reason, bytes):
+        return reason
+    return bytes(reason)
+
+
+def _handshake_authority(url: str, addrs: tuple) -> tuple:
+    """(scheme, lowercase host, effective port) identifying a handshake target."""
+    scheme = url.split(":", 1)[0].lower()
+    hostname, port, _ = addrs
+    return (scheme, hostname.lower() if hostname else None, port)
+
+
+def _url_origin(url: str) -> str:
+    """scheme://host[:port] of url, for error messages. The userinfo, path and
+    query can carry credentials or tokens and must not end up in logs."""
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError:  # a malformed port in a server-supplied Location
+        port = None
+    return f"{parsed.scheme}://{host}" + (f":{port}" if port is not None else "")
+
+
+# Headers tied to the authority the caller targeted. They must not follow a
+# redirect to a different scheme/host/port.
+_AUTHORITY_SCOPED_HEADERS = ("authorization", "proxy-authorization", "cookie", "host")
+
+
+def _without_credentials(options: dict) -> dict:
+    """Copy of options without the Authorization, Proxy-Authorization, Cookie
+    and Host headers and the cookie and host options, for a redirect whose
+    target authority differs from the previous one."""
+    options = dict(options)
+    header = options.get("header")
+    if header:
+        if isinstance(header, dict):
+            header = {
+                k: v
+                for k, v in header.items()
+                if k.strip().lower() not in _AUTHORITY_SCOPED_HEADERS
+            }
+        else:
+            header = [
+                h
+                for h in header
+                if h.split(":", 1)[0].strip().lower() not in _AUTHORITY_SCOPED_HEADERS
+            ]
+        options["header"] = header
+    options.pop("cookie", None)
+    options.pop("host", None)
+    return options
+
+
 class WebSocket:
     """
     Low level WebSocket interface.
@@ -53,9 +116,7 @@ class WebSocket:
 
     >>> import websocket
     >>> ws = websocket.WebSocket()
-    >>> ws.connect("ws://echo.websocket.events")
-    >>> ws.recv()
-    'echo.websocket.events sponsored by Lob.com'
+    >>> ws.connect("ws://websockets.chilkat.io/wsChilkatEcho.ashx")
     >>> ws.send("Hello, Server")
     19
     >>> ws.recv()
@@ -105,6 +166,9 @@ class WebSocket:
 
         self.connected = False
         self.close_frame: Optional[ABNF] = None
+        # True while close() waits for the peer's close frame, so a concurrent
+        # close() does not tear the socket down underneath it.
+        self._closing = False
         self.get_mask_key = get_mask_key
         # These buffer over the build-up of a single frame.
         self.frame_buffer = frame_buffer(self._recv, skip_utf8_validation)
@@ -170,7 +234,9 @@ class WebSocket:
         ----------
         timeout: int or float
             timeout time (in seconds). This value could be either float/integer.
+            None disables the timeout (blocking mode).
         """
+        _validate_timeout(timeout)
         self.sock_opt.timeout = timeout
         if self.sock:
             self.sock.settimeout(timeout)
@@ -224,7 +290,7 @@ class WebSocket:
         If you set "header" list object, you can set your own custom header.
 
         >>> ws = WebSocket()
-        >>> ws.connect("ws://echo.websocket.events",
+        >>> ws.connect("ws://websockets.chilkat.io/wsChilkatEcho.ashx",
                 ...     header=["User-Agent: MyProgram",
                 ...             "x-custom: header"])
 
@@ -251,7 +317,8 @@ class WebSocket:
         http_proxy_host: str
             HTTP proxy host name.
         http_proxy_port: str or int
-            HTTP proxy port. Default is 80.
+            HTTP proxy port. Required when http_proxy_host is set. Proxies
+            from environment variables default to port 80.
         http_no_proxy: list
             Whitelisted host names that don't use the proxy.
         http_proxy_auth: tuple
@@ -259,12 +326,16 @@ class WebSocket:
         http_proxy_timeout: int or float
             HTTP proxy timeout, default is 60 sec as per python-socks.
         redirect_limit: int
-            Number of redirects to follow.
+            Number of redirects to follow. A redirect from wss:// to ws://
+            is refused with WebSocketException.
         subprotocols: list
             List of available subprotocols. Default is None.
         socket: socket
-            Pre-initialized stream socket.
+            Pre-initialized stream socket. With a wss:// URL, a socket that is
+            not already an ssl.SSLSocket is wrapped in TLS using sslopt.
         """
+        if "timeout" in options:
+            _validate_timeout(options["timeout"])
         self.sock_opt.timeout = options.get("timeout", self.sock_opt.timeout)
         self.sock, addrs = connect(
             url, self.sock_opt, proxy_info(**options), options.pop("socket", None)
@@ -272,22 +343,54 @@ class WebSocket:
 
         try:
             self.handshake_response = handshake(self.sock, url, *addrs, **options)
+            authority = _handshake_authority(url, addrs)
             for _ in range(options.pop("redirect_limit", 3)):
                 if (
                     self.handshake_response is not None
                     and self.handshake_response.status in SUPPORTED_REDIRECT_STATUSES
                 ):
-                    url = self.handshake_response.headers["location"]
+                    location = self.handshake_response.headers.get("location")
+                    if location is None:
+                        raise WebSocketException(
+                            "Redirect response without Location header, "
+                            f"status {self.handshake_response.status}"
+                        )
+                    if (
+                        urlparse(url).scheme.lower() == "wss"
+                        and urlparse(location).scheme.lower() == "ws"
+                    ):
+                        raise WebSocketException(
+                            f"Refusing redirect from {_url_origin(url)} to "
+                            f"{_url_origin(location)}: "
+                            "it would downgrade wss:// to unencrypted ws://"
+                        )
+                    url = location
                     self.sock.close()
-                    self.sock, addrs = connect(
-                        url,
-                        self.sock_opt,
-                        proxy_info(**options),
-                        options.pop("socket", None),
-                    )
+                    try:
+                        self.sock, addrs = connect(
+                            url,
+                            self.sock_opt,
+                            proxy_info(**options),
+                            options.pop("socket", None),
+                        )
+                    except ValueError as e:
+                        raise WebSocketException(
+                            f"Invalid redirect target {url!r}: {e}"
+                        ) from e
+                    new_authority = _handshake_authority(url, addrs)
+                    if new_authority != authority:
+                        # Credentials supplied for the original authority must
+                        # not be replayed to a different scheme/host/port.
+                        options = _without_credentials(options)
+                    authority = new_authority
                     self.handshake_response = handshake(
                         self.sock, url, *addrs, **options
                     )
+            if (
+                self.handshake_response is not None
+                and self.handshake_response.status in SUPPORTED_REDIRECT_STATUSES
+            ):
+                raise WebSocketException("Redirect limit exhausted")
             self.connected = True
         except:
             if self.sock:
@@ -328,7 +431,7 @@ class WebSocket:
         """
         Send the data frame.
 
-        >>> ws = create_connection("ws://echo.websocket.events")
+        >>> ws = create_connection("ws://websockets.chilkat.io/wsChilkatEcho.ashx")
         >>> frame = ABNF.create_frame("Hello", ABNF.OPCODE_TEXT)
         >>> ws.send_frame(frame)
         >>> cont_frame = ABNF.create_frame("My name is ", ABNF.OPCODE_CONT, 0)
@@ -454,11 +557,7 @@ class WebSocket:
             if isEnabledForTrace():
                 trace(f"++Rcv raw: {repr(frame.format())}")
                 trace(f"++Rcv decoded: {frame.__str__()}")
-            if not frame:
-                # handle error:
-                # 'NoneType' object has no attribute 'opcode'
-                raise WebSocketProtocolException(f"Not a valid frame {frame}")
-            elif frame.opcode in (
+            if frame.opcode in (
                 ABNF.OPCODE_TEXT,
                 ABNF.OPCODE_BINARY,
                 ABNF.OPCODE_CONT,
@@ -509,14 +608,7 @@ class WebSocket:
         if status < 0 or status >= ABNF.LENGTH_16:
             raise ValueError("code is invalid range")
 
-        if reason is None:
-            reason_bytes = b""
-        elif isinstance(reason, str):
-            reason_bytes = reason.encode("utf-8")
-        elif isinstance(reason, bytes):
-            reason_bytes = reason
-        else:
-            reason_bytes = bytes(reason)
+        reason_bytes = _normalize_close_reason(reason)
 
         self.connected = False
         self.send(struct.pack("!H", status) + reason_bytes, ABNF.OPCODE_CLOSE)
@@ -525,7 +617,7 @@ class WebSocket:
         self,
         status: int = STATUS_NORMAL,
         reason: Union[str, bytes] = b"",
-        timeout: int = 3,
+        timeout: Optional[Union[int, float]] = 3,
     ) -> None:
         """
         Close Websocket object
@@ -534,13 +626,17 @@ class WebSocket:
         ----------
         status: int
             Status code to send. See VALID_CLOSE_STATUS in ABNF.
-        reason: bytes
+        reason: str or bytes
             The reason to close in UTF-8.
         timeout: int or float
             Timeout until receive a close frame.
             If None, it will wait forever until receive a close frame.
         """
         if not self.connected:
+            # The peer already disconnected: free the socket (#1066). Leave it
+            # alone if another thread is mid-close; that thread shuts it down.
+            if not self._closing:
+                self.shutdown()
             return
         if status < 0 or status >= ABNF.LENGTH_16:
             raise ValueError("code is invalid range")
@@ -548,9 +644,13 @@ class WebSocket:
         # Reset close_frame to avoid stale data from previous connections
         self.close_frame = None
 
+        self._closing = True
         try:
             self.connected = False
-            self.send(struct.pack("!H", status) + reason, ABNF.OPCODE_CLOSE)
+            self.send(
+                struct.pack("!H", status) + _normalize_close_reason(reason),
+                ABNF.OPCODE_CLOSE,
+            )
             if self.sock is None:
                 return
             sock_timeout = self.sock.gettimeout()
@@ -581,6 +681,8 @@ class WebSocket:
                 self.sock.shutdown(socket.SHUT_RDWR)
         except:
             pass
+        finally:
+            self._closing = False
 
         self.shutdown()
 
@@ -589,7 +691,12 @@ class WebSocket:
         Low-level asynchronous abort, wakes up other threads that are waiting in recv_*
         """
         if self.connected and self.sock is not None:
-            self.sock.shutdown(socket.SHUT_RDWR)
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, AttributeError):
+                # Socket already closed or never connected
+                # abort() is best-effort, like shutdown()
+                debug("Socket already closed during abort")
 
     def shutdown(self):
         """
@@ -645,7 +752,7 @@ def create_connection(
     You can customize using 'options'.
     If you set "header" list object, you can set your own custom header.
 
-    >>> conn = create_connection("ws://echo.websocket.events",
+    >>> conn = create_connection("ws://websockets.chilkat.io/wsChilkatEcho.ashx",
          ...     header=["User-Agent: MyProgram",
          ...             "x-custom: header"])
 
@@ -671,7 +778,8 @@ def create_connection(
     http_proxy_host: str
         HTTP proxy host name.
     http_proxy_port: str or int
-        HTTP proxy port. If not set, set to 80.
+        HTTP proxy port. Required when http_proxy_host is set. Proxies
+        from environment variables default to port 80.
     http_no_proxy: list
         Whitelisted host names that don't use the proxy.
     http_proxy_auth: tuple
@@ -681,7 +789,8 @@ def create_connection(
     enable_multithread: bool
         Enable lock for multithread.
     redirect_limit: int
-        Number of redirects to follow.
+        Number of redirects to follow. A redirect from wss:// to ws://
+        is refused with WebSocketException.
     sockopt: tuple
         Values for socket.setsockopt.
         sockopt must be a tuple and each element is an argument of sock.setsockopt.
@@ -692,7 +801,8 @@ def create_connection(
     skip_utf8_validation: bool
         Skip utf8 validation.
     socket: socket
-        Pre-initialized stream socket.
+        Pre-initialized stream socket. With a wss:// URL, a socket that is
+        not already an ssl.SSLSocket is wrapped in TLS using sslopt.
     """
     sockopt = options.pop("sockopt", [])
     sslopt = options.pop("sslopt", {})

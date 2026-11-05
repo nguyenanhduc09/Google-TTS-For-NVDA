@@ -2,7 +2,7 @@
 _http.py
 websocket - WebSocket client library for Python
 
-Copyright 2025 engn33r
+Copyright 2026 engn33r
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import errno
 import os
 import socket
 from base64 import encodebytes as base64encode
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 from ._exceptions import (
     WebSocketAddressException,
@@ -81,11 +81,14 @@ class proxy_info:
             self.auth = None
             self.no_proxy = None
             self.proxy_protocol = "http"
+            self.proxy_timeout = None
 
 
 def _start_proxied_socket(
     url: str, options: Any, proxy: Any
 ) -> Tuple[socket.socket, Tuple[str, int, str]]:
+    if proxy.proxy_host and not proxy.proxy_port:
+        raise WebSocketProxyException("Cannot use port 0 when proxy_host specified")
     if not HAVE_PYTHON_SOCKS:
         raise WebSocketException(
             "Python Socks is needed for SOCKS proxying but is not available"
@@ -119,11 +122,15 @@ def _start_proxied_socket(
 
     sock = ws_proxy.connect(hostname, port, timeout=proxy.proxy_timeout)
 
-    if is_secure:
-        if HAVE_SSL:
-            sock = _ssl_socket(sock, options.sslopt, hostname)
-        else:
-            raise WebSocketException("SSL not available.")
+    try:
+        if is_secure:
+            if HAVE_SSL:
+                sock = _ssl_socket(sock, options.sslopt, hostname)
+            else:
+                raise WebSocketException("SSL not available.")
+    except BaseException:
+        sock.close()
+        raise
 
     return sock, (hostname, port, resource)
 
@@ -140,6 +147,12 @@ def connect(
     hostname, port_from_url, resource, is_secure = parse_url(url)
 
     if socket:
+        # A wss:// URL always runs over TLS: wrap a caller-supplied plain socket
+        # instead of silently sending the handshake and data in cleartext.
+        if is_secure and not (HAVE_SSL and isinstance(socket, ssl.SSLSocket)):
+            if not HAVE_SSL:
+                raise WebSocketException("SSL not available.")
+            socket = _ssl_socket(socket, options.sslopt, hostname)
         return socket, (hostname, port_from_url, resource)
 
     addrinfo_list, need_tunnel, auth = _get_addrinfo_list(
@@ -244,6 +257,18 @@ def _open_socket(addrinfo_list, sockopt, timeout):
     return sock
 
 
+def _sslopt_check_hostname(sslopt: dict) -> Optional[bool]:
+    """sslopt["check_hostname"] as True, False or None (use the default).
+    Any other value is rejected, so a falsy placeholder such as 0 or ""
+    cannot silently turn hostname verification off."""
+    value = sslopt.get("check_hostname")
+    if value is None or isinstance(value, bool):
+        return value
+    raise WebSocketException(
+        f"sslopt check_hostname must be True, False or None, not {value!r}"
+    )
+
+
 def _wrap_sni_socket(
     sock: socket.socket, sslopt: dict, hostname: str, check_hostname: bool
 ) -> Any:
@@ -259,8 +284,10 @@ def _wrap_sni_socket(
             context.keylog_filename = keylog_file
 
         if sslopt.get("cert_reqs", ssl.CERT_NONE) != ssl.CERT_NONE:
-            cafile = sslopt.get("ca_certs", None)
-            capath = sslopt.get("ca_cert_path", None)
+            # An empty value ("" or False, e.g. an unset config entry) counts
+            # as unset, the same as in _ssl_socket.
+            cafile = sslopt.get("ca_certs") or None
+            capath = sslopt.get("ca_cert_path") or None
             if cafile or capath:
                 try:
                     context.load_verify_locations(cafile=cafile, capath=capath)
@@ -288,14 +315,25 @@ def _wrap_sni_socket(
         # Python 3.10 switch to PROTOCOL_TLS_CLIENT defaults to "cert_reqs = ssl.CERT_REQUIRED" and "check_hostname = True"
         # If both disabled, set check_hostname before verify_mode
         # see https://github.com/liris/websocket-client/commit/b96a2e8fa765753e82eea531adb19716b52ca3ca#commitcomment-10803153
-        if sslopt.get("cert_reqs", ssl.CERT_NONE) == ssl.CERT_NONE and not sslopt.get(
-            "check_hostname", False
+        verify_hostname = _sslopt_check_hostname(sslopt)
+        if (
+            sslopt.get("cert_reqs", ssl.CERT_NONE) == ssl.CERT_NONE
+            and not verify_hostname
         ):
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
         else:
-            context.check_hostname = sslopt.get("check_hostname", True)
-            context.verify_mode = sslopt.get("cert_reqs", ssl.CERT_REQUIRED)
+            cert_reqs = sslopt.get("cert_reqs", ssl.CERT_REQUIRED)
+            if verify_hostname is None:
+                # Only an explicit False turns hostname verification off.
+                verify_hostname = True
+            if verify_hostname and cert_reqs == ssl.CERT_NONE:
+                raise WebSocketException(
+                    "SSL certificate verification configuration failed: "
+                    "check_hostname cannot be enabled when cert_reqs is CERT_NONE"
+                )
+            context.check_hostname = verify_hostname
+            context.verify_mode = cert_reqs
 
         if "ciphers" in sslopt:
             try:
@@ -335,19 +373,31 @@ def _ssl_socket(sock: socket.socket, user_sslopt: dict, hostname: str) -> Any:
     sslopt: dict = {"cert_reqs": ssl.CERT_REQUIRED}
     sslopt.update(user_sslopt)
 
+    # WEBSOCKET_CLIENT_CA_BUNDLE is only a default. An explicit ca_certs or
+    # ca_cert_path pins the trusted CAs, and the variable must not add to it.
+    # It is read only when it would be used: certificates are verified and no
+    # custom context is given.
     cert_path = os.environ.get("WEBSOCKET_CLIENT_CA_BUNDLE")
     if (
         cert_path
-        and os.path.isfile(cert_path)
-        and user_sslopt.get("ca_certs", None) is None
+        # An empty ca_certs/ca_cert_path ("" or False) is not a pin: treating it
+        # as one would skip the bundle and fall back to the system CAs.
+        and not user_sslopt.get("ca_certs")
+        and not user_sslopt.get("ca_cert_path")
+        and sslopt["cert_reqs"] != ssl.CERT_NONE
+        and not sslopt.get("context")
     ):
-        sslopt["ca_certs"] = cert_path
-    elif (
-        cert_path
-        and os.path.isdir(cert_path)
-        and user_sslopt.get("ca_cert_path", None) is None
-    ):
-        sslopt["ca_cert_path"] = cert_path
+        if os.path.isfile(cert_path):
+            sslopt["ca_certs"] = cert_path
+        elif os.path.isdir(cert_path):
+            sslopt["ca_cert_path"] = cert_path
+        else:
+            # Falling back to the system CAs would silently widen the trust
+            # the variable was meant to restrict.
+            raise WebSocketException(
+                "WEBSOCKET_CLIENT_CA_BUNDLE is neither a file nor a directory: "
+                f"{cert_path!r}"
+            )
 
     if sslopt.get("server_hostname", None):
         hostname = sslopt["server_hostname"]
@@ -360,6 +410,8 @@ def _ssl_socket(sock: socket.socket, user_sslopt: dict, hostname: str) -> Any:
 
 def _tunnel(sock: socket.socket, host: str, port: int, auth: Any) -> socket.socket:
     debug("Connecting proxy...")
+    if ":" in host:
+        host = f"[{host}]"
     connect_header = f"CONNECT {host}:{port} HTTP/1.1\r\n"
     connect_header += f"Host: {host}:{port}\r\n"
 
@@ -386,21 +438,38 @@ def _tunnel(sock: socket.socket, host: str, port: int, auth: Any) -> socket.sock
     return sock
 
 
+MAX_HEADER_BYTES = 65536
+
+
 def read_headers(sock: socket.socket) -> tuple:
     status = None
     status_message = None
     headers: dict = {}
     trace("--- response header ---")
 
+    total = 0
     while True:
         line = recv_line(sock)
-        line = line.decode("utf-8").strip()
+        total += len(line)
+        if total > MAX_HEADER_BYTES:
+            raise WebSocketException("Response headers too large")
+        try:
+            line = line.decode("utf-8").strip()
+        except UnicodeDecodeError as e:
+            raise WebSocketException(
+                f"Invalid header line, not valid UTF-8 at byte {e.start}: {line!r}"
+            )
         if not line:
+            if not status:
+                raise WebSocketException(f"Invalid status line: {line!r}")
             break
         trace(line)
         if not status:
             status_info = line.split(" ", 2)
-            status = int(status_info[1])
+            try:
+                status = int(status_info[1])
+            except (IndexError, ValueError):
+                raise WebSocketException(f"Invalid status line: {line!r}")
             if len(status_info) > 2:
                 status_message = status_info[2]
         else:
@@ -408,10 +477,13 @@ def read_headers(sock: socket.socket) -> tuple:
             if len(kv) != 2:
                 raise WebSocketException("Invalid header")
             key, value = kv
-            if key.lower() == "set-cookie" and headers.get("set-cookie"):
-                existing_cookie = headers.get("set-cookie")
-                if existing_cookie is not None:
-                    headers["set-cookie"] = existing_cookie + "; " + value.strip()
+            if key.lower() == "set-cookie":
+                if "set-cookie" in headers:
+                    existing = headers["set-cookie"]
+                    if isinstance(existing, list):
+                        existing.append(value.strip())
+                    else:
+                        headers["set-cookie"] = [existing, value.strip()]
                 else:
                     headers["set-cookie"] = value.strip()
             else:

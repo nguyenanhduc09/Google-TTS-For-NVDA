@@ -3,7 +3,7 @@ import os
 import struct
 import sys
 from threading import Lock
-from typing import Callable, Optional, Union, Any
+from typing import Callable, NoReturn, Optional, Union, Any
 
 from ._exceptions import WebSocketPayloadException, WebSocketProtocolException
 from ._utils import validate_utf8
@@ -12,7 +12,7 @@ from ._utils import validate_utf8
 _abnf.py
 websocket - WebSocket client library for Python
 
-Copyright 2025 engn33r
+Copyright 2026 engn33r
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -56,6 +56,8 @@ __all__ = [
     "STATUS_MESSAGE_TOO_BIG",
     "STATUS_INVALID_EXTENSION",
     "STATUS_UNEXPECTED_CONDITION",
+    "STATUS_SERVICE_RESTART",
+    "STATUS_TRY_AGAIN_LATER",
     "STATUS_BAD_GATEWAY",
     "STATUS_TLS_HANDSHAKE_ERROR",
 ]
@@ -169,16 +171,17 @@ class ABNF:
             raise WebSocketProtocolException("rsv is not implemented, yet")
 
         if self.opcode not in ABNF.OPCODES:
-            raise WebSocketProtocolException("Invalid opcode %r", self.opcode)
+            raise WebSocketProtocolException(f"Invalid opcode {self.opcode!r}")
 
-        if self.opcode == ABNF.OPCODE_PING and not self.fin:
-            raise WebSocketProtocolException("Invalid ping frame.")
+        if self.opcode in (ABNF.OPCODE_CLOSE, ABNF.OPCODE_PING, ABNF.OPCODE_PONG):
+            if not self.fin or len(self.data) >= ABNF.LENGTH_7:
+                raise WebSocketProtocolException("Invalid control frame.")
 
         if self.opcode == ABNF.OPCODE_CLOSE:
             data_length = len(self.data)
             if not data_length:
                 return
-            if data_length == 1 or data_length >= 126:
+            if data_length == 1:
                 raise WebSocketProtocolException("Invalid close frame.")
             if (
                 data_length > 2
@@ -194,7 +197,7 @@ class ABNF:
             )
             code = struct.unpack("!H", data_bytes)[0]
             if not self._is_valid_close_status(code):
-                raise WebSocketProtocolException("Invalid close opcode %r", code)
+                raise WebSocketProtocolException(f"Invalid close opcode {code!r}")
 
     @staticmethod
     def _is_valid_close_status(code: int) -> bool:
@@ -304,6 +307,8 @@ class frame_buffer:
         # Buffers over the packets from the layer beneath until desired amount
         # bytes of bytes are received.
         self.recv_buffer: list = []
+        # Set once the stream has lost frame sync; see _lose_sync().
+        self.sync_error: Optional[str] = None
         self.clear()
         self.lock = Lock()
 
@@ -345,12 +350,28 @@ class frame_buffer:
         length_bits = bits & 0x7F
         if length_bits == 0x7E:
             v = self.recv_strict(2)
-            self.length = struct.unpack("!H", v)[0]
+            length = struct.unpack("!H", v)[0]
+            if length < ABNF.LENGTH_7:
+                self._lose_sync("Invalid 16-bit frame length.")
         elif length_bits == 0x7F:
             v = self.recv_strict(8)
-            self.length = struct.unpack("!Q", v)[0]
+            length = struct.unpack("!Q", v)[0]
+            if length < ABNF.LENGTH_16 or length >= ABNF.LENGTH_63:
+                self._lose_sync("Invalid 64-bit frame length.")
         else:
-            self.length = length_bits
+            length = length_bits
+        self.length = length
+
+    def _lose_sync(self, message: str) -> NoReturn:
+        # The length field has been consumed but the payload has not, so the
+        # stream is no longer at a frame boundary. Reading on would parse the
+        # payload as frame headers, letting the peer hide frames inside what
+        # intermediaries see as one frame's data. Fail the connection instead
+        # (RFC 6455 7.1.7): this read and every later one raise.
+        self.clear()
+        self.recv_buffer = []
+        self.sync_error = message
+        raise WebSocketProtocolException(message)
 
     def needs_mask(self) -> bool:
         return self.mask_value is None
@@ -360,6 +381,10 @@ class frame_buffer:
 
     def recv_frame(self) -> ABNF:
         with self.lock:
+            if self.sync_error is not None:
+                raise WebSocketProtocolException(
+                    f"Frame stream out of sync after an earlier error: {self.sync_error}"
+                )
             # Header
             if self.needs_header():
                 self.recv_header()

@@ -8,7 +8,7 @@ from ._exceptions import WebSocketProxyException
 _url.py
 websocket - WebSocket client library for Python
 
-Copyright 2025 engn33r
+Copyright 2026 engn33r
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -112,8 +112,11 @@ def _is_no_proxy_host(hostname: str, no_proxy: Optional[list[str]]) -> bool:
         ):
             no_proxy = v.split(",")
 
-    if not no_proxy:
-        no_proxy = []
+    # An entry that is empty after removing leading dots ("a,,b", a leading or
+    # trailing comma, ".") names no domain. Kept, it would make the suffix check
+    # below hostname.endswith("."), so every hostname ending in a dot would
+    # silently bypass the proxy. urllib skips empty entries the same way.
+    no_proxy = [entry for entry in no_proxy or [] if entry.lstrip(".")]
 
     if "*" in no_proxy:
         return True
@@ -131,9 +134,11 @@ def _is_no_proxy_host(hostname: str, no_proxy: Optional[list[str]]) -> bool:
     # This makes behavior consistent with urllib and other Python libraries
     for domain in no_proxy:
         if domain.startswith("."):
-            # Handle .domain.com format
+            # Handle .domain.com format - match the domain itself and its
+            # subdomains, but not unrelated hosts that merely share the suffix
+            # (e.g. ".example.com" must not match "notexample.com").
             stripped_domain = domain.lstrip(".")
-            if hostname.endswith(stripped_domain):
+            if hostname == stripped_domain or hostname.endswith("." + stripped_domain):
                 return True
         else:
             # Handle domain.com format (should match subdomains too)
@@ -169,7 +174,7 @@ def get_proxy_info(
     proxy_host: str
         http proxy host name.
     proxy_port: str or int
-        http proxy port.
+        http proxy port. Required when proxy_host is set.
     no_proxy: list
         Whitelisted host names that don't use the proxy.
     proxy_auth: tuple
@@ -189,11 +194,32 @@ def get_proxy_info(
         return proxy_host, port, auth
 
     env_key = "https_proxy" if is_secure else "http_proxy"
-    value = os.environ.get(env_key, os.environ.get(env_key.upper(), "")).replace(
-        " ", ""
-    )
+    # httpoxy (CVE-2016-1000110). This only matters when running inside a CGI
+    # script (REQUEST_METHOD is set): there the web server turns the client's
+    # "Proxy:" request header into the HTTP_PROXY environment variable, so it is
+    # ignored, as urllib does. Outside CGI (plain scripts, WSGI, ASGI) request
+    # headers never reach os.environ and HTTP_PROXY is honored as usual. The
+    # lowercase http_proxy cannot come from a request header and is kept, but
+    # it must be matched by exact key case: on Windows os.environ is
+    # case-insensitive, so os.environ.get("http_proxy") would return HTTP_PROXY.
+    if not is_secure and "REQUEST_METHOD" in os.environ:
+        value = next((v for k, v in os.environ.items() if k == env_key), None)
+    else:
+        value = os.environ.get(env_key)
+        if value is None:
+            value = os.environ.get(env_key.upper())
+    value = (value or "").replace(" ", "")
     if value:
         proxy = urlparse(value)
+        # The environment proxy is always spoken to in plaintext HTTP CONNECT,
+        # so a TLS or SOCKS proxy would receive the request and any
+        # Proxy-Authorization credentials in cleartext.
+        if proxy.scheme == "https" or proxy.scheme.startswith("socks"):
+            raise WebSocketProxyException(
+                f"{env_key} uses a {proxy.scheme}:// proxy, which is not supported "
+                "from the environment; use an http:// proxy, or pass http_proxy_host "
+                "and proxy_type for a SOCKS proxy"
+            )
         auth = (
             (unquote(proxy.username or ""), unquote(proxy.password or ""))
             if proxy.username

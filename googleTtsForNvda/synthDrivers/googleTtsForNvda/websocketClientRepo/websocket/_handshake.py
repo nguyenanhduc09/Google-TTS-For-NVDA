@@ -2,7 +2,7 @@
 _handshake.py
 websocket - WebSocket client library for Python
 
-Copyright 2025 engn33r
+Copyright 2026 engn33r
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -49,11 +49,17 @@ CookieJar = SimpleCookieJar()
 
 
 class handshake_response:
-    def __init__(self, status: int, headers: dict, subprotocol: Optional[str]) -> None:
+    def __init__(
+        self,
+        status: int,
+        headers: dict,
+        subprotocol: Optional[str],
+        host: Optional[str] = None,
+    ) -> None:
         self.status = status
         self.headers = headers
         self.subprotocol = subprotocol
-        CookieJar.add(headers.get("set-cookie"))
+        CookieJar.add(headers.get("set-cookie"), host)
 
 
 def handshake(
@@ -72,12 +78,12 @@ def handshake(
 
     status, resp = _get_resp_headers(sock)
     if status in SUPPORTED_REDIRECT_STATUSES:
-        return handshake_response(status, resp, None)
+        return handshake_response(status, resp, None, hostname)
     success, subproto = _validate(resp, key, options.get("subprotocols"))
     if not success:
         raise WebSocketException("Invalid WebSocket Header")
 
-    return handshake_response(status, resp, subproto)
+    return handshake_response(status, resp, subproto, hostname)
 
 
 def _pack_hostname(hostname: str) -> str:
@@ -90,8 +96,23 @@ def _pack_hostname(hostname: str) -> str:
 def _get_handshake_headers(
     resource: str, url: str, host: str, port: int, options: dict
 ) -> tuple:
+    header = options.get("header")
+
+    # Case-insensitive dict view of the header option for membership tests.
+    # Local only — options belongs to the caller and must not be mutated.
+    header_map: dict = {}
+    if isinstance(header, dict):
+        header_map = {name.lower(): value for name, value in header.items()}
+    elif header:
+        for entry in header:
+            name, _, value = entry.partition(":")
+            header_map[name.strip().lower()] = value.strip()
+
     headers = [f"GET {resource} HTTP/1.1", "Upgrade: websocket"]
-    if port in [80, 443]:
+    scheme, url = url.split(":", 1)
+    # Omit the port only when it is the default for the URL scheme
+    # (ws -> 80, wss -> 443), not whenever it is 80 or 443.
+    if port == (443 if scheme == "wss" else 80):
         hostport = _pack_hostname(host)
     else:
         hostport = f"{_pack_hostname(host)}:{port}"
@@ -101,9 +122,7 @@ def _get_handshake_headers(
         else:
             headers.append(f"Host: {hostport}")
 
-    # scheme indicates whether http or https is used in Origin
-    # The same approach is used in parse_url of _url.py to set default port
-    scheme, url = url.split(":", 1)
+    # Origin picks http vs https from the scheme parsed above
     if not options.get("suppress_origin"):
         if "origin" in options and options["origin"] is not None:
             headers.append(f'Origin: {options["origin"]}')
@@ -114,13 +133,15 @@ def _get_handshake_headers(
 
     key = _create_sec_websocket_key()
 
-    # Append Sec-WebSocket-Key & Sec-WebSocket-Version if not manually specified
-    if not options.get("header") or "Sec-WebSocket-Key" not in options["header"]:
+    # Append Sec-WebSocket-Key & Sec-WebSocket-Version if not manually specified.
+    # An explicit None value counts as not specified (previously it silently
+    # dropped the key header and _validate hashed "None...").
+    if header_map.get("sec-websocket-key") is None:
         headers.append(f"Sec-WebSocket-Key: {key}")
     else:
-        key = options["header"]["Sec-WebSocket-Key"]
+        key = header_map["sec-websocket-key"]
 
-    if not options.get("header") or "Sec-WebSocket-Version" not in options["header"]:
+    if header_map.get("sec-websocket-version") is None:
         headers.append(f"Sec-WebSocket-Version: {VERSION}")
 
     if not options.get("connection"):
@@ -131,12 +152,12 @@ def _get_handshake_headers(
     if subprotocols := options.get("subprotocols"):
         headers.append(f'Sec-WebSocket-Protocol: {",".join(subprotocols)}')
 
-    if header := options.get("header"):
+    if header:
         if isinstance(header, dict):
             header = [": ".join([k, v]) for k, v in header.items() if v is not None]
         headers.extend(header)
 
-    server_cookie = CookieJar.get(host)
+    server_cookie = CookieJar.get(host, scheme == "wss")
     client_cookie = options.get("cookie", None)
 
     if cookie := "; ".join(filter(None, [server_cookie, client_cookie])):
@@ -144,6 +165,9 @@ def _get_handshake_headers(
 
     headers.extend(("", ""))
     return headers, key
+
+
+MAX_ERROR_BODY_BYTES = 65536
 
 
 def _get_resp_headers(
@@ -157,12 +181,22 @@ def _get_resp_headers(
             from ._socket import recv
 
             response_body = b""
-            remaining = int(content_len)
+            try:
+                remaining = int(content_len)
+            except ValueError:
+                raise WebSocketException(
+                    f"Invalid content-length header: {content_len!r}"
+                )
+            truncated = remaining > MAX_ERROR_BODY_BYTES
+            if truncated:
+                remaining = MAX_ERROR_BODY_BYTES
             while remaining > 0:
                 chunk_size = min(remaining, 16384)  # Read in 16KB chunks
                 chunk = recv(sock, chunk_size)
                 response_body += chunk
                 remaining -= len(chunk)
+            if truncated:
+                response_body += b"\n... (body truncated)"
         else:
             response_body = None
         raise WebSocketBadStatusException(

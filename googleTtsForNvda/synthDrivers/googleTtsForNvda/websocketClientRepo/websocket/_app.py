@@ -12,7 +12,7 @@ from ._exceptions import (
     WebSocketException,
     WebSocketTimeoutException,
 )
-from ._ssl_compat import SSLEOFError
+from ._ssl_compat import SSLError
 from ._url import parse_url
 from ._dispatcher import Dispatcher, DispatcherBase, SSLDispatcher, WrappedDispatcher
 
@@ -20,7 +20,7 @@ from ._dispatcher import Dispatcher, DispatcherBase, SSLDispatcher, WrappedDispa
 _app.py
 websocket - WebSocket client library for Python
 
-Copyright 2025 engn33r
+Copyright 2026 engn33r
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -105,6 +105,10 @@ class WebSocketApp:
             on_error has 2 arguments.
             The 1st argument is this class object.
             The 2nd argument is exception object.
+            Called for every error, including errors during reconnect
+            attempts (since 1.10.0). To distinguish reconnect-phase
+            errors from the initial failure, track state with the
+            on_reconnect and on_open callbacks.
         on_close: function
             Callback object which is called when connection is closed.
             on_close has 3 arguments.
@@ -138,7 +142,8 @@ class WebSocketApp:
         subprotocols: list
             List of available sub protocols. Default is None.
         socket: socket
-            Pre-initialized stream socket.
+            Pre-initialized stream socket. With a wss:// URL, a socket that is
+            not already an ssl.SSLSocket is wrapped in TLS using sslopt.
         """
         self.url = url
         self.header = header if header is not None else []
@@ -205,11 +210,12 @@ class WebSocketApp:
         Close websocket connection.
         """
         self.keep_running = False
-        if self.sock:
-            self.sock.close(**kwargs)
+        sock = self.sock
+        if sock:
+            sock.close(**kwargs)
             # Capture the peer's close frame before clearing socket reference
-            if self.sock.close_frame is not None:
-                self.last_close_frame = self.sock.close_frame
+            if sock.close_frame is not None:
+                self.last_close_frame = sock.close_frame
             self.sock = None
 
     def _start_ping_thread(self) -> None:
@@ -277,6 +283,7 @@ class WebSocketApp:
         suppress_host: bool = False,
         proxy_type: Optional[str] = None,
         reconnect: Optional[int] = None,
+        redirect_limit: int = 3,
     ) -> bool:
         """
         Run event loop for WebSocket framework.
@@ -302,7 +309,8 @@ class WebSocketApp:
         http_proxy_host: str
             HTTP proxy host name.
         http_proxy_port: int or str
-            HTTP proxy port. If not set, set to 80.
+            HTTP proxy port. Required when http_proxy_host is set. Proxies
+            from environment variables default to port 80.
         http_no_proxy: list
             Whitelisted host names that don't use the proxy.
         http_proxy_timeout: int or float
@@ -325,12 +333,25 @@ class WebSocketApp:
             type of proxy from: http, socks4, socks4a, socks5, socks5h
         reconnect: int
             delay interval when reconnecting
+        redirect_limit: int
+            Number of HTTP redirects to follow during each opening handshake,
+            the same as ``WebSocket.connect(redirect_limit=...)``. Default is 3.
+            Set it to 0 to refuse redirects, for example when the URL was
+            validated against an allowlist and a redirect could point the
+            connection at another host. A refused redirect is reported to
+            ``on_error`` as a ``WebSocketException``.
 
         Returns
         -------
         teardown: bool
-            False if the `WebSocketApp` is closed or caught KeyboardInterrupt,
-            True if any other exception was raised during a loop.
+            False if the `WebSocketApp` is closed gracefully,
+            True if an error was handled during the loop.
+
+        Raises
+        ------
+        KeyboardInterrupt
+            If interrupted during the loop. The connection is torn down before
+            the interrupt is propagated to the caller.
         """
 
         if reconnect is None:
@@ -342,6 +363,8 @@ class WebSocketApp:
             raise WebSocketException("Ensure ping_interval >= 0")
         if ping_timeout and ping_interval and ping_interval <= ping_timeout:
             raise WebSocketException("Ensure ping_interval > ping_timeout")
+        if redirect_limit < 0:
+            raise WebSocketException("Ensure redirect_limit >= 0")
         if not sockopt:
             sockopt = []
         if not sslopt:
@@ -353,6 +376,7 @@ class WebSocketApp:
         self.ping_timeout = ping_timeout
         self.ping_payload = ping_payload
         self.has_done_teardown = False
+        self.has_errored = False
         self.keep_running = True
 
         def teardown(close_frame: Optional[ABNF] = None) -> None:
@@ -432,6 +456,7 @@ class WebSocketApp:
                     suppress_host=suppress_host,
                     proxy_type=proxy_type,
                     socket=self.prepared_socket,
+                    redirect_limit=redirect_limit,
                 )
 
                 info("Websocket connected")
@@ -453,7 +478,7 @@ class WebSocketApp:
                 SystemExit,
                 Exception,
             ) as e:
-                handleDisconnect(e, reconnecting)
+                handleDisconnect(e)
 
         def read() -> bool:
             if not self.keep_running:
@@ -468,7 +493,9 @@ class WebSocketApp:
             except (
                 WebSocketConnectionClosedException,
                 KeyboardInterrupt,
-                SSLEOFError,
+                SSLError,
+                ConnectionResetError,
+                WebSocketTimeoutException,
             ) as e:
                 if custom_dispatcher:
                     return closed(e)
@@ -550,7 +577,7 @@ class WebSocketApp:
                 setattr(converted, "status_code", close_status_code)
                 setattr(converted, "reason", close_reason)
                 e = converted
-            return handleDisconnect(e, bool(reconnect), close_frame=close_frame)  # type: ignore[arg-type]
+            return handleDisconnect(e, close_frame=close_frame)  # type: ignore[arg-type]
 
         def handleDisconnect(
             e: Union[
@@ -560,13 +587,12 @@ class WebSocketApp:
                 SystemExit,
                 Exception,
             ],
-            reconnecting: bool = False,
             close_frame: Optional[ABNF] = None,
         ) -> bool:
-            self.has_errored = True
+            if close_frame is None:
+                self.has_errored = True
             self._stop_ping_thread()
-            if not reconnecting:
-                self._callback(self.on_error, e)
+            self._callback(self.on_error, e)
 
             if isinstance(e, (KeyboardInterrupt, SystemExit)):
                 teardown(close_frame)
@@ -587,9 +613,13 @@ class WebSocketApp:
             return self.has_errored
 
         custom_dispatcher = bool(dispatcher)
-        dispatcher = self.create_dispatcher(
-            ping_timeout, dispatcher, parse_url(self.url)[3], closed
-        )
+        try:
+            dispatcher = self.create_dispatcher(
+                ping_timeout, dispatcher, parse_url(self.url)[3], closed
+            )
+        except KeyboardInterrupt:
+            teardown()
+            raise
 
         try:
             initialize_socket()
@@ -600,8 +630,10 @@ class WebSocketApp:
                     )
                     dispatcher.reconnect(reconnect, initialize_socket)
         except (KeyboardInterrupt, Exception) as e:
-            info(f"tearing down on exception {e}")
+            info(f"tearing down on exception {e!r}")
             teardown()
+            if isinstance(e, KeyboardInterrupt):
+                raise
         finally:
             if not custom_dispatcher:
                 # Ensure teardown was called before returning from run_forever
@@ -614,7 +646,7 @@ class WebSocketApp:
         ping_timeout: Optional[Union[float, int]],
         dispatcher: Optional[DispatcherBase] = None,
         is_ssl: bool = False,
-        handleDisconnect: Callable = None,
+        handleDisconnect: Optional[Callable] = None,
     ) -> Union[Dispatcher, SSLDispatcher, WrappedDispatcher]:
         if dispatcher:  # If custom dispatcher is set, use WrappedDispatcher
             return WrappedDispatcher(self, ping_timeout, dispatcher, handleDisconnect)
@@ -679,7 +711,7 @@ class WebSocketApp:
                 callback(self, *args)
 
             except Exception as e:
-                error(f"error from callback {callback}: {e}")
+                error(f"error from callback {callback}: {e}", exc_info=True)
                 # Bug fix: Prevent infinite recursion by not calling on_error
                 # when the failing callback IS on_error itself
                 if self.on_error and callback is not self.on_error:
