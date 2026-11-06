@@ -188,17 +188,20 @@
 
 	function tempoRateFromPayload(payload) {
 		const rate = Number(payload && payload.artificialRate);
-		const artificialRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2.8, rate)) : 1;
+		const artificialRate = Number.isFinite(rate) ? Math.max(0.5, Math.min(2.7, rate)) : 1;
 		const postPitchFactor = Math.max(0.35, Math.min(2.5, currentPostPitchFactor || 1));
 		return Math.max(0.35, Math.min(5.5, artificialRate / postPitchFactor));
 	}
 
 	function postPitchFactorFromPayload(payload) {
 		const pitchFactor = Number(payload && payload.postPitch);
-		if (!Number.isFinite(pitchFactor)) {
+		if (!Number.isFinite(pitchFactor) || Math.abs(pitchFactor - 1) < 0.001) {
 			return 1;
 		}
-		return Math.max(0.35, Math.min(2.5, pitchFactor));
+		// Convert WebSpeech/Chrome linear pitch (0.4..1.6) to frequency multiplier
+		// matching Google WASM engine's Math.pow(2, (pitch - 1) * 20 / 12)
+		const freqMultiplier = Math.pow(2, (pitchFactor - 1) * 20 / 12);
+		return Math.max(0.35, Math.min(2.5, freqMultiplier));
 	}
 
 	function limitSample(sample) {
@@ -362,19 +365,27 @@
 			pitchInputBuffer = appendSamples(pitchInputBuffer, samples);
 		}
 		const outputParts = [];
-		if (pitchInputBuffer.length > 1) {
+		const bufLen = pitchInputBuffer.length;
+		if (bufLen > 1) {
+			const maxReadable = final ? (bufLen - 1) : Math.max(1, bufLen - 2);
 			const outputLength = Math.max(
 				0,
-				Math.floor((pitchInputBuffer.length - 1 - pitchReadOffset) / currentPostPitchFactor)
+				Math.floor((maxReadable - pitchReadOffset) / currentPostPitchFactor)
 			);
 			if (outputLength > 0) {
 				const output = new Float32Array(outputLength);
 				for (let index = 0; index < outputLength; index++) {
 					const inputIndex = Math.floor(pitchReadOffset);
 					const fraction = pitchReadOffset - inputIndex;
-					const current = pitchInputBuffer[inputIndex];
-					const next = pitchInputBuffer[Math.min(inputIndex + 1, pitchInputBuffer.length - 1)];
-					output[index] = current + (next - current) * fraction;
+					const p0 = pitchInputBuffer[Math.max(0, inputIndex - 1)];
+					const p1 = pitchInputBuffer[inputIndex];
+					const p2 = pitchInputBuffer[Math.min(inputIndex + 1, bufLen - 1)];
+					const p3 = pitchInputBuffer[Math.min(inputIndex + 2, bufLen - 1)];
+					const c0 = p1;
+					const c1 = 0.5 * (p2 - p0);
+					const c2 = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
+					const c3 = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
+					output[index] = ((c3 * fraction + c2) * fraction + c1) * fraction + c0;
 					pitchReadOffset += currentPostPitchFactor;
 				}
 				appendTempoOutput(outputParts, output);
