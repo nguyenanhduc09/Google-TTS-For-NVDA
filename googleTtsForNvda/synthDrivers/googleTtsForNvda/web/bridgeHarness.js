@@ -38,8 +38,6 @@
 	let tempoReadOffset = 0;
 	let tempoOverlapTail = new Float32Array(0);
 	let tempoStarted = false;
-	let totalTempoInputSamples = 0;
-	let totalTempoEmittedSamples = 0;
 	let heldBoundarySamples = new Float32Array(0);
 	let smoothSegmentBoundaries = false;
 	let sawSynthesisEnd = false;
@@ -289,15 +287,6 @@
 		tempoReadOffset = 0;
 		tempoOverlapTail = new Float32Array(0);
 		tempoStarted = false;
-		totalTempoInputSamples = 0;
-		totalTempoEmittedSamples = 0;
-	}
-
-	function appendTempoSamples(outputParts, samples) {
-		if (samples && samples.length) {
-			outputParts.push(samples.slice());
-			totalTempoEmittedSamples += samples.length;
-		}
 	}
 
 	function appendTempoOutput(outputParts, samples) {
@@ -408,6 +397,10 @@
 			}
 		}
 		if (final) {
+			if (pitchInputBuffer.length) {
+				const remainingOffset = Math.min(Math.floor(pitchReadOffset), pitchInputBuffer.length - 1);
+				appendTempoOutput(outputParts, pitchInputBuffer.subarray(remainingOffset));
+			}
 			resetPitchProcessor();
 		}
 		return combineSampleParts(outputParts);
@@ -420,69 +413,26 @@
 		}
 		if (samples.length) {
 			tempoInputBuffer = appendSamples(tempoInputBuffer, samples);
-			totalTempoInputSamples += samples.length;
 		}
 		const outputParts = [];
 		const analysisHop = Math.max(1, Math.round(tempoSynthesisHopSamples * currentTempoRate));
 		while (tempoReadOffset + tempoFrameSamples <= tempoInputBuffer.length) {
 			const frameOffset = bestTempoFrameOffset(tempoReadOffset);
 			const frame = tempoInputBuffer.subarray(frameOffset, frameOffset + tempoFrameSamples);
-			appendTempoSamples(outputParts, tempoFrameOutput(frame));
-			tempoReadOffset += analysisHop;
+			appendTempoOutput(outputParts, tempoFrameOutput(frame));
+			tempoReadOffset = frameOffset + analysisHop;
 			if (tempoReadOffset > tempoSearchSamples) {
-				const discard = Math.min(tempoInputBuffer.length, tempoReadOffset - tempoSearchSamples);
+				const discard = tempoReadOffset - tempoSearchSamples;
 				tempoInputBuffer = tempoInputBuffer.slice(discard);
 				tempoReadOffset -= discard;
 			}
 		}
 		if (final) {
-			const targetTotalSamples = Math.round(totalTempoInputSamples / currentTempoRate);
-			const neededSamples = Math.max(0, targetTotalSamples - totalTempoEmittedSamples);
-
 			if (tempoStarted && tempoOverlapTail.length) {
-				if (neededSamples <= tempoOverlapTail.length) {
-					const tailPart = tempoOverlapTail.slice(0, neededSamples);
-					if (neededSamples < tempoOverlapTail.length && neededSamples > 8) {
-						const fadeLen = Math.min(32, Math.floor(neededSamples / 2));
-						for (let i = 0; i < fadeLen; i++) {
-							tailPart[neededSamples - 1 - i] *= (i / fadeLen);
-						}
-					}
-					appendTempoSamples(outputParts, tailPart);
-				} else {
-					appendTempoSamples(outputParts, tempoOverlapTail);
-					const remainingNeeded = neededSamples - tempoOverlapTail.length;
-					const remainingOffset = Math.min(tempoReadOffset, tempoInputBuffer.length);
-					const tail = tempoInputBuffer.subarray(remainingOffset);
-					if (tail.length > 0 && remainingNeeded > 0) {
-						const tailOut = new Float32Array(remainingNeeded);
-						const step = (tail.length - 1) / Math.max(1, remainingNeeded - 1);
-						for (let i = 0; i < remainingNeeded; i++) {
-							const rOff = i * step;
-							const idx = Math.floor(rOff);
-							const frac = rOff - idx;
-							const cur = tail[Math.min(idx, tail.length - 1)];
-							const nxt = tail[Math.min(idx + 1, tail.length - 1)];
-							tailOut[i] = cur + (nxt - cur) * frac;
-						}
-						appendTempoSamples(outputParts, tailOut);
-					}
-				}
-			} else {
-				if (neededSamples > 0 && tempoInputBuffer.length > 0) {
-					const tailOut = new Float32Array(neededSamples);
-					const step = (tempoInputBuffer.length - 1) / Math.max(1, neededSamples - 1);
-					for (let i = 0; i < neededSamples; i++) {
-						const rOff = i * step;
-						const idx = Math.floor(rOff);
-						const frac = rOff - idx;
-						const cur = tempoInputBuffer[Math.min(idx, tempoInputBuffer.length - 1)];
-						const nxt = tempoInputBuffer[Math.min(idx + 1, tempoInputBuffer.length - 1)];
-						tailOut[i] = cur + (nxt - cur) * frac;
-					}
-					appendTempoSamples(outputParts, tailOut);
-				}
+				appendTempoOutput(outputParts, tempoOverlapTail);
 			}
+			const remainingOffset = Math.min(tempoReadOffset, tempoInputBuffer.length);
+			appendTempoOutput(outputParts, tempoInputBuffer.subarray(remainingOffset));
 			resetTempoProcessor();
 		}
 		return combineSampleParts(outputParts);
