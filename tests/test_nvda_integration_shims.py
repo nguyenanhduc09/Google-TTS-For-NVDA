@@ -18,6 +18,7 @@ import logging
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import weakref
 from collections import OrderedDict, deque
@@ -828,6 +829,8 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
         driver._shutdownEvent = threading.Event()
         driver._fallbackTriggered = False
         driver._consecutiveRuntimeErrors = 0
+        driver._playerLock = threading.RLock()
+        driver._playerFeedLock = threading.RLock()
         driver._cacheLock = threading.RLock()
         driver._shortAudioCache = OrderedDict()
         driver._shortAudioCacheBytes = 0
@@ -2628,6 +2631,8 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
             punctInlineText = [c for c in punctInlineChunks if c[0] == "text"]
             self.assertEqual([mode0, mode0], [c[1][4] for c in punctInlineText])
 
+            # Consecutive sentences group into one text batch without inter-sentence BreakCommand
+            # or cold Chromium restarts when auto-language switching is off.
             multiChunks = list(
                 driver._iter_speech_chunks(
                     ["First sentence is clearly long enough. Second sentence follows."],
@@ -2640,7 +2645,15 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
                     threading.Event(),
                 )
             )
-            self.assertIn(("break", 45), multiChunks)
+            self.assertEqual([], [c for c in multiChunks if c[0] == "break"])
+            self.assertEqual(1, len(multiChunks))
+            self.assertEqual("First sentence is clearly long enough. Second sentence follows.", multiChunks[0][1][0])
+            self.assertEqual(
+                ["First sentence is clearly long enough. ", "Second sentence follows."],
+                multiChunks[0][1][3],
+            )
+            self.assertEqual(mode0, multiChunks[0][1][4])
+
             multiShort = list(
                 driver._iter_speech_chunks(
                     ["First sentence is clearly long enough. Second sentence follows."],
@@ -2653,7 +2666,36 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
                     threading.Event(),
                 )
             )
-            self.assertIn(("break", 15), multiShort)
+            self.assertEqual([], [c for c in multiShort if c[0] == "break"])
+            self.assertEqual(1, len(multiShort))
+            self.assertEqual(
+                ["First sentence is clearly long enough. ", "Second sentence follows."],
+                multiShort[0][1][3],
+            )
+            self.assertEqual(mode2, multiShort[0][1][4])
+
+            # With auto-language detection enabled and no explicit LangChangeCommand, consecutive sentences
+            # flush into separate text chunks (without synthetic break silences) for per-sentence voice detection.
+            with self._patched_conf(
+                **{self.pluginMod.CONFIG_SECTION: {self.pluginMod.CONFIG_AUTO_LANGUAGE_DETECTION: True}}
+            ):
+                autoChunks = list(
+                    driver._iter_speech_chunks(
+                        ["First sentence is clearly long enough. Second sentence follows."],
+                        "en1",
+                        50,
+                        False,
+                        50,
+                        100,
+                        mode2,
+                        threading.Event(),
+                    )
+                )
+            self.assertEqual(2, len(autoChunks))
+            self.assertEqual(
+                ["First sentence is clearly long enough.", "Second sentence follows."],
+                [c[1][0] for c in autoChunks],
+            )
 
             # 2. CharacterModeCommand spacing keeps IndexCommand offset aligned after CharacterModeCommand(False).
             charSeq = [
@@ -2672,30 +2714,40 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
             self.assertEqual([(1, 8)], idxList)
             self.assertEqual(" button", spokenText[idxList[0][1] :])
 
-            # 3. _FLUSH_GROUP_CHARS_THRESHOLD splits long single sentence only in PAUSE_MODE_SHORTEN_ALL.
+            # 3. Multi-clause sentences and multi-sentence batches group up to SHORT_CACHE_MAX_HIDDEN_SEGMENTS.
             longSentence = (
                 "First clause has plenty of readable words right here, "
                 "and the second clause keeps adding descriptive detail across many phrases so it exceeds "
                 "one hundred fifty characters cleanly before pausing right here, "
                 "while the third clause concludes with enough trailing content to require another segment later cleanly."
             )
-            shortInAll = list(
-                driver._iter_speech_chunks(
-                    ["This is short, concise, and clear."], "en1", 50, False, 50, 100, mode2, threading.Event()
-                )
-            )
-            self.assertEqual(1, sum(1 for k, _p in shortInAll if k == "text"))
-
             longInAll = list(
                 driver._iter_speech_chunks([longSentence], "en1", 50, False, 50, 100, mode2, threading.Event())
             )
-            self.assertGreaterEqual(sum(1 for k, _p in longInAll if k == "text"), 2)
-            self.assertIn(("break", 15), longInAll)
+            self.assertEqual(1, sum(1 for k, _p in longInAll if k == "text"))
+            self.assertEqual([], [c for c in longInAll if c[0] == "break"])
+            self.assertGreaterEqual(len(longInAll[0][1][3] or []), 2)
 
             longInDoNot = list(
                 driver._iter_speech_chunks([longSentence], "en1", 50, False, 50, 100, mode0, threading.Event())
             )
             self.assertEqual(1, sum(1 for k, _p in longInDoNot if k == "text"))
+
+            manySentences: list[Any] = []
+            for idx in range(26):
+                manySentences.append(
+                    f"Sentence number {idx:02d} keeps adding plenty of descriptive words until it clearly exceeds "
+                    "one hundred twenty characters in total right here."
+                )
+                if idx < 25:
+                    manySentences.append(cmds.IndexCommand(idx + 1))
+            batchedChunks = list(
+                driver._iter_speech_chunks(manySentences, "en1", 50, False, 50, 100, mode2, threading.Event())
+            )
+            self.assertEqual(2, len(batchedChunks))
+            self.assertEqual(24, len(batchedChunks[0][1][3] or []))
+            self.assertEqual(2, len(batchedChunks[1][1][3] or []))
+            self.assertEqual(list(range(1, 26)), [idx for c in batchedChunks for idx, _off in c[1][2]])
 
             # 4. Zero percent rate (rate=0) applies break & EOU scaling before _finish_request_audio().
             workerEvents: list[tuple[str, Any]] = []
@@ -2721,7 +2773,10 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
             pause=lambda sw: playerCalls.append(("pause", sw)),
             stop=lambda: playerCalls.append(("stop", None)),
         )
-        seg0BytesAfterEnd: list[int] = []
+        segmentEndReturnedCount = [0]
+        audible0 = b"\x10\x20" * 1920  # 3840 bytes = exact LIVE_MULTI_SEGMENT_LEAD_MS (80ms) at 24kHz
+        audible1 = b"\x11\x21" * 1920
+        silence = b"\x00\x00" * 24000  # 48000 bytes = 1000ms at 24kHz
 
         def fake_bridge_speak(
             text: str,
@@ -2732,14 +2787,12 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
             onSegmentEnd: Any = None,
             **kwargs: Any,
         ) -> dict[str, Any]:
-            audible = b"\x10\x20" * 1920  # 3840 bytes = exact LIVE_MULTI_SEGMENT_LEAD_MS (80ms) at 24kHz
-            silence = b"\x00\x00" * 24000  # 48000 bytes = 1000ms at 24kHz
-            onAudio(audible)
+            onAudio(audible0)
             onAudio(silence)
             if onSegmentEnd is not None:
                 onSegmentEnd()
-            seg0BytesAfterEnd.append(sum(len(c) for c in fedChunks))
-            onAudio(audible)
+            segmentEndReturnedCount[0] += 1
+            onAudio(audible1)
             onAudio(silence)
             return {"success": True, "done": True, "segmentEnds": 1}
 
@@ -2760,9 +2813,10 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
             hiddenSegments=["Part one ", "part two."],
             pauseShorteningMode=mode0,
         )
-        self.assertEqual(1, len(seg0BytesAfterEnd))
-        midPhraseSilenceBytes = seg0BytesAfterEnd[0] - 3840
-        finalTrailingSilenceBytes = sum(len(c) for c in fedChunks) - seg0BytesAfterEnd[0] - 3840
+        self.assertEqual(1, segmentEndReturnedCount[0])
+        seg1AudibleIdx = fedChunks.index(audible1)
+        midPhraseSilenceBytes = sum(len(chunk) for chunk in fedChunks[:seg1AudibleIdx]) - len(audible0)
+        finalTrailingSilenceBytes = sum(len(chunk) for chunk in fedChunks[seg1AudibleIdx + 1 :])
         self.assertGreater(midPhraseSilenceBytes, 0)
         self.assertLess(midPhraseSilenceBytes, 5000)
         self.assertEqual(48000, finalTrailingSilenceBytes)
@@ -2781,6 +2835,89 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
         driver.pause(False)
         self.assertFalse(driver._isPaused)
         self.assertEqual([("pause", True), ("pause", False)], playerCalls)
+
+        # 4. Multi-sentence hiddenSegments advance SayAll IndexCommands at segment boundaries on segmentEnd.
+        idxEvents: list[Any] = []
+        seg0IndexReached = threading.Event()
+        driver._shortAudioCache.clear()
+        driver._shortAudioCacheBytes = 0
+
+        def _record_index(**kw: Any) -> None:
+            idxEvents.append(("index", kw["index"]))
+            if kw["index"] == 7:
+                seg0IndexReached.set()
+
+        with mock.patch.object(
+            self.stubs["synthDriverHandler"].synthIndexReached,
+            "notify",
+            side_effect=_record_index,
+        ):
+
+            def _multi_sentence_speak(
+                text: str,
+                options: dict[str, Any],
+                onAudio: Any,
+                cancelEvent: threading.Event,
+                *,
+                onSegmentEnd: Any = None,
+                **kwargs: Any,
+            ) -> dict[str, Any]:
+                onAudio(audible0)
+                if onSegmentEnd is not None:
+                    onSegmentEnd()
+                self.assertTrue(seg0IndexReached.wait(timeout=2.0))
+                idxEvents.append(("before_seg1_audio", None))
+                onAudio(audible1)
+                return {"success": True, "done": True, "segmentEnds": 1}
+
+            driver._bridge.speak = _multi_sentence_speak
+            driver._speak_text(
+                "First sentence. Second sentence.",
+                opts,
+                threading.Event(),
+                indexes=[(7, 15), (8, 32)],
+                hiddenSegments=["First sentence. ", "Second sentence."],
+                pauseShorteningMode=mode0,
+            )
+        self.assertEqual([("index", 7), ("before_seg1_audio", None), ("index", 8)], idxEvents)
+
+        # 5. SeaNet PAUSE_MODE_SHORTEN_ALL keeps brief consonant closures (< minPauseTriggerMs) unclipped
+        # while trimming higher-noise-floor neural pauses (>= minPauseTriggerMs).
+        seaChunks: list[bytes] = []
+        stopClosure = (90).to_bytes(2, "little", signed=True) * 480  # 20ms at ±90 (< 45ms minPauseTriggerMs)
+        neuralPause = (95).to_bytes(2, "little", signed=True) * 2880  # 120ms at ±95 (<= 110 SeaNet floor)
+
+        def _seanet_speak(
+            text: str,
+            options: dict[str, Any],
+            onAudio: Any,
+            cancelEvent: threading.Event,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            onAudio(audible0)
+            onAudio(stopClosure)
+            onAudio(audible1)
+            onAudio(neuralPause)
+            onAudio(audible0)
+            return {"success": True, "done": True, "segmentEnds": 0}
+
+        seaDriver = self._make_real_driver(
+            bridgeSpeak=_seanet_speak,
+            player=self._make_fake_player(feed=lambda pcm: seaChunks.append(pcm)),
+        )
+        seaDriver.catalog.package_for_voice = lambda _vid: SimpleNamespace(id="vi-vn-x-multi-seanet")
+        seaOpts = dict(opts, outputGain=1.70, rate=1.0)
+        seaDriver._speak_text(
+            "Một câu, hai câu.",
+            seaOpts,
+            threading.Event(),
+            pauseShorteningMode=self.synthMod._PAUSE_MODE_SHORTEN_ALL,
+        )
+        totalSeaBytes = sum(len(chunk) for chunk in seaChunks)
+        expectedBase = len(audible0) + len(stopClosure) + len(audible1) + len(audible0)
+        trimmedPauseBytes = totalSeaBytes - expectedBase
+        self.assertGreater(trimmedPauseBytes, 0)
+        self.assertLessEqual(trimmedPauseBytes, 1000)
 
     def test_sayall_wrapper_and_live_catalog_refresh(self) -> None:
         plugin = self.pluginMod
@@ -3340,6 +3477,239 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
             if isinstance(x, (cmds.LangChangeCommand, plugin._GoogleTtsProfileLangCommand))
         ]
         self.assertEqual(["en-US", "ja-JP", "en-US"], langTags)
+
+    def test_speak_text_slow_consumer_nonblocking_segment_end_and_player_serialization(self) -> None:
+        stateLock = threading.Lock()
+        activeOps = 0
+        maxConcurrentOps = 0
+        timeline: list[str] = []
+
+        def enter_player_op() -> None:
+            nonlocal activeOps, maxConcurrentOps
+            with stateLock:
+                activeOps += 1
+                if activeOps > maxConcurrentOps:
+                    maxConcurrentOps = activeOps
+
+        def exit_player_op() -> None:
+            nonlocal activeOps
+            with stateLock:
+                activeOps -= 1
+
+        # 1. Long utterance (>2.0s real-time WavePlayer drain) must wait cleanly without
+        # bleeding audio into the next utterance, starving cache, or racing WavePlayer.feed.
+        slowChunk = b"\x10\x20" * 2400
+        fastChunk = b"\x20\x30" * 2400
+
+        def slow_feed(pcm: bytes) -> None:
+            enter_player_op()
+            try:
+                if pcm == slowChunk:
+                    timeline.append("start-1")
+                    time.sleep(2.15)
+                    timeline.append("end-1")
+                elif pcm == fastChunk:
+                    timeline.append("start-2")
+                    timeline.append("end-2")
+                else:
+                    timeline.append("silence")
+            finally:
+                exit_player_op()
+
+        def sync_op() -> None:
+            enter_player_op()
+            try:
+                timeline.append("sync")
+            finally:
+                exit_player_op()
+
+        slowPlayer = self._make_fake_player(feed=slow_feed, sync=sync_op, idle=sync_op)
+
+        def sequential_speak(
+            text: str,
+            options: dict[str, Any],
+            onAudio: Any,
+            cancelEvent: threading.Event,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            onAudio(slowChunk if "First" in text else fastChunk)
+            return {"success": True, "done": True, "segmentEnds": 0}
+
+        driver = self._make_real_driver(bridgeSpeak=sequential_speak, player=slowPlayer)
+        opts = driver._speech_options(50, 50, 100, "en1", False)
+        t0 = time.monotonic()
+        driver._speak_text("First long utterance.", opts, threading.Event())
+        elapsedFirst = time.monotonic() - t0
+        driver._feed_silence(20)
+        driver._sync_player()
+        driver._speak_text("Second utterance.", opts, threading.Event())
+
+        self.assertGreaterEqual(elapsedFirst, 2.05)
+        self.assertEqual(["start-1", "end-1", "silence", "sync", "start-2", "end-2"], timeline)
+        self.assertEqual(1, maxConcurrentOps)
+        firstKey = driver._short_cache_key(
+            "First long utterance.", opts, None, self.synthMod._PAUSE_MODE_DO_NOT_SHORTEN
+        )
+        self.assertIn(firstKey, driver._shortAudioCache)
+        self.assertEqual(slowChunk, driver._shortAudioCache[firstKey])
+
+        # 2. on_segment_end() must not block the bridge/CDP reader thread even while
+        # WavePlayer.feed() is stalled on segment 0, yet FIFO ordering stays intact.
+        seg0Started = threading.Event()
+        seg0Release = threading.Event()
+        segEndDuration: list[float] = []
+        fedSegChunks: list[bytes] = []
+        seg0Chunk = b"\x01\x02" * 2400
+        seg1Chunk = b"\x03\x04" * 2400
+
+        def gated_feed(pcm: bytes) -> None:
+            fedSegChunks.append(pcm)
+            if pcm == seg0Chunk:
+                seg0Started.set()
+                seg0Release.wait(timeout=2.0)
+
+        def nonblocking_segment_speak(
+            text: str,
+            options: dict[str, Any],
+            onAudio: Any,
+            cancelEvent: threading.Event,
+            *,
+            onSegmentEnd: Any = None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            onAudio(seg0Chunk)
+            self.assertTrue(seg0Started.wait(timeout=1.0))
+            start = time.monotonic()
+            if onSegmentEnd is not None:
+                onSegmentEnd()
+            segEndDuration.append(time.monotonic() - start)
+            onAudio(seg1Chunk)
+            seg0Release.set()
+            return {"success": True, "done": True, "segmentEnds": 1}
+
+        segDriver = self._make_real_driver(
+            bridgeSpeak=nonblocking_segment_speak,
+            player=self._make_fake_player(feed=gated_feed),
+        )
+        segDriver._speak_text(
+            "Segment zero. Segment one.",
+            opts,
+            threading.Event(),
+            hiddenSegments=["Segment zero. ", "Segment one."],
+        )
+        self.assertEqual(1, len(segEndDuration))
+        self.assertLess(segEndDuration[0], 0.1)
+        self.assertEqual([seg0Chunk, seg1Chunk], fedSegChunks)
+
+        # 3. Concurrent feed/silence/sync serialize on _player_feed_lock (no concurrent
+        # WavePlayer.feed/sync/idle -> 0x88890007 prevention) while pause()/cancel() stay unblocked
+        # and cancel() wakes & joins audioConsumer cleanly without leaking threads.
+        concActive = 0
+        concMax = 0
+        feedEntered = threading.Event()
+        feedStopped = threading.Event()
+        opEvents: list[str] = []
+
+        def blocking_feed(pcm: bytes) -> None:
+            nonlocal concActive, concMax
+            with stateLock:
+                concActive += 1
+                if concActive > concMax:
+                    concMax = concActive
+            try:
+                opEvents.append("feed-enter")
+                feedEntered.set()
+                feedStopped.wait(timeout=2.0)
+            finally:
+                with stateLock:
+                    concActive -= 1
+
+        def blocked_idle() -> None:
+            nonlocal concActive, concMax
+            with stateLock:
+                concActive += 1
+                if concActive > concMax:
+                    concMax = concActive
+            try:
+                opEvents.append("idle")
+            finally:
+                with stateLock:
+                    concActive -= 1
+
+        def wake_stop() -> None:
+            opEvents.append("stop")
+            feedStopped.set()
+
+        cancelDriver = self._make_real_driver(
+            player=self._make_fake_player(
+                feed=blocking_feed,
+                idle=blocked_idle,
+                sync=blocked_idle,
+                pause=lambda sw: opEvents.append(f"pause-{sw}"),
+                stop=wake_stop,
+            )
+        )
+        reqCancel = threading.Event()
+        cancelDriver._activeCancelEvent = reqCancel
+
+        def bridge_blocked_speak(
+            text: str,
+            options: dict[str, Any],
+            onAudio: Any,
+            cancelEvent: threading.Event,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            onAudio(b"\x05\x06" * 2400)
+            cancelEvent.wait(timeout=2.0)
+            return {"success": False, "cancelled": True, "done": False, "segmentEnds": 0}
+
+        cancelDriver._bridge.speak = bridge_blocked_speak
+        workerExc: list[BaseException] = []
+
+        def run_speak() -> None:
+            try:
+                cancelDriver._speak_text("Blocked long speech.", opts, reqCancel)
+            except BaseException as exc:
+                workerExc.append(exc)
+
+        speakThread = threading.Thread(target=run_speak, daemon=True)
+        speakThread.start()
+        self.assertTrue(feedEntered.wait(timeout=1.0))
+
+        # Competing feeder/sync thread must block on _player_feed_lock until feed exits
+        # and then bail cleanly on _active_cancel_set().
+        competingDone = threading.Event()
+
+        def run_competing_player_ops() -> None:
+            cancelDriver._feed_silence(20)
+            cancelDriver._sync_player()
+            competingDone.set()
+
+        competingThread = threading.Thread(target=run_competing_player_ops, daemon=True)
+        competingThread.start()
+
+        # pause() and cancel() must NEVER deadlock behind _player_feed_lock.
+        tCtrl = time.monotonic()
+        cancelDriver.pause(True)
+        cancelDriver.pause(False)
+        cancelDriver.cancel()
+        ctrlElapsed = time.monotonic() - tCtrl
+
+        speakThread.join(timeout=1.0)
+        competingThread.join(timeout=1.0)
+        self.assertFalse(speakThread.is_alive())
+        self.assertFalse(competingThread.is_alive())
+        self.assertLess(ctrlElapsed, 0.25)
+        self.assertEqual([], workerExc)
+        self.assertEqual(1, concMax)
+        self.assertNotIn("idle", opEvents)
+        self.assertGreaterEqual(opEvents.count("stop"), 1)
+        self.assertEqual(["feed-enter", "pause-True", "pause-False"], [e for e in opEvents if e != "stop"])
+        self.assertEqual("feed-enter", opEvents[0])
+        # Ensure consumerThread inside _speak_text exited before returning.
+        self.assertFalse(
+            any(t.is_alive() and t.name == "googleTtsForNvda.audioConsumer" for t in threading.enumerate())
+        )
 
 
 if __name__ == "__main__":

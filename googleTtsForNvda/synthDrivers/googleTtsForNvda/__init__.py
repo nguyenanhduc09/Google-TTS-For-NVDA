@@ -72,11 +72,15 @@ from .speech_processing import (
 )
 from .speech_processing import (
     LIVE_MULTI_SEGMENT_LEAD_MS,
+    SHORT_CACHE_MAX_CHARS,
+    SHORT_CACHE_MAX_HIDDEN_SEGMENTS,
     PcmLeadBuffer,
     create_pcm_silence_shortener,
     effective_chrome_rate,
     is_complete_speech_result,
     keep_silence_ms_for_rate,
+    min_pause_trigger_ms_for_rate,
+    pause_silence_noise_floor,
     segment_audio_cache_key,
     short_audio_cache_key,
 )
@@ -104,8 +108,6 @@ _OUTPUT_GAIN_MAKEUP = audio_math.OUTPUT_GAIN_MAKEUP
 _PROTECTED_ENGINE_RATE = audio_math.PROTECTED_ENGINE_RATE
 _MIN_ARTIFICIAL_RATE = audio_math.MIN_ARTIFICIAL_RATE
 _MAX_ARTIFICIAL_RATE = audio_math.MAX_ARTIFICIAL_RATE
-_NORMAL_SENTENCE_BREAK_MS = 45
-_SHORTENED_SENTENCE_BREAK_MS = 15
 _BREAK_RATE_FACTOR_MIN = audio_math.BREAK_RATE_FACTOR_MIN
 _BREAK_RATE_FACTOR_MAX = audio_math.BREAK_RATE_FACTOR_MAX
 _GOOGLE_TTS_LANG_CHANGE_ATTR = language_detector.GOOGLE_TTS_LANG_CHANGE_ATTR
@@ -117,10 +119,6 @@ _VOICE_WARMUP_TEXT = " "
 _AUTO_LANGUAGE_NOTICE_ID = "notice"
 _AUTO_DETECT_MIN_SCORE = 2
 _AUTO_DETECT_MIN_MARGIN = 1
-# Flush a grouped speech segment at soft phrase boundaries when the
-# accumulated character count reaches this threshold.  This balances
-# segment-cache hit-rate against too many tiny CDP round-trips.
-_FLUSH_GROUP_CHARS_THRESHOLD = 120
 
 
 class ReadOnlyTextDriverSetting(DriverSetting):
@@ -320,6 +318,9 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         self._availableVoices = self._build_available_voices()
         self._store_available_languages(set(self._speakersByLanguage))
         self._playerLock = threading.RLock()
+        # Serialize WavePlayer stream writes (feed/sync/idle/recreate) separately from
+        # _playerLock so cancel()/pause() can still invoke stop()/pause() without blocking.
+        self._playerFeedLock = threading.RLock()
         self._catalogLock = threading.RLock()
         self._warmupLock = threading.Lock()
         self._playerOutputDevice = self._current_output_device()
@@ -359,6 +360,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
     def _player_lock(self) -> threading.RLock | AbstractContextManager[Any]:
         lock = getattr(self, "_playerLock", None)
+        return lock if lock is not None else nullcontext()
+
+    def _player_feed_lock(self) -> threading.RLock | AbstractContextManager[Any]:
+        lock = getattr(self, "_playerFeedLock", None)
         return lock if lock is not None else nullcontext()
 
     def _catalog_lock(self) -> threading.RLock | AbstractContextManager[Any]:
@@ -715,20 +720,21 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     return _call_compat(WavePlayer, 1, SAMPLE_RATE, 16)
 
     def _recreate_wave_player(self, outputDevice: str | None = None) -> None:
-        with self._player_lock():
-            if self._is_shutting_down():
-                return
-            targetDevice = self._current_output_device() if outputDevice is None else outputDevice
-            newPlayer = self._create_wave_player(targetDevice)
-            oldPlayer = getattr(self, "_player", None)
-            self._playerOutputDevice = targetDevice
-            self._player = newPlayer
-            if getattr(self, "_isPaused", False):
+        with self._player_feed_lock():
+            with self._player_lock():
+                if self._is_shutting_down():
+                    return
+                targetDevice = self._current_output_device() if outputDevice is None else outputDevice
+                newPlayer = self._create_wave_player(targetDevice)
+                oldPlayer = getattr(self, "_player", None)
+                self._playerOutputDevice = targetDevice
+                self._player = newPlayer
+                if getattr(self, "_isPaused", False):
+                    with suppress(Exception):
+                        newPlayer.pause(True)
+            if oldPlayer is not None:
                 with suppress(Exception):
-                    newPlayer.pause(True)
-        if oldPlayer is not None:
-            with suppress(Exception):
-                oldPlayer.close()
+                    oldPlayer.close()
 
     def _ensure_current_output_device(self) -> None:
         outputDevice = self._current_output_device()
@@ -1074,27 +1080,34 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 firstTextSegment = False
                 yield ("text", (textGroup, options, groupIndexes, hiddenSegments, pauseShorteningMode))
 
+            # Only split sentence groups mid-chunk when fallback per-sentence auto-language
+            # detection is needed (no active profile tag) or to respect cache/batch caps;
+            # otherwise keep sentences in one hiddenSegments session so Chromium synthesizes
+            # ahead continuously without adding artificial inter-sentence synthesis gaps or breaks.
+            autoDetectSentenceFlush = self._auto_language_detection_enabled() and activeLanguage is None
             for i, (segment, segmentIndexes) in enumerate(segments):
                 if cancelEvent.is_set():
                     return
+                accumulatedChars = sum(len(seg) for seg, _ in groupedSegments)
+                if groupedSegments and (
+                    len(groupedSegments) >= SHORT_CACHE_MAX_HIDDEN_SEGMENTS
+                    or accumulatedChars + len(segment) > SHORT_CACHE_MAX_CHARS
+                ):
+                    intermediateMode = (
+                        _PAUSE_MODE_SHORTEN_ALL
+                        if pauseMode == _PAUSE_MODE_SHORTEN_ALL
+                        else (
+                            _PAUSE_MODE_DO_NOT_SHORTEN
+                            if self._ends_with_pause_punctuation(groupedSegments[-1][0])
+                            else _PAUSE_MODE_SHORTEN_END_ONLY
+                        )
+                    )
+                    yield from flush_grouped_segments(intermediateMode)
                 groupedSegments.append((segment, segmentIndexes))
-                if i < len(segments) - 1:
-                    isSentenceBoundary = self._should_pause_after_segment(segment)
-                    accumulatedChars = sum(len(seg) for seg, _ in groupedSegments)
-                    if isSentenceBoundary or (
-                        pauseMode == _PAUSE_MODE_SHORTEN_ALL and accumulatedChars >= _FLUSH_GROUP_CHARS_THRESHOLD
-                    ):
-                        yield from flush_grouped_segments(
-                            _PAUSE_MODE_SHORTEN_ALL
-                            if pauseMode == _PAUSE_MODE_SHORTEN_ALL
-                            else _PAUSE_MODE_DO_NOT_SHORTEN,
-                        )
-                        yield (
-                            "break",
-                            self._sentence_break_milliseconds(pauseMode)
-                            if isSentenceBoundary
-                            else _SHORTENED_SENTENCE_BREAK_MS,
-                        )
+                if autoDetectSentenceFlush and i < len(segments) - 1 and self._should_pause_after_segment(segment):
+                    yield from flush_grouped_segments(
+                        _PAUSE_MODE_SHORTEN_ALL if pauseMode == _PAUSE_MODE_SHORTEN_ALL else _PAUSE_MODE_DO_NOT_SHORTEN,
+                    )
             lastSegment = segments[-1][0] if segments else ""
             lastSegmentEndsWithPunct = self._ends_with_pause_punctuation(lastSegment)
             if pauseMode == _PAUSE_MODE_SHORTEN_ALL:
@@ -1261,11 +1274,6 @@ class SynthDriver(synthDriverHandler.SynthDriver):
 
     def _ends_with_pause_punctuation(self, segment: str) -> bool:
         return _TEXT_SEGMENTER.ends_with_pause_punctuation(segment)
-
-    def _sentence_break_milliseconds(self, pauseMode: str) -> int:
-        if pauseMode == _PAUSE_MODE_SHORTEN_ALL:
-            return _SHORTENED_SENTENCE_BREAK_MS
-        return _NORMAL_SENTENCE_BREAK_MS
 
     def _speech_loop(self) -> None:
         while not self._shutdownEvent.is_set():
@@ -1545,8 +1553,23 @@ class SynthDriver(synthDriverHandler.SynthDriver):
             if pauseShorteningMode == _PAUSE_MODE_DO_NOT_SHORTEN and hasUnpunctuatedHiddenBoundary
             else pauseShorteningMode
         )
+        packageId = ""
+        voiceId = str(options.get("voiceId") or "")
+        if voiceId:
+            with self._catalog_lock(), suppress(KeyError, AttributeError):
+                packageId = self.catalog.package_for_voice(voiceId).id
         keepSilenceMs = keep_silence_ms_for_rate(effectiveShortenerMode, chromeRate)
-        silenceShortener = create_pcm_silence_shortener(effectiveShortenerMode, SAMPLE_RATE, keepSilenceMs)
+        noiseFloor = pause_silence_noise_floor(packageId, options)
+        minPauseTriggerMs = (
+            min_pause_trigger_ms_for_rate(chromeRate) if effectiveShortenerMode == _PAUSE_MODE_SHORTEN_ALL else 0
+        )
+        silenceShortener = create_pcm_silence_shortener(
+            effectiveShortenerMode,
+            SAMPLE_RATE,
+            keepSilenceMs,
+            noiseFloor=noiseFloor,
+            minPauseTriggerMs=minPauseTriggerMs,
+        )
         leadBuffer = (
             PcmLeadBuffer(sampleRate=SAMPLE_RATE, leadMs=LIVE_MULTI_SEGMENT_LEAD_MS)
             if len(synthesisSegments) > 1 and not cachedPrefixAudio
@@ -1561,6 +1584,7 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         pendingIndexes = sorted(remainingIndexes, key=lambda item: item[1])
         deferredMarkOffset = -1
         boundarySegmentIndex = 0
+        completedSegmentChars = 0
         eventQueue: queue.SimpleQueue[tuple[str, Any]] = queue.SimpleQueue()
         consumerErrors: list[BaseException] = []
 
@@ -1602,11 +1626,12 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     notify_indexes_through(flushedOffset)
 
         def on_segment_end_impl() -> None:
-            nonlocal boundarySegmentIndex
+            nonlocal boundarySegmentIndex, completedSegmentChars
             boundarySegment = (
                 synthesisSegments[boundarySegmentIndex] if boundarySegmentIndex < len(synthesisSegments) else ""
             )
             boundarySegmentIndex += 1
+            completedSegmentChars += len(boundarySegment)
             if silenceShortener is not None and not cancelEvent.is_set():
                 shortenBoundary = (
                     pauseShorteningMode == _PAUSE_MODE_SHORTEN_ALL
@@ -1617,6 +1642,8 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                         shortenPause=shortenBoundary,
                     )
                 )
+            if pendingIndexes and not cancelEvent.is_set():
+                on_mark_impl(completedSegmentChars)
             if collectSegmentAudio:
                 completedSegmentAudio.append(b"".join(segmentAudioParts))
                 segmentAudioParts.clear()
@@ -1635,17 +1662,15 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                     elif kind == "mark":
                         on_mark_impl(payload)
                     elif kind == "segmentEnd":
-                        try:
+                        if not cancelEvent.is_set() and not self._is_shutting_down():
                             on_segment_end_impl()
-                        finally:
-                            payload.set()
                     elif kind == "flush":
                         if silenceShortener is not None and not cancelEvent.is_set():
                             if pauseShorteningMode == _PAUSE_MODE_DO_NOT_SHORTEN:
                                 feed_processed_audio(silenceShortener.flush_boundary(shortenPause=False))
                             else:
                                 feed_processed_audio(silenceShortener.finish())
-                        if collectSegmentAudio:
+                        if collectSegmentAudio and not cancelEvent.is_set():
                             completedSegmentAudio.append(b"".join(segmentAudioParts))
                             segmentAudioParts.clear()
                         if leadBuffer is not None and not cancelEvent.is_set():
@@ -1665,11 +1690,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 eventQueue.put(("mark", charOffset))
 
         def on_segment_end() -> None:
-            ackEvent = threading.Event()
-            eventQueue.put(("segmentEnd", ackEvent))
-            while not ackEvent.wait(timeout=0.05):
-                if cancelEvent.is_set() or self._is_shutting_down() or not consumerThread.is_alive():
-                    break
+            # Never block the shared CDP reader thread on WavePlayer real-time drain;
+            # eventQueue preserves strict FIFO order between segments and audio chunks.
+            if not cancelEvent.is_set() and not self._is_shutting_down():
+                eventQueue.put(("segmentEnd", None))
 
         consumerThread = threading.Thread(
             name="googleTtsForNvda.audioConsumer",
@@ -1692,11 +1716,21 @@ class SynthDriver(synthDriverHandler.SynthDriver):
                 eventQueue.put(("flush", None))
         finally:
             eventQueue.put(("done", None))
-            consumerThread.join(timeout=2.0)
+            # While speech remains active, drain audioConsumer completely even for long
+            # utterances (>2s) so the previous sentence never bleeds into the next or
+            # races WavePlayer.feed across sequential requests.
+            while consumerThread.is_alive() and not cancelEvent.is_set() and not self._is_shutting_down():
+                consumerThread.join(timeout=0.05)
+            if consumerThread.is_alive():
+                player = self._current_player()
+                if player is not None:
+                    with suppress(Exception):
+                        player.stop()
+                consumerThread.join(timeout=2.0)
         if consumerErrors and not cancelEvent.is_set():
             raise consumerErrors[0]
 
-        audio = b"".join(audioParts) if audioParts else b""
+        audio = b"".join(audioParts) if (audioParts and not consumerThread.is_alive()) else b""
         if deferredMarkOffset >= 0 and not cancelEvent.is_set():
             notify_indexes_through(deferredMarkOffset, sync=self._isPaused)
             deferredMarkOffset = -1
@@ -1772,45 +1806,48 @@ class SynthDriver(synthDriverHandler.SynthDriver):
     ) -> None:
         if not pcm or self._is_shutting_down() or self._active_cancel_set():
             return
-        self._audioChunksSinceDeviceCheck += 1
-        if self._audioChunksSinceDeviceCheck >= 50:
-            self._ensure_current_output_device()
-            self._audioChunksSinceDeviceCheck = 0
-        elif self._audio_device_error():
-            self._recreate_wave_player()
-            self._audioChunksSinceDeviceCheck = 0
-        player = self._current_player()
-        if player is None or self._is_shutting_down() or self._active_cancel_set():
-            return
-        if preparePlayer is not None:
-            preparePlayer(player)
-        try:
-            player.feed(pcm)
-        except Exception:
+        with self._player_feed_lock():
             if self._is_shutting_down() or self._active_cancel_set():
                 return
-            label = (
-                "WavePlayer.feed failed during silence; recreating WavePlayer and retrying."
-                if isSilence
-                else "WavePlayer.feed failed; recreating WavePlayer and retrying."
-            )
-            log.debug(label, exc_info=True)
-            self._recreate_wave_player()
-            if self._is_shutting_down() or self._active_cancel_set():
+            self._audioChunksSinceDeviceCheck += 1
+            if self._audioChunksSinceDeviceCheck >= 50:
+                self._ensure_current_output_device()
+                self._audioChunksSinceDeviceCheck = 0
+            elif self._audio_device_error():
+                self._recreate_wave_player()
+                self._audioChunksSinceDeviceCheck = 0
+            player = self._current_player()
+            if player is None or self._is_shutting_down() or self._active_cancel_set():
                 return
-            retryPlayer = self._current_player()
-            if retryPlayer is not None:
-                if preparePlayer is not None:
-                    preparePlayer(retryPlayer)
-                try:
-                    retryPlayer.feed(pcm)
-                except Exception:
-                    log.debug(
-                        "WavePlayer.feed retry failed during silence."
-                        if isSilence
-                        else "WavePlayer.feed retry failed.",
-                        exc_info=True,
-                    )
+            if preparePlayer is not None:
+                preparePlayer(player)
+            try:
+                player.feed(pcm)
+            except Exception:
+                if self._is_shutting_down() or self._active_cancel_set():
+                    return
+                label = (
+                    "WavePlayer.feed failed during silence; recreating WavePlayer and retrying."
+                    if isSilence
+                    else "WavePlayer.feed failed; recreating WavePlayer and retrying."
+                )
+                log.debug(label, exc_info=True)
+                self._recreate_wave_player()
+                if self._is_shutting_down() or self._active_cancel_set():
+                    return
+                retryPlayer = self._current_player()
+                if retryPlayer is not None:
+                    if preparePlayer is not None:
+                        preparePlayer(retryPlayer)
+                    try:
+                        retryPlayer.feed(pcm)
+                    except Exception:
+                        log.debug(
+                            "WavePlayer.feed retry failed during silence."
+                            if isSilence
+                            else "WavePlayer.feed retry failed.",
+                            exc_info=True,
+                        )
 
     def _feed_audio(self, pcm: bytes) -> None:
         self._write_pcm_to_player(pcm, isSilence=False)
@@ -1856,23 +1893,34 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         if not cancelEvent.is_set() and position < totalBytes:
             self._feed_audio(pcm[position:])
 
-    def _sync_player(self) -> None:
+    def _drain_player(self, *, preferSync: bool, failureMessage: str) -> None:
+        """Flush pending WavePlayer audio under the feeder lock, recreating on error."""
         if self._is_shutting_down() or self._active_cancel_set():
             return
-        player = self._current_player()
-        if player is None:
-            return
-        try:
-            sync = getattr(player, "sync", None)
-            if sync is not None:
-                sync()
-                return
-            player.idle()
-        except Exception:
+        with self._player_feed_lock():
             if self._is_shutting_down() or self._active_cancel_set():
                 return
-            log.debug("WavePlayer sync/idle failed; recreating WavePlayer.", exc_info=True)
-            self._recreate_wave_player()
+            player = self._current_player()
+            if player is None:
+                return
+            try:
+                if preferSync:
+                    sync = getattr(player, "sync", None)
+                    if sync is not None:
+                        sync()
+                        return
+                player.idle()
+            except Exception:
+                if self._is_shutting_down() or self._active_cancel_set():
+                    return
+                log.debug(failureMessage, exc_info=True)
+                self._recreate_wave_player()
+
+    def _sync_player(self) -> None:
+        self._drain_player(
+            preferSync=True,
+            failureMessage="WavePlayer sync/idle failed; recreating WavePlayer.",
+        )
 
     def _has_queued_speech(self) -> bool:
         with self._speechCondition:
@@ -1899,16 +1947,10 @@ class SynthDriver(synthDriverHandler.SynthDriver):
         if self._has_queued_speech():
             self._sync_player()
             return
-        player = self._current_player()
-        if player is None:
-            return
-        try:
-            player.idle()
-        except Exception:
-            if self._is_shutting_down() or self._active_cancel_set():
-                return
-            log.debug("WavePlayer.idle failed at end of request; recreating WavePlayer.", exc_info=True)
-            self._recreate_wave_player()
+        self._drain_player(
+            preferSync=False,
+            failureMessage="WavePlayer.idle failed at end of request; recreating WavePlayer.",
+        )
 
     def _short_cache_key(
         self,

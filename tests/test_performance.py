@@ -36,12 +36,14 @@ def _read_driver_constant(name: str) -> object:
 
 
 class SegmentFlushThresholdTests(unittest.TestCase):
-    """Verify the segment flush threshold constant (live flush behavior is tested on real SynthDriver)."""
+    """Verify multi-segment batch limits (live flush behavior is tested on real SynthDriver)."""
 
-    def test_threshold_constant_value(self) -> None:
-        """Verify the flush threshold constant is set correctly."""
-        threshold = _read_driver_constant("_FLUSH_GROUP_CHARS_THRESHOLD")
-        self.assertEqual(120, threshold)
+    processing = processing
+
+    def test_multi_segment_batch_limits(self) -> None:
+        """Verify batching caps allow multi-sentence utterances without 120-char flushes."""
+        self.assertEqual(5000, self.processing.SHORT_CACHE_MAX_CHARS)
+        self.assertEqual(24, self.processing.SHORT_CACHE_MAX_HIDDEN_SEGMENTS)
 
 
 class PcmLeadBufferPerformanceTests(unittest.TestCase):
@@ -73,10 +75,15 @@ class PauseModePerformanceTests(unittest.TestCase):
 
     processing = processing
 
-    def test_sentence_break_ms_constants(self) -> None:
-        """Verify sentence break constants."""
-        self.assertEqual(45, _read_driver_constant("_NORMAL_SENTENCE_BREAK_MS"))
-        self.assertEqual(15, _read_driver_constant("_SHORTENED_SENTENCE_BREAK_MS"))
+    def test_pause_shortening_timing_constants(self) -> None:
+        """Verify pause shortening and stop-closure guard timings."""
+        self.assertEqual(20, self.processing.SHORTENED_SILENCE_KEEP_MS)
+        self.assertEqual(10, self.processing.SHORTENED_ALL_PAUSES_KEEP_MS)
+        self.assertEqual(10, self.processing.keep_silence_ms_for_rate(self.processing.PAUSE_MODE_SHORTEN_ALL, 1.175))
+        self.assertEqual(
+            20, self.processing.keep_silence_ms_for_rate(self.processing.PAUSE_MODE_SHORTEN_END_ONLY, 1.175)
+        )
+        self.assertEqual(45, self.processing.min_pause_trigger_ms_for_rate(1.0))
 
     def test_preload_resume_delay(self) -> None:
         """Verify preload resume delay constant."""

@@ -95,8 +95,8 @@ class PcmSilenceShortenerTests(unittest.TestCase):
         shorten_all = _samples(self._process(self.processing.PAUSE_MODE_SHORTEN_ALL, pcm))
 
         self.assertEqual(pcm, do_not_shorten)
-        self.assertEqual((*([1000] * 4), *([0] * 100), *([1200] * 4), *([0] * 35)), end_only)
-        self.assertEqual((*([1000] * 4), *([0] * 25), *([1200] * 4), *([0] * 25)), shorten_all)
+        self.assertEqual((*([1000] * 4), *([0] * 100), *([1200] * 4), *([0] * 20)), end_only)
+        self.assertEqual((*([1000] * 4), *([0] * 10), *([1200] * 4), *([0] * 10)), shorten_all)
 
     def test_noise_floor_is_inclusive(self) -> None:
         self.assertFalse(self.processing.pcm_has_audible_sample(_pcm(-48, 0, 48)))
@@ -108,7 +108,7 @@ class PcmSilenceShortenerTests(unittest.TestCase):
             1000,
         )
         output = shortener.feed(_pcm(*([48] * 60), 49, -49, *([0] * 60))) + shortener.finish()
-        self.assertEqual((*([48] * 25), 49, -49, *([0] * 25)), _samples(output))
+        self.assertEqual((*([48] * 10), 49, -49, *([0] * 10)), _samples(output))
 
     def test_pcm_chunk_boundaries_do_not_change_output(self) -> None:
         pcm = _pcm(*([0] * 60), *([800] * 7), *([0] * 60), *([-900] * 7), *([0] * 60))
@@ -188,7 +188,7 @@ class PcmSilenceShortenerTests(unittest.TestCase):
         )
         second = shortener.feed(_pcm(*([900] * 2), *([0] * 80))) + shortener.finish()
         self.assertEqual((*([700] * 3), *([0] * 90)), _samples(first))
-        self.assertEqual((*([900] * 2), *([0] * 35)), _samples(second))
+        self.assertEqual((*([900] * 2), *([0] * 20)), _samples(second))
 
     def test_shorten_all_shortens_hidden_boundary_and_final_end(self) -> None:
         shortener = self.processing.create_pcm_silence_shortener(
@@ -200,8 +200,28 @@ class PcmSilenceShortenerTests(unittest.TestCase):
             shortenPause=True,
         )
         second = shortener.feed(_pcm(*([900] * 2), *([0] * 80))) + shortener.finish()
-        self.assertEqual((*([700] * 3), *([0] * 25)), _samples(first))
-        self.assertEqual((*([900] * 2), *([0] * 25)), _samples(second))
+        self.assertEqual((*([700] * 3), *([0] * 10)), _samples(first))
+        self.assertEqual((*([900] * 2), *([0] * 10)), _samples(second))
+
+    def test_min_pause_trigger_ms_protects_brief_stop_closures(self) -> None:
+        pcm = _pcm(*([900] * 5), *([0] * 15), *([850] * 5), *([0] * 40), *([800] * 5), *([0] * 40))
+        shortener = self.processing.create_pcm_silence_shortener(
+            self.processing.PAUSE_MODE_SHORTEN_ALL,
+            1000,
+            keepSilenceMs=10,
+            minPauseTriggerMs=20,
+        )
+        chunked_shortener = self.processing.create_pcm_silence_shortener(
+            self.processing.PAUSE_MODE_SHORTEN_ALL,
+            1000,
+            keepSilenceMs=10,
+            minPauseTriggerMs=20,
+        )
+        chunked_parts = [chunked_shortener.feed(pcm[i : i + 7]) for i in range(0, len(pcm), 7)]
+        chunked_parts.append(chunked_shortener.finish())
+        output = _samples(shortener.feed(pcm) + shortener.finish())
+        self.assertEqual(output, _samples(b"".join(chunked_parts)))
+        self.assertEqual((*([900] * 5), *([0] * 15), *([850] * 5), *([0] * 10), *([800] * 5), *([0] * 10)), output)
 
     def test_unknown_pause_mode_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
@@ -838,11 +858,26 @@ class UrlAndDomainBoundaryTests(unittest.TestCase):
         for rate_val in (0.5, 1.0, 1.175, 2.0, 3.5, 6.0):
             ms_end_only = keep_ms(end_only, rate_val)
             ms_shorten_all = keep_ms(shorten_all, rate_val)
-            self.assertGreaterEqual(ms_end_only, 25)
-            self.assertLessEqual(ms_end_only, 55)
-            self.assertGreaterEqual(ms_shorten_all, 15)
-            self.assertLessEqual(ms_shorten_all, 45)
+            self.assertGreaterEqual(ms_end_only, 15)
+            self.assertLessEqual(ms_end_only, 32)
+            self.assertGreaterEqual(ms_shorten_all, 5)
+            self.assertLessEqual(ms_shorten_all, 22)
             self.assertEqual(ms_end_only - ms_shorten_all, 10)
+
+    def test_min_pause_trigger_ms_for_rate_and_noise_floor_helpers(self) -> None:
+        trigger_ms = self.processing.min_pause_trigger_ms_for_rate
+        noise_floor = self.processing.pause_silence_noise_floor
+
+        self.assertEqual(45, trigger_ms(0.5))
+        self.assertEqual(45, trigger_ms(1.0))
+        self.assertEqual(32, trigger_ms(1.5))
+        self.assertEqual(18, trigger_ms(3.0))
+        self.assertEqual(45, trigger_ms(float("nan")))
+
+        self.assertEqual(82, noise_floor("vi-vn-x-multi", {"outputGain": 1.70}))
+        self.assertEqual(110, noise_floor("vi-vn-x-multi-seanet", {"outputGain": 1.70}))
+        self.assertEqual(48, noise_floor("en-us-x-multi", {"outputGain": 0.5}))
+        self.assertEqual(128, noise_floor("en-us-x-multi-seanet", {"outputGain": 5.0}))
 
     def test_variation_selector_on_punctuation_not_split_or_orphaned(self) -> None:
         # Unicode sentence terminators & soft breaks followed by U+FE0F stay attached and never orphan marks.
@@ -880,8 +915,31 @@ class UrlAndDomainBoundaryTests(unittest.TestCase):
         self.assertTrue(self.segmenter._needs_spoken_segment_space(",", "b"))
         self.assertTrue(self.segmenter._needs_spoken_segment_space(";", "b"))
         self.assertTrue(self.segmenter._needs_spoken_segment_space(":", "b"))
+        self.assertTrue(self.segmenter._needs_spoken_segment_space(".", "S"))
+        self.assertTrue(self.segmenter._needs_spoken_segment_space("!", "2"))
+        self.assertTrue(self.segmenter._needs_spoken_segment_space("?", '"'))
         self.assertFalse(self.segmenter._needs_spoken_segment_space(",", "5"))
         self.assertFalse(self.segmenter._needs_spoken_segment_space("1", ","))
+        self.assertEqual(
+            ["First sentence. ", "Second sentence."],
+            self.segmenter.spoken_bridge_segments(["First sentence.", "Second sentence."]),
+        )
+        self.assertEqual(
+            ['He said "Hello." ', "Second."],
+            self.segmenter.spoken_bridge_segments(['He said "Hello."', "Second."]),
+        )
+        self.assertEqual(
+            ["Right here!\ufe0f ", "And next."],
+            self.segmenter.spoken_bridge_segments(["Right here!\ufe0f", "And next."]),
+        )
+        self.assertEqual(
+            ["こんにちは。", "世界"],
+            self.segmenter.spoken_bridge_segments(["こんにちは。", "世界"]),
+        )
+        self.assertEqual(
+            ["https://example.com/", "path"],
+            self.segmenter.spoken_bridge_segments(["https://example.com/", "path"]),
+        )
         self.assertEqual(4, self.segmenter._find_whitespace_cut("abc def", 0, 10, 0))
         self.assertIsNone(self.segmenter._find_whitespace_cut("abcd ", 0, 3, 0))
 

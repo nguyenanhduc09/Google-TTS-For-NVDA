@@ -15,6 +15,7 @@ from collections.abc import Iterator, Sequence
 from functools import lru_cache
 from typing import Any
 
+from .audio_math import uses_protected_engine_rate
 from .language_profiles import (
     in_codepoint_ranges as _in_codepoint_ranges,
 )
@@ -50,9 +51,11 @@ log = logging.getLogger(__name__)
 PAUSE_MODE_DO_NOT_SHORTEN = "0"
 PAUSE_MODE_SHORTEN_END_ONLY = "1"
 PAUSE_MODE_SHORTEN_ALL = "2"
-SHORTENED_SILENCE_KEEP_MS = 35
-SHORTENED_ALL_PAUSES_KEEP_MS = 25
+SHORTENED_SILENCE_KEEP_MS = 20
+SHORTENED_ALL_PAUSES_KEEP_MS = 10
 SILENCE_SAMPLE_THRESHOLD = 48
+SEANET_RAW_SILENCE_THRESHOLD = 65
+MAX_PAUSE_SILENCE_THRESHOLD = 128
 PCM_BYTES_PER_SAMPLE = 2
 LIVE_MULTI_SEGMENT_LEAD_MS = 80
 SHORT_CACHE_MAX_CHARS = 5000
@@ -269,6 +272,7 @@ class PcmSilenceShortener:
         keepSilenceMs: int = SHORTENED_SILENCE_KEEP_MS,
         noiseFloor: int = SILENCE_SAMPLE_THRESHOLD,
         bytesPerSample: int = PCM_BYTES_PER_SAMPLE,
+        minPauseTriggerMs: int = 0,
     ) -> None:
         if bytesPerSample != 2:
             raise ValueError("Only signed 16-bit PCM is supported")
@@ -276,9 +280,11 @@ class PcmSilenceShortener:
         self._noiseFloor = max(0, int(noiseFloor))
         self._bytesPerSample = bytesPerSample
         self._heldSilence = bytearray()
+        self._heldRawLength = 0
         self._partialSample = bytearray()
         self._pendingBlock = bytearray()
         self._keepSilenceBytes = pcm_bytes_for_milliseconds(keepSilenceMs, sampleRate, bytesPerSample)
+        self._minTriggerBytes = pcm_bytes_for_milliseconds(max(0, int(minPauseTriggerMs)), sampleRate, bytesPerSample)
         self._maxHoldBytes = max(
             self._keepSilenceBytes,
             pcm_bytes_for_milliseconds(60000, sampleRate, bytesPerSample),
@@ -288,21 +294,22 @@ class PcmSilenceShortener:
 
     def _release_held_silence(self, *, final: bool) -> bytes:
         if not self._heldSilence:
+            self._heldRawLength = 0
             return b""
-        if final or self._shortenAllPauses:
-            output = bytes(self._heldSilence[: self._keepSilenceBytes])
-        else:
-            output = bytes(self._heldSilence)
+        shouldShorten = final or (self._shortenAllPauses and self._heldRawLength >= self._minTriggerBytes)
+        output = bytes(self._heldSilence[: self._keepSilenceBytes]) if shouldShorten else bytes(self._heldSilence)
         self._heldSilence.clear()
+        self._heldRawLength = 0
         return output
 
     def _hold_silence(self, pcm: bytes) -> None:
         if not pcm:
             return
-        limit = self._keepSilenceBytes if self._shortenAllPauses else self._maxHoldBytes
+        limit = max(self._keepSilenceBytes, self._minTriggerBytes) if self._shortenAllPauses else self._maxHoldBytes
         bytesNeeded = limit - len(self._heldSilence)
         if bytesNeeded > 0:
             self._heldSilence.extend(pcm[:bytesNeeded])
+        self._heldRawLength += len(pcm)
 
     def _process_block(self, pcm: bytes) -> bytes:
         if not pcm:
@@ -435,18 +442,47 @@ def keep_silence_ms_for_rate(pauseMode: str, chromeRate: float) -> int:
         numericRate = 1.0
     rate = max(0.35, numericRate)
     if rate <= 1.175:
-        shortenAllMs = int(round(45 - (rate - 0.35) * 20 / 0.825))
+        shortenAllMs = int(round(22 - (rate - 0.35) * 12 / 0.825))
     else:
-        shortenAllMs = int(round(25 - (rate - 1.175) * 10 / 2.825))
-    shortenAllMs = max(15, min(45, shortenAllMs))
+        shortenAllMs = int(round(10 - (rate - 1.175) * 5 / 2.825))
+    shortenAllMs = max(5, min(22, shortenAllMs))
     if pauseMode == PAUSE_MODE_SHORTEN_END_ONLY:
         modeDelta = SHORTENED_SILENCE_KEEP_MS - SHORTENED_ALL_PAUSES_KEEP_MS
-        return max(15 + modeDelta, min(45 + modeDelta, shortenAllMs + modeDelta))
+        return max(5 + modeDelta, min(22 + modeDelta, shortenAllMs + modeDelta))
     return shortenAllMs
 
 
+def min_pause_trigger_ms_for_rate(chromeRate: float) -> int:
+    """Minimum silent run duration to trim mid-speech so brief stop closures stay intact."""
+    try:
+        numericRate = float(chromeRate)
+    except (TypeError, ValueError):
+        numericRate = 1.0
+    if not math.isfinite(numericRate):
+        numericRate = 1.0
+    return max(18, min(45, int(round(48.0 / max(1.0, numericRate)))))
+
+
+def pause_silence_noise_floor(packageId: str, options: dict[str, Any]) -> int:
+    """Scale silence detection threshold for post-gain output and neural SeaNet noise floors."""
+    try:
+        outputGain = float(options.get("outputGain", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        outputGain = 1.0
+    if not math.isfinite(outputGain):
+        outputGain = 1.0
+    rawThreshold = SEANET_RAW_SILENCE_THRESHOLD if uses_protected_engine_rate(packageId) else SILENCE_SAMPLE_THRESHOLD
+    scaled = int(round(rawThreshold * max(1.0, outputGain)))
+    return max(SILENCE_SAMPLE_THRESHOLD, min(MAX_PAUSE_SILENCE_THRESHOLD, scaled))
+
+
 def create_pcm_silence_shortener(
-    pauseMode: str, sampleRate: int, keepSilenceMs: int | None = None
+    pauseMode: str,
+    sampleRate: int,
+    keepSilenceMs: int | None = None,
+    *,
+    noiseFloor: int = SILENCE_SAMPLE_THRESHOLD,
+    minPauseTriggerMs: int = 0,
 ) -> PcmSilenceShortener | None:
     if pauseMode == PAUSE_MODE_DO_NOT_SHORTEN:
         return None
@@ -455,12 +491,16 @@ def create_pcm_silence_shortener(
             sampleRate=sampleRate,
             shortenAllPauses=False,
             keepSilenceMs=keepSilenceMs if keepSilenceMs is not None else SHORTENED_SILENCE_KEEP_MS,
+            noiseFloor=noiseFloor,
+            minPauseTriggerMs=minPauseTriggerMs,
         )
     if pauseMode == PAUSE_MODE_SHORTEN_ALL:
         return PcmSilenceShortener(
             sampleRate=sampleRate,
             shortenAllPauses=True,
             keepSilenceMs=keepSilenceMs if keepSilenceMs is not None else SHORTENED_ALL_PAUSES_KEEP_MS,
+            noiseFloor=noiseFloor,
+            minPauseTriggerMs=minPauseTriggerMs,
         )
     raise ValueError(f"Unknown pause mode: {pauseMode!r}")
 
@@ -627,6 +667,29 @@ def _is_no_space_script_character(character: str) -> bool:
     return _find_no_space_range(codepoint) is not None
 
 
+def _is_grapheme_extend_codepoint(codepoint: int) -> bool:
+    return _is_combining_mark(codepoint) or _in_codepoint_ranges(
+        codepoint, _GRAPHEME_EXTEND_EXTRA_STARTS, GRAPHEME_EXTEND_EXTRA_RANGES
+    )
+
+
+def _is_cjk_or_fullwidth_punctuation(character: str) -> bool:
+    if len(character) != 1:
+        return False
+    codepoint = ord(character)
+    return 0x3000 <= codepoint <= 0x303F or 0xFF00 <= codepoint <= 0xFFEF
+
+
+def _is_spacing_exempt_boundary(previousCharacter: str, nextCharacter: str) -> bool:
+    if not previousCharacter or not nextCharacter:
+        return True
+    if previousCharacter.isspace() or nextCharacter.isspace():
+        return True
+    if _is_no_space_script_character(previousCharacter) or _is_no_space_script_character(nextCharacter):
+        return True
+    return _is_cjk_or_fullwidth_punctuation(previousCharacter) or _is_cjk_or_fullwidth_punctuation(nextCharacter)
+
+
 class TextSegmenter:
     """Unicode-aware latency segmenter independent of NVDA speech commands."""
 
@@ -676,42 +739,46 @@ class TextSegmenter:
             return "".join(" " if 0xF0000 <= ord(character) <= 0x10FFFD else character for character in sanitized)
         return sanitized
 
+    def _spoken_boundary_previous_character(self, text: str) -> str:
+        index = len(text) - 1
+        while index > 0 and _is_grapheme_extend_codepoint(ord(text[index])):
+            index -= 1
+        effectiveCharacter = text[index]
+        closerIndex = index
+        while closerIndex > 0 and (
+            _is_sentence_trailing_closer(text[closerIndex]) or _is_grapheme_extend_codepoint(ord(text[closerIndex]))
+        ):
+            closerIndex -= 1
+        if closerIndex != index and _is_sentence_terminator_character(text[closerIndex]):
+            return text[closerIndex]
+        return effectiveCharacter
+
     def spoken_bridge_segments(self, segments: list[str]) -> list[str]:
         spokenSegments: list[str] = []
         for segment in segments:
-            if (
-                spokenSegments
-                and spokenSegments[-1]
-                and segment
-                and self._needs_spoken_segment_space(spokenSegments[-1][-1], segment[0])
-            ):
-                spokenSegments[-1] += " "
+            if spokenSegments and spokenSegments[-1] and segment:
+                rawPrevious = spokenSegments[-1][-1]
+                if not _is_spacing_exempt_boundary(rawPrevious, segment[0]) and self._needs_spoken_segment_space(
+                    self._spoken_boundary_previous_character(spokenSegments[-1]),
+                    segment[0],
+                ):
+                    spokenSegments[-1] += " "
             spokenSegments.append(segment)
         return spokenSegments
 
     def _needs_spoken_segment_space(self, previousCharacter: str, nextCharacter: str) -> bool:
-        if _is_no_space_script_character(previousCharacter) or _is_no_space_script_character(nextCharacter):
-            return False
-        if (0x3000 <= ord(previousCharacter) <= 0x303F or 0xFF00 <= ord(previousCharacter) <= 0xFFEF) or (
-            0x3000 <= ord(nextCharacter) <= 0x303F or 0xFF00 <= ord(nextCharacter) <= 0xFFEF
-        ):
+        if _is_spacing_exempt_boundary(previousCharacter, nextCharacter):
             return False
         if _is_word_character(previousCharacter) and _is_word_character(nextCharacter):
             return True
+        if _is_sentence_terminator_character(previousCharacter):
+            return not _is_sentence_terminator_character(nextCharacter)
         if previousCharacter in ",;" and _is_word_character(nextCharacter):
             return not (previousCharacter == "," and _is_number_codepoint(ord(nextCharacter)))
         return previousCharacter == ":" and _is_letter_codepoint(ord(nextCharacter))
 
     def needs_index_boundary_space(self, previousCharacter: str, nextCharacter: str) -> bool:
-        if not previousCharacter or not nextCharacter:
-            return False
-        if previousCharacter.isspace() or nextCharacter.isspace():
-            return False
-        if _is_no_space_script_character(previousCharacter) or _is_no_space_script_character(nextCharacter):
-            return False
-        if 0x3000 <= ord(previousCharacter) <= 0x303F or 0xFF00 <= ord(previousCharacter) <= 0xFFEF:
-            return False
-        return not (0x3000 <= ord(nextCharacter) <= 0x303F or 0xFF00 <= ord(nextCharacter) <= 0xFFEF)
+        return not _is_spacing_exempt_boundary(previousCharacter, nextCharacter)
 
     def find_sentence_splits(self, text: str) -> list[int]:
         splits: list[int] = []
@@ -1117,12 +1184,7 @@ class TextSegmenter:
             cp = ord(text[cut])
             # Preserve UCD combining marks, Grapheme_Cluster_Break=Extend (e.g. ZWNJ,
             # halfwidth Kana sound marks, skin tones, tags), ZWJ sequences, and flag pairs
-            if (
-                _is_combining_mark(cp)
-                or _in_codepoint_ranges(cp, _GRAPHEME_EXTEND_EXTRA_STARTS, GRAPHEME_EXTEND_EXTRA_RANGES)
-                or cp == 0x200D
-                or (cut > 0 and ord(text[cut - 1]) == 0x200D)
-            ):
+            if _is_grapheme_extend_codepoint(cp) or cp == 0x200D or (cut > 0 and ord(text[cut - 1]) == 0x200D):
                 cut += 1
             elif (
                 _in_codepoint_ranges(cp, _REGIONAL_INDICATOR_STARTS, REGIONAL_INDICATOR_RANGES)
