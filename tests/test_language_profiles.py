@@ -271,7 +271,7 @@ class LanguageProfilesTests(unittest.TestCase):
             with self.subTest(num=token):
                 self.assertTrue(self.language_profiles.is_number_token(token))
 
-        # UCD 17.0 Category Sc currency symbols
+        # UCD Category Sc currency symbols
         for token in (
             "$100",
             "100.000₫",
@@ -584,6 +584,12 @@ class LanguageProfilesTests(unittest.TestCase):
         for r in script_ranges.get("Thai", ()):
             self.assertIn(r, thai_ranges)
 
+        no_space_ranges = self.unicode_data.NO_SPACE_SCRIPT_RANGES
+        flattened_no_space = {(start, end) for ranges, _limit in profiles for start, end in ranges}
+        for script in ("Myanmar", "Sundanese", "Yi", "Bopomofo", "Ahom", "Kawi", "Tai_Yo"):
+            for r in no_space_ranges[script]:
+                self.assertIn(r, flattened_no_space)
+
         mapping = self.language_profiles._SCRIPT_TO_CANDIDATE_ROOTS
         supported = self.unicode_data.SUPPORTED_LANGUAGE_SCRIPTS
         self.assertNotIn("Latin", mapping)
@@ -592,6 +598,9 @@ class LanguageProfilesTests(unittest.TestCase):
             self.assertIn(script, mapping)
         self.assertIn("he", mapping["Hebrew"])
         self.assertIn("iw", mapping["Hebrew"])
+        self.assertIn("bs", mapping["Cyrillic"])
+        self.assertIn("ms", mapping["Arabic"])
+        self.assertIn("Latin", supported["kok"])
         for script, roots in mapping.items():
             for root in roots:
                 if root == "iw":
@@ -890,7 +899,18 @@ class LanguageProfilesTests(unittest.TestCase):
 
     def test_case_sensitive_currency_and_unit_matching(self) -> None:
         """ISO 4217 currencies and CLDR unit symbols match case-sensitively so prose words are not swallowed."""
-        for valid_cluster in ("5 mA", "5 ALL", "1 TRY", "500 USD", "100 bps", "500 mAh", "5‰", "10‱"):
+        for valid_cluster in (
+            "5 mA",
+            "5 ALL",
+            "1 TRY",
+            "500 USD",
+            "100 Mb/s",
+            "500 KiB",
+            "500 kWh",
+            "50 m²",
+            "5‰",
+            "10‱",
+        ):
             with self.subTest(valid_cluster=valid_cluster):
                 self.assertTrue(self.language_profiles.is_number_token(valid_cluster))
 

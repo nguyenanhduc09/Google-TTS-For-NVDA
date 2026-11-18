@@ -411,11 +411,30 @@ class TextSegmenterTests(unittest.TestCase):
         for ch in ("a", "Z", "0", "9", " ", ".", "-", "\n"):
             self.assertFalse(is_no_space(ch))
 
-        # CJK / Thai / Khmer characters return True
-        self.assertTrue(is_no_space("中"))
-        self.assertTrue(is_no_space("文"))
-        self.assertTrue(is_no_space("ก"))
-        self.assertTrue(is_no_space("ข"))
+        # CJK / Thai / Khmer / SE Asian UCD 18.0.0 letters return True
+        for ch in ("中", "文", "ก", "ข", "\u1b83", "\u3105", "\ua000", "\U00011700", "\U00011f04", "\U0001e6c0"):
+            self.assertTrue(is_no_space(ch))
+
+        # UCD 18.0.0 extended non-letter ranges (Bopomofo tones, Sundanese Supp., Yi Radicals, Myanmar Ext-C)
+        for cp in (0x02EA, 0x1CC0, 0xA490, 0x116D0):
+            self.assertIsNotNone(self.processing._find_no_space_range(cp))
+        self.assertTrue(self.processing._is_word_character("\U000116d0"))
+
+        # Unassigned slots inside Unicode blocks are not matched
+        for unassigned in ("\u0e83", "\u1cc8", "\ua4c7", "\U000116e4"):
+            self.assertIsNone(self.processing._find_no_space_range(ord(unassigned)))
+            self.assertFalse(is_no_space(unassigned))
+
+        # Halfwidth Katakana sound marks stay attached when extending cuts
+        self.assertEqual(2, self.segmenter._extend_cut_over_combining_marks("\uff76\uff9e", 1, 2))
+        self.assertEqual(2, self.segmenter._extend_cut_over_combining_marks("\uff8a\uff9f", 1, 2))
+
+        # UCD 18.0.0 Pe closer, Pd hyphen, Po abbreviation/biblical mark
+        self.assertTrue(self.processing._is_sentence_trailing_closer("\u2e63"))
+        self.assertEqual([8], self.segmenter.find_sentence_splits("Hello.\u2e63 Next sentence."))
+        self.assertFalse(self.processing._is_soft_break_character("\U00010d6e"))
+        self.assertFalse(self.processing._is_soft_break_character("\U0001e5ff"))
+        self.assertTrue(self.processing._is_soft_break_character("\U00010ed0"))
 
 
 class ShortAudioCacheKeyTests(unittest.TestCase):

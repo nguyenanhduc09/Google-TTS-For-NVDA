@@ -1,8 +1,6 @@
 # Standalone Regression Tests
 
-Google TTS For NVDA includes a standalone test suite comprising **809 unit tests** in **137 test classes** across **19 test modules**, supplemented by shared test helpers (`test_support.py`), a multilingual segmentation corpus (`segmentation_corpus.json`), static NVDA API contract verification (`check_nvda_api_contracts.py`), and a manual release checklist (`NVDA_CHROMIUM_MANUAL_CHECKLIST.md`).
-
-Unit tests run **without importing or installing NVDA**: isolated modules load via `test_support.py`, NVDA/wx integration hooks run under lightweight shims in `test_nvda_integration_shims.py`, and `bridgeHarness.js` executes under Node.js `node:vm` in `test_bridge_harness.py`.
+Google TTS For NVDA includes a standalone regression test suite across **19 test modules** (summarized below) that runs **without importing or installing NVDA**: isolated modules load via `test_support.py`, NVDA/wx integration hooks run under lightweight shims in `test_nvda_integration_shims.py`, and `bridgeHarness.js` executes under Node.js `node:vm` in `test_bridge_harness.py`.
 
 ---
 
@@ -36,19 +34,19 @@ python -m unittest tests.test_bridge_concurrency.EnsureConnectionCancellationTes
 | `test_build_i18n_helpers.py` | 231 | 26 | PO parsing/escaping/syntax fallback, fuzzy & obsolete entries, format/HTML tag & math checks, Markdown↔HTML conversion (tables, definition lists, entities), RTL rendering, and CLI/interactive recovery. |
 | `test_dependency_isolation.py` | 10 | 1 | `websocketClientRepo` isolation, package-relative internal imports, pure-module zero-NVDA-import guard, `globalPlugins` `speech`/`sayAll` guards, and CLD2/browser/WASM asset anchoring. |
 | `test_generate_voices_json_helpers.py` | 28 | 8 | Version sorting, bundled engine discovery, `voices.json` selection, catalog/engine version alignment, `dependentVoiceId` resolution, and CLI argument parsing. |
-| `test_language_profiles.py` | 65 | 4 | BCP 47 & NVDA locale mapping, `redirect_language`, aliases, `NORMALIZATION_TABLE` & NFC composition (preserving `U+037E`/`U+0387`), currencies, units, numbers, single-char & spelling routing, `_CLAUSE_BREAK_PUNCTUATION`, URLs/domains, Latin exemplars, Han disambiguation, and emoji preservation. |
+| `test_language_profiles.py` | 65 | 4 | BCP 47 & NVDA locale mapping, dialect redirects, aliases, normalization & NFC composition (preserving `U+037E`/`U+0387`), CLDR currencies/units, numbers, single-char & spelling routing, clause boundaries, script-range integration, URLs/domains, Latin exemplars, Han disambiguation, and emoji runs. |
 | `test_nvda_integration_shims.py` | 30 | 1 | Execution tests under NVDA/wx shims for real `synthDrivers` and `globalPlugins` hooks: voice `.dic` loading/caching, auto-language speech/SayAll/spelling/character hooks, `setSynth` & Settings/Voice Manager UI guards, config compat, fatal fallback, pause modes, and updater popup flows. |
 | `test_performance.py` | 18 | 6 | `_FLUSH_GROUP_CHARS_THRESHOLD`, `PcmLeadBuffer` (`LIVE_MULTI_SEGMENT_LEAD_MS`), `PAUSE_MODE_*` handling, adaptive JS packet sizing, and multilingual segmentation/PCM throughput benchmarks. |
 | `test_segmentation_fuzz.py` | 11 | 2 | Property-based fuzzing across synthetic Unicode corpora (CJK, Thai, Khmer, emoji sequences, URLs, decimals, combining marks). |
-| `test_speech_processing.py` | 56 | 9 | `PcmSilenceShortener` (`effective_chrome_rate`, `keep_silence_ms_for_rate`, hold caps), `PcmLeadBuffer`, `TextSegmenter` (`segmentation_corpus.json`, `needs_index_boundary_space`, `ends_with_pause_punctuation`, ZWJ/variation-selector cut guards), Unicode sentence terminators, abbreviation/URL/domain boundaries, and short audio cache keys. |
+| `test_speech_processing.py` | 56 | 9 | `PcmSilenceShortener` (`effective_chrome_rate`, `keep_silence_ms_for_rate`, hold caps), `PcmLeadBuffer`, `TextSegmenter` (`segmentation_corpus.json`, `needs_index_boundary_space`, `ends_with_pause_punctuation`, grapheme-extend/ZWJ/Kana-mark cut guards, no-space script & UCD punctuation boundaries), Unicode sentence terminators, abbreviation/URL/domain boundaries, and short audio cache keys. |
 | `test_standby_concurrency.py` | 22 | 6 | Standby generation counter, cancel events, `claim_bridge`, `release_synth_bridge`, `terminate`, and lock-free catalog refresh & watcher shutdown. |
 | `test_support.py` | — | — | Shared `load_module_from_path` / `load_driver_module` / `load_fresh_driver_module` loaders, `FakeCdpClient`, `FakeEngine`, `FakeProcessManager`, `FakeHttpResponse`, `make_fake_bridge`, `write_test_engine`, `captured_prints`, `temporary_doc_tree`, `pcm_bytes`, `pcm_samples`. |
 | `test_synth_driver_helpers.py` | 18 | 4 | Pure rate-factor helpers (`interpolate_rate_factor`, `break_rate_factor`, `end_of_utterance_rate_factor`) and `_LANGUAGE_WORD_RE` word matching. |
-| `test_unicode_data.py` | 38 | 10 | UCD 17.0 / CLDR 48.2 record parsing, range merging, script aliases, combining/currency/emoji/unit/Latin-exemplar extractors, `NORMALIZATION_TABLE` generation, and delegated `voices.json` engine version gating. |
+| `test_unicode_data.py` | 41 | 11 | UCD/CLDR parsing, supplemental metadata & parent-locale resolution, range merging, script aliases, no-space & grapheme-extend ranges, UCD General Category lookups, combining/currency/emoji/unit/Latin-exemplar extraction, normalization table generation, and `voices.json` engine version gating. |
 | `test_updater_security.py` | 79 | 15 | SHA-256 verification, HTTPS-only & redirect-downgrade blocking, path traversal/reparse-point/reserved-device-name guards, size bounds, manifest/release-notes parsing, and version/build comparison. |
 | `test_voice_package_lifecycle.py` | 29 | 7 | Voice package download & HTTPS redirect guards, SHA-256 verification cache, copy/remove lifecycle, script-subtag & schema validation in `VoiceCatalog`, and bundled `lemonbalm` support/dependencies. |
 | `test_watcher.py` | 17 | 4 | `DirectoryChangeWatcher` start/stop/rapid-restart lifecycle, callbacks, error recovery, and live filesystem integration. |
-| **Total** | **809** | **137** | **Standalone regression test suite (plus shared helpers in `test_support.py`)** |
+| **Total** | **812** | **138** | **19 test modules** |
 
 ---
 

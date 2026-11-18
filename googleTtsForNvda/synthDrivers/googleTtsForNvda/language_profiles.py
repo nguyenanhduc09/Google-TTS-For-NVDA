@@ -14,12 +14,19 @@ from collections.abc import Callable, Collection
 from .unicode_data import (
     CLDR_ACTIVE_CURRENCIES,
     CLDR_UNIT_SYMBOLS,
+    CLOSING_PUNCTUATION_RANGES,
     COMBINING_MARK_RANGES,
+    CONNECTOR_PUNCTUATION_RANGES,
     CURRENCY_SYMBOL_RANGES,
+    DASH_PUNCTUATION_RANGES,
     EMOJI_PICTOGRAPHIC_RANGES,
     LANGUAGE_SCRIPT_RANGES,
     LATIN_LANGUAGE_EXEMPLARS,
+    LETTER_RANGES,
     NORMALIZATION_TABLE,
+    NUMBER_RANGES,
+    OPENING_PUNCTUATION_RANGES,
+    OTHER_PUNCTUATION_RANGES,
     SCRIPT_RANGES,
     SENTENCE_TERMINAL_CODEPOINTS,
     SUPPORTED_LANGUAGE_SCRIPTS,
@@ -68,17 +75,93 @@ _STRONG_LANGUAGE_SIGNAL = 2
 _WEAK_LANGUAGE_SIGNAL = 1
 _HAN_CANDIDATE_ROOTS: frozenset[str] = frozenset({"cmn", "yue", "zh", "ja", "ko"})
 
+_LETTER_STARTS: tuple[int, ...] = tuple(start for start, _ in LETTER_RANGES)
+_NUMBER_STARTS: tuple[int, ...] = tuple(start for start, _ in NUMBER_RANGES)
+_CONNECTOR_PUNCT_STARTS: tuple[int, ...] = tuple(start for start, _ in CONNECTOR_PUNCTUATION_RANGES)
+_DASH_PUNCT_STARTS: tuple[int, ...] = tuple(start for start, _ in DASH_PUNCTUATION_RANGES)
+_OPENING_PUNCT_STARTS: tuple[int, ...] = tuple(start for start, _ in OPENING_PUNCTUATION_RANGES)
+_CLOSING_PUNCT_STARTS: tuple[int, ...] = tuple(start for start, _ in CLOSING_PUNCTUATION_RANGES)
+_OTHER_PUNCT_STARTS: tuple[int, ...] = tuple(start for start, _ in OTHER_PUNCTUATION_RANGES)
 
-def is_combining_mark(cp: int) -> bool:
-    """Return True if codepoint is a UCD 17.0 combining mark (Mn, Mc, Me)."""
-    if cp < _FIRST_COMBINING_MARK_CODEPOINT:
-        return False
-    idx = bisect.bisect_right(_COMBINING_MARK_STARTS, cp) - 1
+
+def in_codepoint_ranges(cp: int, starts: tuple[int, ...], ranges: ScriptRanges) -> bool:
+    """Return True if *cp* falls inside a sorted, non-overlapping *(start, end)* tuple."""
+    idx = bisect.bisect_right(starts, cp) - 1
     if idx >= 0:
-        start, end = COMBINING_MARK_RANGES[idx]
+        start, end = ranges[idx]
         if start <= cp <= end:
             return True
+    return False
+
+
+def is_combining_mark(cp: int) -> bool:
+    """Return True if codepoint is a UCD combining mark (Mn, Mc, Me)."""
+    if cp < _FIRST_COMBINING_MARK_CODEPOINT:
+        return False
+    if in_codepoint_ranges(cp, _COMBINING_MARK_STARTS, COMBINING_MARK_RANGES):
+        return True
     return unicodedata.category(chr(cp)).startswith("M")
+
+
+def is_letter_codepoint(cp: int) -> bool:
+    """Return True if *cp* is a UCD letter (Lu, Ll, Lt, Lm, Lo)."""
+    if cp < 0x80:
+        return (0x41 <= cp <= 0x5A) or (0x61 <= cp <= 0x7A)
+    category = unicodedata.category(chr(cp))
+    if category != "Cn":
+        return category.startswith("L")
+    return in_codepoint_ranges(cp, _LETTER_STARTS, LETTER_RANGES)
+
+
+def is_number_codepoint(cp: int) -> bool:
+    """Return True if *cp* is a UCD number (Nd, Nl, No)."""
+    if cp < 0x80:
+        return 0x30 <= cp <= 0x39
+    category = unicodedata.category(chr(cp))
+    if category != "Cn":
+        return category.startswith("N")
+    return in_codepoint_ranges(cp, _NUMBER_STARTS, NUMBER_RANGES)
+
+
+def is_closing_punctuation_codepoint(cp: int) -> bool:
+    """Return True if *cp* is UCD closing or final-quote punctuation (Pe, Pf)."""
+    category = unicodedata.category(chr(cp))
+    if category != "Cn":
+        return category in ("Pe", "Pf")
+    return in_codepoint_ranges(cp, _CLOSING_PUNCT_STARTS, CLOSING_PUNCTUATION_RANGES)
+
+
+def is_wrapper_punctuation_codepoint(cp: int) -> bool:
+    """Return True if *cp* is UCD bracket or quote delimiter punctuation (Ps, Pe, Pi, Pf)."""
+    category = unicodedata.category(chr(cp))
+    if category != "Cn":
+        return category in ("Ps", "Pe", "Pi", "Pf")
+    return in_codepoint_ranges(cp, _OPENING_PUNCT_STARTS, OPENING_PUNCTUATION_RANGES) or in_codepoint_ranges(
+        cp, _CLOSING_PUNCT_STARTS, CLOSING_PUNCTUATION_RANGES
+    )
+
+
+def punctuation_subcategory_codepoint(cp: int) -> str:
+    """Return the UCD General_Category string for *cp*, consulting UCD tables when Python returns 'Cn'."""
+    category = unicodedata.category(chr(cp))
+    if category != "Cn":
+        return category
+    if in_codepoint_ranges(cp, _OTHER_PUNCT_STARTS, OTHER_PUNCTUATION_RANGES):
+        return "Po"
+    if in_codepoint_ranges(cp, _DASH_PUNCT_STARTS, DASH_PUNCTUATION_RANGES):
+        return "Pd"
+    if in_codepoint_ranges(cp, _OPENING_PUNCT_STARTS, OPENING_PUNCTUATION_RANGES):
+        return "Ps"
+    if in_codepoint_ranges(cp, _CLOSING_PUNCT_STARTS, CLOSING_PUNCTUATION_RANGES):
+        return "Pe"
+    if in_codepoint_ranges(cp, _CONNECTOR_PUNCT_STARTS, CONNECTOR_PUNCTUATION_RANGES):
+        return "Pc"
+    return "Cn"
+
+
+def is_punctuation_codepoint(cp: int) -> bool:
+    """Return True if *cp* is a UCD punctuation character (category P*)."""
+    return punctuation_subcategory_codepoint(cp).startswith("P")
 
 
 _ROOT_CANONICAL_ALIASES: dict[str, str] = {
@@ -118,7 +201,7 @@ def single_character_candidate_root(
     scriptSignal = language_script_signal(token, candidateRoots)
     if scriptSignal:
         return scriptSignal if scriptSignal != preferredRoot else None
-    firstLetter = next((ch for ch in token if unicodedata.category(ch).startswith("L")), "")
+    firstLetter = next((ch for ch in token if is_letter_codepoint(ord(ch))), "")
     if not firstLetter:
         return None
     charScript = get_character_script(ord(firstLetter))
@@ -173,7 +256,7 @@ def latin_exemplar_signal(text: str, candidateRoots: Collection[str]) -> str | N
     normalized = unicodedata.normalize("NFC", text)
     nonAsciiChars: list[str] = []
     for char in normalized:
-        if char.isascii() or not char.isalpha():
+        if char.isascii() or not is_letter_codepoint(ord(char)):
             continue
         nonAsciiChars.append(_latin_exemplar_char_key(char))
     if not nonAsciiChars:
@@ -224,7 +307,7 @@ def normalize_mathematical_alphanumeric(text: str) -> str:
     Fullwidth/Halfwidth alphanumeric forms, Ideographic Space (U+3000),
     Letterlike symbols (U+2100..U+214F), Enclosed Alphanumerics & Supplements,
     Phonetic Small Capitals, Superscripts, Subscripts, Invisible controls,
-    decomposed combining sequences (NFD -> NFC), and UCD 17.0 / CLDR 48.2
+    decomposed combining sequences (NFD -> NFC), and UCD / CLDR
     compatibility characters to standard readable precomposed script characters.
     """
     if not text:
@@ -265,7 +348,7 @@ def has_vietnamese_diacritics(text: str) -> bool:
     return any(ch in VIETNAMESE_LETTERS for ch in normalized)
 
 
-# Unicode Emoji Sequences: Keycaps, Flags, ZWJ sequences, Fitzpatrick skin tones, Pictographs (UCD 17.0)
+# Unicode Emoji Sequences: Keycaps, Flags, ZWJ sequences, Fitzpatrick skin tones, Pictographs (UCD)
 _EMOJI_PICTOGRAPH_CLASS = _ranges_to_regex_class(EMOJI_PICTOGRAPHIC_RANGES)
 _EMOJI_BASE = (
     r"(?:"
@@ -287,15 +370,15 @@ def is_emoji_token(token: str) -> bool:
     return bool(_EMOJI_TOKEN_RE.match(token))
 
 
-# Unicode 17.0 Category Sc (currency symbols across BMP and SMP)
+# Unicode Category Sc (currency symbols across BMP and SMP)
 _UCD_CURRENCY_SYMBOLS = _ranges_to_regex_class(CURRENCY_SYMBOL_RANGES)
 
-# Active ISO 4217 Currency Codes from CLDR 48.2 (matched case-sensitively)
+# Active ISO 4217 Currency Codes from CLDR (matched case-sensitively)
 _ISO_CURRENCY_CODES = "(?-i:" + "|".join((*CLDR_ACTIVE_CURRENCIES, "XXX")) + ")"
 _CURRENCY_PATTERN = rf"(?:{_UCD_CURRENCY_SYMBOLS}|(?:{_ISO_CURRENCY_CODES})\b)"
 _PERCENT_PATTERN = r"[%\u066a\u0609\u060a\ufe6a\uff05\u2030\u2031]"
 
-# International measurement, computing, physical, and scientific units from CLDR 48.2 (matched case-sensitively)
+# International measurement, computing, physical, and scientific units from CLDR (matched case-sensitively)
 _INTERNATIONAL_UNITS = sorted(CLDR_UNIT_SYMBOLS, key=len, reverse=True)
 _UNITS_PATTERN = rf"(?-i:(?:{'|'.join(re.escape(u) for u in _INTERNATIONAL_UNITS)}))(?!\w)"
 
@@ -330,7 +413,7 @@ def is_symbol_or_emoji_token(token: str) -> bool:
     """Check if token is composed entirely of symbols, emojis, or punctuation."""
     stripped = token.strip() if token else ""
     return is_emoji_token(stripped) or (
-        bool(stripped) and all(not unicodedata.category(c).startswith("L") and not c.isdigit() for c in stripped)
+        bool(stripped) and all(not is_letter_codepoint(ord(c)) and not is_number_codepoint(ord(c)) for c in stripped)
     )
 
 
@@ -547,7 +630,7 @@ def _is_clause_break_chunk(chunks: list[tuple[str, str]], idx: int) -> bool:
     """Return True when chunk at `idx` acts as a clause separator."""
     chunkVal, chunkCat = chunks[idx]
     if chunkCat in ("PUNCT", "SYM") and any(
-        ch in _CLAUSE_BREAK_PUNCTUATION or unicodedata.category(ch) in ("Ps", "Pe", "Pi", "Pf") for ch in chunkVal
+        ch in _CLAUSE_BREAK_PUNCTUATION or is_wrapper_punctuation_codepoint(ord(ch)) for ch in chunkVal
     ):
         return True
     if chunkCat == "PUNCT" and any(ch in "-/\\" for ch in chunkVal):
@@ -584,7 +667,7 @@ def is_spelling_only_text(text: str) -> bool:
         if is_number_token(tok) or is_emoji_token(tok):
             return False
         if is_symbol_or_emoji_token(tok):
-            if not all(unicodedata.category(c).startswith("P") or c.isspace() for c in tok):
+            if not all(is_punctuation_codepoint(ord(c)) or c.isspace() for c in tok):
                 return False
             continue
         if len(tok) == 1 and tok.isascii() and tok.isalpha() and get_character_script(ord(tok)) == "Latin":
@@ -664,12 +747,12 @@ def segment_mixed_text(
         elif is_url_or_email_token(tok):
             chunks.append((tok, "URL"))
         elif is_symbol_or_emoji_token(tok):
-            if all(unicodedata.category(c).startswith("P") or c.isspace() for c in tok):
+            if all(is_punctuation_codepoint(ord(c)) or c.isspace() for c in tok):
                 chunks.append((tok, "PUNCT"))
             else:
                 chunks.append((tok, "SYM"))
         else:
-            scripts = [get_character_script(ord(c)) for c in tok if unicodedata.category(c).startswith("L")]
+            scripts = [get_character_script(ord(c)) for c in tok if is_letter_codepoint(ord(c))]
             tokenHasKana = any(s in ("Hiragana", "Katakana") for s in scripts)
             dominantScript = next((s for s in scripts if s is not None), "Latin")
             chunks.append((tok, f"SCRIPT_{dominantScript}"))

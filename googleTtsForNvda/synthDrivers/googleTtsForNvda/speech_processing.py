@@ -15,9 +15,32 @@ from collections.abc import Iterator, Sequence
 from functools import lru_cache
 from typing import Any
 
-from .language_profiles import is_combining_mark as _is_combining_mark
+from .language_profiles import (
+    in_codepoint_ranges as _in_codepoint_ranges,
+)
+from .language_profiles import (
+    is_closing_punctuation_codepoint as _is_closing_punctuation_codepoint,
+)
+from .language_profiles import (
+    is_combining_mark as _is_combining_mark,
+)
+from .language_profiles import (
+    is_letter_codepoint as _is_letter_codepoint,
+)
+from .language_profiles import (
+    is_number_codepoint as _is_number_codepoint,
+)
+from .language_profiles import (
+    is_wrapper_punctuation_codepoint as _is_wrapper_punctuation_codepoint,
+)
+from .language_profiles import (
+    punctuation_subcategory_codepoint as _punctuation_subcategory_codepoint,
+)
 from .unicode_data import (
+    GRAPHEME_EXTEND_EXTRA_RANGES,
+    NO_SPACE_SCRIPT_RANGES,
     NORMALIZATION_TABLE,
+    REGIONAL_INDICATOR_RANGES,
     SCRIPT_RANGES,
     SENTENCE_TERMINAL_CODEPOINTS,
 )
@@ -84,9 +107,7 @@ SOFT_BREAK_CHARS = (
     "\ufe10\ufe11\ufe13\ufe14\ufe50\ufe51\ufe54\ufe55\uff64"
 )
 ASCII_SENTENCE_TERMINATORS = ".!?"
-SENTENCE_TRAILING_CLOSERS = (
-    "'\"”’‘‛“‟)]}»«›‹」』）》〉〕〗〙〛】〞〟｣｠⦆\u3009\u300b\u300d\u300f\u3011\ufd3f\uff09\uff3d\uff5d"
-)
+SENTENCE_TRAILING_CLOSERS = "'\"”’‘‛“‟)]}»«›‹」』）》〉〕〗〙〛】〞〟｣｠⦆\ufd3f\uff3d\uff5d"
 # UCD Sentence_Terminal deliberately excludes some locale-specific or ambiguous
 # sentence endings. Keep only supported-language/common tailoring here.
 TAILORED_SENTENCE_TERMINATORS = set("\u037e\u0df4\u0e5a\u0e5b\u2026\u22ef")
@@ -114,6 +135,7 @@ NON_BREAKING_SOFT_PUNCTUATION = set(
     "\u2010\u2011\u2020\u2021\u2027\u2030\u2031"
     "\u30fb\ufe5f\ufe60\ufe61\ufe63\ufe68\ufe6a\ufe6b"
     "\uff02\uff03\uff05\uff06\uff07\uff0a\uff0d\uff0f\uff20\uff3c\uff3f\uff65"
+    "\U00010d6e\U0001e5ff"
 )
 NON_BREAKING_SOFT_PUNCTUATION_NAME_PARTS = (
     "APOSTROPHE",
@@ -129,8 +151,7 @@ NON_BREAKING_SOFT_PUNCTUATION_NAME_PARTS = (
 NO_SPACE_SCRIPT_PROFILES = (
     (
         (
-            (0x3100, 0x312F),
-            (0x31A0, 0x31BF),
+            *NO_SPACE_SCRIPT_RANGES.get("Bopomofo", ()),
             *SCRIPT_RANGES.get("Han", ()),
         ),
         80,
@@ -142,29 +163,9 @@ NO_SPACE_SCRIPT_PROFILES = (
         ),
         80,
     ),
-    (SCRIPT_RANGES.get("Thai", ((0x0E00, 0x0E7F),)), 70),
-    (((0x0E80, 0x0EFF),), 70),
-    (((0x1900, 0x194F),), 70),
-    (((0x1950, 0x197F),), 70),
-    (((0x1980, 0x19DF),), 70),
-    (((0x1A00, 0x1A1F),), 70),
-    (((0x1A20, 0x1AAF),), 70),
-    (SCRIPT_RANGES.get("Khmer", ((0x1780, 0x17FF),)), 70),
-    (((0x1000, 0x109F), (0xA9E0, 0xA9FF), (0xAA60, 0xAA7F)), 70),
-    (((0x0F00, 0x0FFF),), 70),
-    (((0x1700, 0x171F),), 70),
-    (((0x1720, 0x173F),), 70),
-    (((0x1740, 0x175F),), 70),
-    (((0x1760, 0x177F),), 70),
-    (((0x1B00, 0x1B7F),), 70),
-    (((0x1B80, 0x1BBF),), 70),
-    (((0x1BC0, 0x1BFF),), 70),
-    (((0x1C00, 0x1C4F),), 70),
-    (((0xA000, 0xA48F),), 70),
-    (((0xA930, 0xA95F),), 70),
-    (((0xA980, 0xA9DF),), 70),
-    (((0xAA00, 0xAA5F),), 70),
-    (((0xAA80, 0xAADF),), 70),
+    (SCRIPT_RANGES.get("Thai", ()), 70),
+    (SCRIPT_RANGES.get("Khmer", ()), 70),
+    *((ranges, 70) for script, ranges in NO_SPACE_SCRIPT_RANGES.items() if script != "Bopomofo"),
 )
 _FLATTENED_NO_SPACE_RANGES: tuple[tuple[int, int, int], ...] = tuple(
     sorted(
@@ -173,6 +174,8 @@ _FLATTENED_NO_SPACE_RANGES: tuple[tuple[int, int, int], ...] = tuple(
     )
 )
 _FLATTENED_NO_SPACE_STARTS: tuple[int, ...] = tuple(start for start, _end, _limit in _FLATTENED_NO_SPACE_RANGES)
+_GRAPHEME_EXTEND_EXTRA_STARTS: tuple[int, ...] = tuple(start for start, _ in GRAPHEME_EXTEND_EXTRA_RANGES)
+_REGIONAL_INDICATOR_STARTS: tuple[int, ...] = tuple(start for start, _ in REGIONAL_INDICATOR_RANGES)
 
 
 def _find_no_space_range(codepoint: int) -> tuple[int, int, int] | None:
@@ -187,7 +190,8 @@ def _find_no_space_range(codepoint: int) -> tuple[int, int, int] | None:
 def _is_word_character(character: str) -> bool:
     if not character:
         return False
-    return character.isalnum() or _is_combining_mark(ord(character))
+    cp = ord(character)
+    return _is_letter_codepoint(cp) or _is_number_codepoint(cp) or _is_combining_mark(cp)
 
 
 COMMON_ABBREVIATIONS: frozenset[str] = frozenset()
@@ -568,7 +572,7 @@ def _is_soft_break_character(character: str) -> bool:
         return False
     if _is_sentence_terminator_character(character):
         return True
-    category = unicodedata.category(character)
+    category = _punctuation_subcategory_codepoint(ord(character))
     if character in NON_BREAKING_SOFT_PUNCTUATION:
         return False
     name = _unicode_name(character)
@@ -599,19 +603,15 @@ def _is_dash_like_character(character: str) -> bool:
 def _is_sentence_trailing_closer(character: str) -> bool:
     if len(character) != 1:
         return False
-    return character in SENTENCE_TRAILING_CLOSERS or unicodedata.category(character) in {"Pe", "Pf"}
+    return character in SENTENCE_TRAILING_CLOSERS or _is_closing_punctuation_codepoint(ord(character))
 
 
 def _strip_surrounding_wrappers(token: str, extraChars: str = "") -> str:
     start = 0
     end = len(token)
-    while start < end and (
-        token[start] in extraChars or unicodedata.category(token[start]) in {"Ps", "Pe", "Pi", "Pf"}
-    ):
+    while start < end and (token[start] in extraChars or _is_wrapper_punctuation_codepoint(ord(token[start]))):
         start += 1
-    while end > start and (
-        token[end - 1] in extraChars or unicodedata.category(token[end - 1]) in {"Ps", "Pe", "Pi", "Pf"}
-    ):
+    while end > start and (token[end - 1] in extraChars or _is_wrapper_punctuation_codepoint(ord(token[end - 1]))):
         end -= 1
     return token[start:end]
 
@@ -622,8 +622,7 @@ def _is_no_space_script_character(character: str) -> bool:
     if character.isascii():
         return False
     codepoint = ord(character)
-    category = unicodedata.category(character)
-    if not (category.startswith("L") or category.startswith("M")):
+    if not (_is_letter_codepoint(codepoint) or _is_combining_mark(codepoint)):
         return False
     return _find_no_space_range(codepoint) is not None
 
@@ -700,8 +699,8 @@ class TextSegmenter:
         if _is_word_character(previousCharacter) and _is_word_character(nextCharacter):
             return True
         if previousCharacter in ",;" and _is_word_character(nextCharacter):
-            return not (previousCharacter == "," and nextCharacter.isdigit())
-        return previousCharacter == ":" and nextCharacter.isalpha()
+            return not (previousCharacter == "," and _is_number_codepoint(ord(nextCharacter)))
+        return previousCharacter == ":" and _is_letter_codepoint(ord(nextCharacter))
 
     def needs_index_boundary_space(self, previousCharacter: str, nextCharacter: str) -> bool:
         if not previousCharacter or not nextCharacter:
@@ -1096,10 +1095,9 @@ class TextSegmenter:
         noSpaceCharacters = 0
         segmentLimit: int | None = None
         for character in sample:
-            category = unicodedata.category(character)
-            if category.startswith("L") or category.startswith("M"):
+            codepoint = ord(character)
+            if _is_letter_codepoint(codepoint) or _is_combining_mark(codepoint):
                 signalCharacters += 1
-                codepoint = ord(character)
                 rangeEntry = _find_no_space_range(codepoint)
                 if rangeEntry is not None:
                     noSpaceCharacters += 1
@@ -1116,22 +1114,26 @@ class TextSegmenter:
     def _extend_cut_over_combining_marks(self, text: str, cut: int, maxCut: int) -> int:
         textLen = len(text)
         while cut < textLen:
-            ch = text[cut]
-            cp = ord(ch)
-            # Preserve UCD 17.0 combining marks, ZWNJ/ZWJ sequences, variation selectors, keycaps, tags, skin tone modifiers, and flag pairs
+            cp = ord(text[cut])
+            # Preserve UCD combining marks, Grapheme_Cluster_Break=Extend (e.g. ZWNJ,
+            # halfwidth Kana sound marks, skin tones, tags), ZWJ sequences, and flag pairs
             if (
                 _is_combining_mark(cp)
-                or cp in (0x200C, 0x200D, 0xFE0E, 0xFE0F, 0x20E3)
-                or (0x1F3FB <= cp <= 0x1F3FF)
-                or (0xE0020 <= cp <= 0xE007F)
-                or (0xE0100 <= cp <= 0xE01EF)
+                or _in_codepoint_ranges(cp, _GRAPHEME_EXTEND_EXTRA_STARTS, GRAPHEME_EXTEND_EXTRA_RANGES)
+                or cp == 0x200D
                 or (cut > 0 and ord(text[cut - 1]) == 0x200D)
             ):
                 cut += 1
-            elif 0x1F1E6 <= cp <= 0x1F1FF and cut > 0 and 0x1F1E6 <= ord(text[cut - 1]) <= 0x1F1FF:
+            elif (
+                _in_codepoint_ranges(cp, _REGIONAL_INDICATOR_STARTS, REGIONAL_INDICATOR_RANGES)
+                and cut > 0
+                and _in_codepoint_ranges(ord(text[cut - 1]), _REGIONAL_INDICATOR_STARTS, REGIONAL_INDICATOR_RANGES)
+            ):
                 precedingFlags = 0
                 probe = cut - 1
-                while probe >= 0 and 0x1F1E6 <= ord(text[probe]) <= 0x1F1FF:
+                while probe >= 0 and _in_codepoint_ranges(
+                    ord(text[probe]), _REGIONAL_INDICATOR_STARTS, REGIONAL_INDICATOR_RANGES
+                ):
                     precedingFlags += 1
                     probe -= 1
                 if precedingFlags % 2 == 1:

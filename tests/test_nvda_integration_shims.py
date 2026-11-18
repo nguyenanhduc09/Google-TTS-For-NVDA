@@ -2535,7 +2535,7 @@ class RealNvdaIntegrationShimTests(unittest.TestCase):
             plugin._voiceDictCache.clear()
             plugin._activeLoadedVoiceDictVariant = None
 
-        # 3. Real getSpellingSpeech respects NVDA unicodeNormalization while always normalizing UCD 17.0 symbols.
+        # 3. Real getSpellingSpeech respects NVDA unicodeNormalization while always normalizing UCD symbols.
         def orig_spelling(text: str, locale: str | None = None, useCharacterDescriptions: bool = False) -> Any:
             yield text
 

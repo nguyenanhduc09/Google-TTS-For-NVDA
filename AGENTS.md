@@ -21,10 +21,10 @@ Technical code map indexing the codebase architecture, modules, classes, functio
     - **catalog.py** — `VoiceCatalog`, `VoicePackage`, `Speaker` models, engine library integrity validation
     - **cld2/** — Vendored Compact Language Detector 2 dynamic libraries (`cld2_x86.dll`, `cld2_x64.dll`, `cld2.dll`, `LICENSE.txt`, `README.txt`)
     - **language_detector.py** — CLD2-backed language detection, locale redirects, candidate priors, single-character and spelling-clause routing
-    - **language_profiles.py** — Unicode 17.0 / NFC normalization, token/URL/emoji predicates, clause-context routing, mixed-text segmentation
+    - **language_profiles.py** — Unicode / NFC normalization, token/URL/emoji predicates, clause-context routing, mixed-text segmentation
     - **language_utils.py** — Language normalization, NVDA special locale mappings, localized display names, `call_compat()`
     - **speech_processing.py** — `TextSegmenter`, Unicode sentence boundary detection, `PcmSilenceShortener`, `PcmLeadBuffer`, grapheme/emoji cut protection
-    - **unicode_data.py** — Pre-generated UCD 17.0 / CLDR 48.2 script/combining/currency/emoji ranges, units, Latin exemplars, sentence terminals, and normalization table
+    - **unicode_data.py** — Pre-generated UCD / CLDR script/combining/currency/emoji ranges, units, Latin exemplars, sentence terminals, and normalization table
     - **voice_store.py** — Voice package download, copy, verify, remove, persistent verification cache
     - **web/** — Headless Chromium bridge environment (`index.html`, `bridgeHarness.js`)
     - **WasmTtsEngine/<ENGINE_VERSION>/** — Bundled Chromium WASM TTS engine runtime (`bindings_main.js/.wasm`, `background_compiled.js`, `offscreen.html`, `offscreen_compiled.js`, `manifest.json`, `wasm_tts_manifest_v3.json`, `voices.json`, `streaming_worklet_processor.js`, `_metadata/verified_contents.json`, `VOICE_CATALOG_NOTICE.txt`, licenses)
@@ -43,7 +43,7 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 - **build.bat** / **build.sh** — Windows and POSIX `.nvda-addon` packaging scripts (see [CONTRIBUTING.md](CONTRIBUTING.md))
 - **build_i18n.py** — Localization CLI for POT/PO/MO and documentation catalogs (see [TRANSLATING.md](TRANSLATING.md))
 - **generate_voices_json.py** — Upstream voice catalog scraper and generator from ChromeOS/Google textproto
-- **generate_unicode_data.py** — UCD 17.0 and CLDR 48.2 data generator for `unicode_data.py`
+- **generate_unicode_data.py** — UCD and CLDR data generator for `unicode_data.py`
 - **make_update_manifest.py** — Release update manifest generator producing `stable.json` for the internal updater (see [UPDATER_RELEASE_GUIDE.md](UPDATER_RELEASE_GUIDE.md))
 - **AGENTS.md**, **CONTRIBUTING.md**, **TRANSLATING.md**, **UPDATER_RELEASE_GUIDE.md**, **readme.md** — Architecture code map plus contributor/CI, localization, release/updater, and user documentation
 - **mypy.ini**, **ruff.toml**, **.gitattributes**, **.gitignore**, **LICENSE** — Tooling, Git, and GPL-2.0 license configuration
@@ -151,7 +151,7 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 
 - **Latency Text Segmentation (`speech_processing.py:TextSegmenter`)**:
   - Sanitization & segmentation: `sanitize_speech_text()` (`_SPEECH_SANITIZE_TABLE` maps non-standard Unicode whitespace from `NORMALIZATION_TABLE` and PUA codepoints to ASCII spaces with 1:1 index alignment), `split_text_for_latency()`, `iter_text_segments_for_latency()`, `iter_indexed_text_segments()`, `spoken_bridge_segments()`, `needs_index_boundary_space()`.
-  - Grapheme & emoji cut protection: `_extend_cut_over_combining_marks()` extends cuts over combining marks (`language_profiles.is_combining_mark()`), `ZWNJ`/`ZWJ`, variation selectors (`0xFE0E`, `0xFE0F`, `0xE0100`-`0xE01EF`), keycaps (`0x20E3`), skin tones (`0x1F3FB`-`0x1F3FF`), tags (`0xE0020`-`0xE007F`), and flag regional indicators (`0x1F1E6`-`0x1F1FF`).
+  - Grapheme & emoji cut protection: `_extend_cut_over_combining_marks()` extends cuts over combining marks (`language_profiles.is_combining_mark()`), `GRAPHEME_EXTEND_EXTRA_RANGES` (`ZWNJ`, halfwidth Kana marks, skin tones, tags), `ZWJ` sequences, and `REGIONAL_INDICATOR_RANGES` flag pairs.
   - Boundary detection & guards: sentence splits (`find_sentence_splits()`, `is_sentence_terminator_character()`, `TAILORED_SENTENCE_TERMINATORS`, `_is_sentence_trailing_closer()`, `_sentence_terminator_stays_with_token()`, `_period_stays_with_previous_token()`, `_period_is_numeric_separator()`), soft phrase cuts (`SOFT_BREAK_CHARS`, `_is_soft_break_character()`, `_is_colon_like_character()`, `_is_dash_like_character()`, `_find_soft_phrase_cut()`, `_is_contextual_soft_phrase_cut()`, `_is_forced_soft_break()`), space-free scripts (`NO_SPACE_SCRIPT_PROFILES`, `_find_no_space_range()`, `_is_no_space_script_character()`, `_find_no_space_script_cut()`), forced cuts (`_iter_forced_latency_segments()`, `_find_forced_latency_cut()`), and structural URL/wrapper guards (`looks_like_url_token()`, `_strip_surrounding_wrappers()`, `should_pause_after_segment()`, `ends_with_pause_punctuation()`).
 
 - **Pause Shortening & Lead Buffering (`speech_processing.py`, `synthDrivers/__init__.py`)**:
@@ -194,7 +194,7 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 
 - **Unified Language Profiles & Mixed-Text Segmentation (`language_profiles.py`)**:
   - Normalization: `normalize_mathematical_alphanumeric()` applies `NORMALIZATION_TABLE` and composes NFD sequences to NFC while preserving singleton Greek punctuation (`U+037E`, `U+0387` via `_NFC_PRESERVED_PUNCT_RE`).
-  - Token & character predicates: `is_combining_mark()`, `is_single_grapheme_token()`, `has_vietnamese_diacritics()`, `is_emoji_token()`, `is_number_token()`, `is_url_or_email_token()`, `is_symbol_or_emoji_token()`, `has_language_words()`, `is_spelling_only_text()`, `get_character_script()`, `single_character_candidate_root()`, `single_grapheme_candidate_root()` cover numbers (`_NUMBER_CHUNK_PATTERN`), RFC 3986 URLs/emails/domains (`_URL_EMAIL_DOMAIN_PATTERN`), ISO 4217 currencies, CLDR units, time formats, and emoji runs (`_EMOJI_RUN_PATTERN`).
+  - Token & character predicates: `in_codepoint_ranges()`, `is_combining_mark()`, `is_letter_codepoint()`, `is_number_codepoint()`, `is_closing_punctuation_codepoint()`, `is_wrapper_punctuation_codepoint()`, `punctuation_subcategory_codepoint()`, `is_punctuation_codepoint()`, `is_single_grapheme_token()`, `has_vietnamese_diacritics()`, `is_emoji_token()`, `is_number_token()`, `is_url_or_email_token()`, `is_symbol_or_emoji_token()`, `has_language_words()`, `is_spelling_only_text()`, `get_character_script()`, `single_character_candidate_root()`, `single_grapheme_candidate_root()` cover numbers (`_NUMBER_CHUNK_PATTERN`), RFC 3986 URLs/emails/domains (`_URL_EMAIL_DOMAIN_PATTERN`), ISO 4217 currencies, CLDR units, time formats, and emoji runs (`_EMOJI_RUN_PATTERN`).
   - Mixed-text segmentation: `segment_mixed_text()` splits mixed-script and multi-Latin/Han text into language-tagged segments (`_SCRIPT_TO_CANDIDATE_ROOTS`, `latin_exemplar_signal()`, `script_ranges_for_language_root()`, `token_has_character_in_ranges()`, `language_script_signal()`, `language_token_signal()`, `_is_clause_break_chunk()`, `_CLAUSE_BREAK_PUNCTUATION`).
 
 - **Synth-Side Language Selection (`synthDrivers/__init__.py`) & Locale Utilities (`language_utils.py`)**:
@@ -232,23 +232,17 @@ Technical code map indexing the codebase architecture, modules, classes, functio
 
 ---
 
-## 12. Developer Tools & Companion Docs Reference Map
+## 12. Developer Tools Reference Map
 
 - **Voice Catalog Generator (`generate_voices_json.py`)**:
   - `dependent_voice_id_for_package()`, `_SHARED_MULTI_DEPENDENCY_RE`, `_extract_speakers_blocks()`, `extract_speakers_from_textproto()`, `_fetch_speaker_wave()`, `fetch_new_package_speakers()`, `check_engine_version_alignment()`, `latest_engine_voices_json()`, `select_engine_voices_json()`, `_atomic_write_json()`, `MAX_PACKAGE_BYTES`, `MAX_TEXTPROTO_BYTES`, `get_native_language_name()`, `format_speaker_name()`, `NATIVE_LANGUAGE_NAMES`.
 
 - **Unicode Data Generator (`generate_unicode_data.py` -> `unicode_data.py`)**:
-  - Generator helpers: `_parse_ucd_records()`, `_supported_language_scripts()`, `_likely_scripts()`, `_configured_engine_version()`, `_configured_voices_json()`, `_extract_combining_mark_ranges()`, `_extract_currency_symbol_ranges()`, `_extract_emoji_pictographic_ranges()`, `_extract_cldr_active_currencies()`, `_extract_cldr_unit_symbols()`, `_extract_latin_language_exemplars()`, `_build_normalization_table()`.
-  - Exported constants (`unicode_data.py`): `UNICODE_VERSION`, `CLDR_VERSION`, `SUPPORTED_LANGUAGE_SCRIPTS`, `SCRIPT_RANGES`, `LANGUAGE_SCRIPT_RANGES`, `SENTENCE_TERMINAL_CODEPOINTS`, `COMBINING_MARK_RANGES`, `CURRENCY_SYMBOL_RANGES`, `EMOJI_PICTOGRAPHIC_RANGES`, `CLDR_ACTIVE_CURRENCIES`, `CLDR_UNIT_SYMBOLS`, `LATIN_LANGUAGE_EXEMPLARS`, `NORMALIZATION_TABLE`.
+  - Generator helpers: `_parse_ucd_records()`, `_supported_language_scripts()`, `_likely_scripts()`, `_language_aliases()`, `_language_data_scripts()`, `_parent_locales()`, `_configured_engine_version()`, `_configured_voices_json()`, `_extract_combining_mark_ranges()`, `_extract_grapheme_break_ranges()`, `_extract_ucd_category_ranges()`, `_extract_currency_symbol_ranges()`, `_extract_emoji_pictographic_ranges()`, `_extract_cldr_active_currencies()`, `_extract_cldr_unit_symbols()`, `_extract_latin_language_exemplars()`, `_build_normalization_table()`.
+  - Exported constants (`unicode_data.py`): `UNICODE_VERSION`, `CLDR_VERSION`, `SUPPORTED_LANGUAGE_SCRIPTS`, `SCRIPT_RANGES`, `LANGUAGE_SCRIPT_RANGES`, `NO_SPACE_SCRIPT_RANGES`, `SENTENCE_TERMINAL_CODEPOINTS`, `COMBINING_MARK_RANGES`, `GRAPHEME_EXTEND_EXTRA_RANGES`, `REGIONAL_INDICATOR_RANGES`, `LETTER_RANGES`, `NUMBER_RANGES`, `CONNECTOR_PUNCTUATION_RANGES`, `DASH_PUNCTUATION_RANGES`, `OPENING_PUNCTUATION_RANGES`, `CLOSING_PUNCTUATION_RANGES`, `OTHER_PUNCTUATION_RANGES`, `CURRENCY_SYMBOL_RANGES`, `EMOJI_PICTOGRAPHIC_RANGES`, `CLDR_ACTIVE_CURRENCIES`, `CLDR_UNIT_SYMBOLS`, `LATIN_LANGUAGE_EXEMPLARS`, `NORMALIZATION_TABLE`.
 
 - **Localization Tooling (`build_i18n.py`)**:
   - `_translatable_source_messages()`, `_write_pot()`, `_run_msgmerge()`, `_verify_merged_po()`, `_check_catalog()`, `_check_format_interpolations()`, `_check_html_tag_interpolations()`, `_check_po_syntax()`, `_check_po_syntax_with_msgfmt()`, `_extract_doc_segments()`, `_build_doc_for_language()`, `_markdown_to_doc_html()`, `_close_optional_doc_tags()`, `_strip_outer_table_pipes()`, `_compile_mo_file()`.
 
 - **Update Manifest Generator (`make_update_manifest.py`)**:
   - `build_update_manifest()`, `_atomic_write_text()`.
-
-- **Workflow & Suite Documentation** (workflows live in these dedicated guides rather than this code map):
-  - **Test suite, contract checker & manual checklist**: [tests/README.md](tests/README.md)
-  - **Contributor, CI & build workflow**: [CONTRIBUTING.md](CONTRIBUTING.md)
-  - **I18N translation & documentation workflow**: [TRANSLATING.md](TRANSLATING.md)
-  - **Add-on updater release process**: [UPDATER_RELEASE_GUIDE.md](UPDATER_RELEASE_GUIDE.md)

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate runtime Unicode tables from UCD and CLDR files.
+"""Generate runtime Unicode tables from local UCD and CLDR files.
 
 Download sources:
-- UCD: https://www.unicode.org/Public/17.0.0/ucd/UCD.zip
-- CLDR: https://www.unicode.org/Public/cldr/48.2/cldr-common-48.2.zip
+- UCD: https://www.unicode.org/Public/18.0.0/ucd/UCD.zip
+- CLDR: https://www.unicode.org/Public/cldr/49/cldr-common-49.zip
 """
 
 from __future__ import annotations
@@ -28,23 +28,38 @@ DEFAULT_ENGINE_ROOT = ROOT / "googleTtsForNvda" / "synthDrivers" / "googleTtsFor
 DEFAULT_OUTPUT = ROOT / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "unicode_data.py"
 DEFAULT_CATALOG_MODULE = ROOT / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda" / "catalog.py"
 
-_CLDR_LANGUAGE_FALLBACKS = {
-    # CLDR treats Mandarin as a legacy alias of Chinese in likely-subtag data.
-    "cmn": "zh",
-}
 _CLDR_COMPOSITE_SCRIPTS = {
     "Hanb": ("Han", "Bopomofo"),
     "Jpan": ("Han", "Hiragana", "Katakana"),
     "Kore": ("Hangul", "Han"),
 }
-_SUPPORTED_ALTERNATE_SCRIPTS = {
-    # These alternates are already accepted by the add-on for the corresponding
-    # voice language and complement CLDR's single most-likely script.
-    "ks": ("Devanagari",),
-    "mni": ("Meetei_Mayek",),
-    "sd": ("Devanagari",),
-    "sr": ("Latin",),
-}
+_NO_SPACE_EXTRA_SCRIPTS = (
+    "Ahom",
+    "Balinese",
+    "Batak",
+    "Bopomofo",
+    "Buginese",
+    "Buhid",
+    "Cham",
+    "Hanunoo",
+    "Javanese",
+    "Kawi",
+    "Lao",
+    "Lepcha",
+    "Limbu",
+    "Myanmar",
+    "New_Tai_Lue",
+    "Rejang",
+    "Sundanese",
+    "Tagalog",
+    "Tagbanwa",
+    "Tai_Le",
+    "Tai_Tham",
+    "Tai_Viet",
+    "Tai_Yo",
+    "Tibetan",
+    "Yi",
+)
 
 
 def _parse_ucd_records(path: Path) -> list[tuple[int, int, str]]:
@@ -92,6 +107,62 @@ def _likely_scripts(path: Path) -> dict[str, str]:
     return mappings
 
 
+def _language_aliases(cldrCommonDir: Path | None) -> dict[str, str]:
+    if cldrCommonDir is None:
+        return {}
+    metadataPath = cldrCommonDir / "supplemental" / "supplementalMetadata.xml"
+    if not metadataPath.is_file():
+        return {}
+    aliases: dict[str, str] = {}
+    for element in ET.parse(metadataPath).findall(".//languageAlias"):
+        if element.attrib.get("reason") not in {"macrolanguage", "legacy", "deprecated"}:
+            continue
+        source = (element.attrib.get("type") or "").strip()
+        replacement = (element.attrib.get("replacement") or "").strip()
+        if source and replacement and "_" not in replacement:
+            aliases[source] = replacement
+    return aliases
+
+
+def _language_data_scripts(
+    cldrCommonDir: Path | None,
+) -> tuple[dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    if cldrCommonDir is None:
+        return {}, {}
+    supplementalPath = cldrCommonDir / "supplemental" / "supplementalData.xml"
+    if not supplementalPath.is_file():
+        return {}, {}
+    primary: dict[str, tuple[str, ...]] = {}
+    secondary: dict[str, tuple[str, ...]] = {}
+    for element in ET.parse(supplementalPath).findall(".//languageData/language"):
+        language = (element.attrib.get("type") or "").strip()
+        scripts = tuple((element.attrib.get("scripts") or "").split())
+        if not language or not scripts:
+            continue
+        if element.attrib.get("alt") == "secondary":
+            secondary[language] = scripts
+        else:
+            primary[language] = scripts
+    return primary, secondary
+
+
+def _parent_locales(cldrCommonDir: Path | None) -> dict[str, tuple[str, ...]]:
+    if cldrCommonDir is None:
+        return {}
+    supplementalPath = cldrCommonDir / "supplemental" / "supplementalData.xml"
+    if not supplementalPath.is_file():
+        return {}
+    parentsByLocale: dict[str, list[str]] = defaultdict(list)
+    for element in ET.parse(supplementalPath).findall(".//parentLocales/parentLocale"):
+        parent = (element.attrib.get("parent") or "").strip()
+        if not parent or parent == "root":
+            continue
+        for locale in (element.attrib.get("locales") or "").split():
+            if parent not in parentsByLocale[locale]:
+                parentsByLocale[locale].append(parent)
+    return {locale: tuple(parents) for locale, parents in parentsByLocale.items()}
+
+
 def _supported_locales(voicesJsonPath: Path) -> set[str]:
     packages = json.loads(voicesJsonPath.read_text(encoding="utf-8-sig"))
     locales: set[str] = set()
@@ -112,29 +183,43 @@ def _configured_voices_json(engineRoots: Iterable[Path] | None = None) -> Path:
     return select_engine_voices_json(engineRoots, configuredVersion=_configured_engine_version())
 
 
+def _expand_cldr_script_codes(
+    scriptCode: str,
+    scriptAliases: dict[str, str],
+) -> tuple[str, ...]:
+    if scriptCode in _CLDR_COMPOSITE_SCRIPTS:
+        return _CLDR_COMPOSITE_SCRIPTS[scriptCode]
+    try:
+        return (scriptAliases[scriptCode],)
+    except KeyError as error:
+        raise ValueError(f"UCD has no Script alias for CLDR code {scriptCode}") from error
+
+
 def _supported_language_scripts(
     locales: Iterable[str],
     likelyScripts: dict[str, str],
     scriptAliases: dict[str, str],
+    languageAliases: dict[str, str] | None = None,
+    primaryLanguageScripts: dict[str, tuple[str, ...]] | None = None,
+    secondaryLanguageScripts: dict[str, tuple[str, ...]] | None = None,
 ) -> dict[str, tuple[str, ...]]:
+    aliases = languageAliases or {}
+    primaryMap = primaryLanguageScripts or {}
+    secondaryMap = secondaryLanguageScripts or {}
     byLanguage: dict[str, set[str]] = defaultdict(set)
     for locale in locales:
         language = locale.split("_", 1)[0]
-        fallbackLanguage = _CLDR_LANGUAGE_FALLBACKS.get(language, language)
+        fallbackLanguage = aliases.get(language, language)
         scriptCode = likelyScripts.get(locale) or likelyScripts.get(language) or likelyScripts.get(fallbackLanguage)
         if scriptCode is None:
             raise ValueError(f"CLDR has no likely script for supported locale {locale}")
-        if scriptCode in _CLDR_COMPOSITE_SCRIPTS:
-            scripts = _CLDR_COMPOSITE_SCRIPTS[scriptCode]
-        else:
-            try:
-                scripts = (scriptAliases[scriptCode],)
-            except KeyError as error:
-                raise ValueError(f"UCD has no Script alias for CLDR code {scriptCode}") from error
-        byLanguage[language].update(scripts)
-    for language, scripts in _SUPPORTED_ALTERNATE_SCRIPTS.items():
-        if language in byLanguage:
-            byLanguage[language].update(scripts)
+        byLanguage[language].update(_expand_cldr_script_codes(scriptCode, scriptAliases))
+        for code in primaryMap.get(language) or primaryMap.get(fallbackLanguage, ()):
+            byLanguage[language].update(_expand_cldr_script_codes(code, scriptAliases))
+        # Manipuri keeps its CLDR-listed secondary Meetei Mayek script alongside Bengali.
+        if language == "mni":
+            for code in secondaryMap.get(language, ()):
+                byLanguage[language].update(_expand_cldr_script_codes(code, scriptAliases))
     return {language: tuple(sorted(scripts)) for language, scripts in sorted(byLanguage.items())}
 
 
@@ -220,6 +305,45 @@ def _extract_currency_symbol_ranges(ucdDir: Path) -> tuple[tuple[int, int], ...]
     return _extract_unicode_data_category_ranges(ucdDir, {"Sc"})
 
 
+def _extract_ucd_category_ranges(ucdDir: Path) -> dict[str, tuple[tuple[int, int], ...]]:
+    return {
+        "letter": _extract_unicode_data_category_ranges(ucdDir, {"Lu", "Ll", "Lt", "Lm", "Lo"}),
+        "number": _extract_unicode_data_category_ranges(ucdDir, {"Nd", "Nl", "No"}),
+        "connector": _extract_unicode_data_category_ranges(ucdDir, {"Pc"}),
+        "dash": _extract_unicode_data_category_ranges(ucdDir, {"Pd"}),
+        "opening": _extract_unicode_data_category_ranges(ucdDir, {"Ps", "Pi"}),
+        "closing": _extract_unicode_data_category_ranges(ucdDir, {"Pe", "Pf"}),
+        "other_punct": _extract_unicode_data_category_ranges(ucdDir, {"Po"}),
+    }
+
+
+def _expand_ranges_to_set(ranges: Iterable[tuple[int, int]]) -> set[int]:
+    codepoints: set[int] = set()
+    for start, end in ranges:
+        codepoints.update(range(start, end + 1))
+    return codepoints
+
+
+def _extract_grapheme_break_ranges(
+    ucdDir: Path,
+    combiningMarkRanges: tuple[tuple[int, int], ...],
+) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+    graphemeBreakPath = ucdDir / "auxiliary" / "GraphemeBreakProperty.txt"
+    if not graphemeBreakPath.is_file():
+        return (), ()
+    combiningMarks = _expand_ranges_to_set(combiningMarkRanges)
+    extendExtra: list[tuple[int, int]] = []
+    regionalIndicators: list[tuple[int, int]] = []
+    for start, end, prop in _parse_ucd_records(graphemeBreakPath):
+        if prop == "Extend":
+            for cp in range(start, end + 1):
+                if cp not in combiningMarks:
+                    extendExtra.append((cp, cp))
+        elif prop == "Regional_Indicator":
+            regionalIndicators.append((start, end))
+    return _merge_ranges(extendExtra), _merge_ranges(regionalIndicators)
+
+
 def _extract_emoji_pictographic_ranges(ucdDir: Path) -> tuple[tuple[int, int], ...]:
     emojiDataPath = ucdDir / "emoji" / "emoji-data.txt"
     if not emojiDataPath.is_file():
@@ -272,7 +396,7 @@ def _extract_cldr_active_currencies(cldrCommonDir: Path | None) -> tuple[str, ..
     return tuple(sorted(codes))
 
 
-def _parse_cldr_exemplar_set(rawText: str) -> set[str]:
+def _parse_cldr_exemplar_set(rawText: str, letterCodepoints: set[int] | None = None) -> set[str]:
     text = rawText.strip()
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1].strip()
@@ -285,7 +409,12 @@ def _parse_cldr_exemplar_set(rawText: str) -> set[str]:
     def _add_char(ch: str) -> None:
         normalized = unicodedata.normalize("NFC", ch)
         for char in normalized:
-            if ord(char) > 0x7F and unicodedata.category(char).startswith("L"):
+            isLetter = (
+                ord(char) in letterCodepoints
+                if letterCodepoints is not None
+                else unicodedata.category(char).startswith("L")
+            )
+            if ord(char) > 0x7F and isLetter:
                 folded = char.lower() if len(char.lower()) == 1 else char
                 out.add(folded)
 
@@ -364,18 +493,25 @@ def _parse_cldr_exemplar_set(rawText: str) -> set[str]:
 def _extract_latin_language_exemplars(
     cldrCommonDir: Path | None,
     languageScripts: dict[str, tuple[str, ...]],
+    letterCodepoints: set[int] | None = None,
 ) -> dict[str, str]:
     if cldrCommonDir is None:
         return {}
     mainDir = cldrCommonDir / "main"
     if not mainDir.is_dir():
         return {}
+    parentLocales = _parent_locales(cldrCommonDir)
     latinRoots = sorted(root for root, scripts in languageScripts.items() if "Latin" in scripts)
     exemplars: dict[str, str] = {}
     for root in latinRoots:
-        candidateFiles = ["sr_Latn.xml", "sr.xml"] if root == "sr" else [f"{root}.xml"]
-        if root == "nb":
-            candidateFiles.append("no.xml")
+        candidateFiles = [f"{root}_Latn.xml", f"{root}.xml"]
+        for parentRoot in parentLocales.get(root, ()):
+            parentLatn = f"{parentRoot}_Latn.xml"
+            parentMain = f"{parentRoot}.xml"
+            if parentLatn not in candidateFiles:
+                candidateFiles.append(parentLatn)
+            if parentMain not in candidateFiles:
+                candidateFiles.append(parentMain)
         chars: set[str] = set()
         for fileName in candidateFiles:
             xmlPath = mainDir / fileName
@@ -384,7 +520,7 @@ def _extract_latin_language_exemplars(
             tree = ET.parse(xmlPath)
             for elem in tree.findall(".//characters/exemplarCharacters"):
                 if elem.attrib.get("type") is None and elem.text:
-                    chars |= _parse_cldr_exemplar_set(elem.text)
+                    chars |= _parse_cldr_exemplar_set(elem.text, letterCodepoints)
             if chars:
                 break
         if chars:
@@ -504,52 +640,44 @@ def _extract_cldr_unit_symbols(cldrCommonDir: Path | None) -> tuple[str, ...]:
             if len(baseSym) <= 3 and (baseSym.isalpha() or baseSym in ("Ω", "Ω")):
                 for prefix in commonSiPrefixes:
                     allSymbols.add(f"{prefix}{baseSym}")
-                    if prefix == "μ":
-                        allSymbols.add(f"u{baseSym}")
                     if baseSym in ("Ω", "Ω"):
                         allSymbols.add(f"{prefix}Ω")
                         allSymbols.add(f"{prefix}Ω")
 
+    digitalSiPrefixes = {
+        prefix for key, prefix in siPrefixes.items() if key in {"10p3", "10p6", "10p9", "10p12", "10p15"}
+    }
+    digitalPerUnits: set[str] = set()
     for digitalBase in digitalUnits:
         for baseSym in unitSymbolsByType.get(digitalBase, ()):
             if len(baseSym) <= 4 and baseSym.isalpha():
+                digitalPerUnits.add(baseSym)
                 for prefix in binaryPrefixes.values():
-                    allSymbols.add(f"{prefix}{baseSym}")
-                for prefix in ("k", "K", "M", "G", "T", "P"):
-                    allSymbols.add(f"{prefix}{baseSym}")
-                    if len(baseSym) == 1:
-                        allSymbols.add(f"{prefix}{baseSym}ps")
-                        allSymbols.add(f"{prefix}{baseSym}/s")
-                if len(baseSym) == 1:
-                    allSymbols.add(f"{baseSym}ps")
-                    allSymbols.add(f"{baseSym}/s")
-    for unitShortName, syms in rootSymbolsByType.items():
+                    sym = f"{prefix}{baseSym}"
+                    allSymbols.add(sym)
+                    digitalPerUnits.add(sym)
+                for prefix in digitalSiPrefixes:
+                    sym = f"{prefix}{baseSym}"
+                    allSymbols.add(sym)
+                    digitalPerUnits.add(sym)
+    for unitShortName, syms in unitSymbolsByType.items():
         if unitShortName.endswith(("bit", "byte")):
             for sym in syms:
-                if len(sym) <= 3 and sym.isalpha() and sym[-1] in ("b", "B"):
-                    allSymbols.add(f"{sym}ps")
-                    allSymbols.add(f"{sym}/s")
-                    allSymbols.add(f"{sym[-1]}ps")
-                    allSymbols.add(f"{sym[-1]}/s")
-                    if sym[0] == "k":
-                        allSymbols.add(f"K{sym[1:]}ps")
-                        allSymbols.add(f"K{sym[1:]}/s")
-
-    for hourSym in rootSymbolsByType.get("hour", ()):
-        for energyBase in ("watt", "ampere"):
-            for baseSym in rootSymbolsByType.get(energyBase, ()):
-                allSymbols.add(f"{baseSym}{hourSym}")
-                for prefix in ("m", "k", "M", "G", "T"):
-                    allSymbols.add(f"{prefix}{baseSym}{hourSym}")
+                if len(sym) <= 5 and sym.isalpha():
+                    digitalPerUnits.add(sym)
+    for digitalSym in digitalPerUnits:
+        for secSym in rootSymbolsByType.get("second", ()):
+            for pat in perPatterns:
+                compound = unicodedata.normalize("NFC", pat.replace("{0}", digitalSym).replace("{1}", secSym))
+                if " " not in compound and len(compound) <= 10:
+                    allSymbols.add(compound)
 
     for lengthBase in ("meter", "centimeter", "millimeter", "kilometer"):
         for sym in list(rootSymbolsByType.get(lengthBase, ())):
             for pat in squarePatterns:
                 allSymbols.add(unicodedata.normalize("NFC", pat.replace("{0}", sym)))
-                allSymbols.add(f"{sym}2")
             for pat in cubicPatterns:
                 allSymbols.add(unicodedata.normalize("NFC", pat.replace("{0}", sym)))
-                allSymbols.add(f"{sym}3")
 
     for numUnit in ("meter", "kilometer", "mile", "gram", "milligram", "kilogram", "liter", "milliliter"):
         for denUnit in ("second", "hour", "liter", "cubic-meter"):
@@ -699,7 +827,11 @@ def _render_module(
     languageScripts: dict[str, tuple[str, ...]],
     scriptRanges: dict[str, tuple[tuple[int, int], ...]],
     sentenceTerminals: set[int],
+    noSpaceScriptRanges: dict[str, tuple[tuple[int, int], ...]] | None = None,
     combiningMarkRanges: tuple[tuple[int, int], ...] | None = None,
+    graphemeExtendExtraRanges: tuple[tuple[int, int], ...] | None = None,
+    regionalIndicatorRanges: tuple[tuple[int, int], ...] | None = None,
+    ucdCategoryRanges: dict[str, tuple[tuple[int, int], ...]] | None = None,
     currencySymbolRanges: tuple[tuple[int, int], ...] | None = None,
     emojiPictographicRanges: tuple[tuple[int, int], ...] | None = None,
     cldrActiveCurrencies: tuple[str, ...] | None = None,
@@ -711,8 +843,6 @@ def _render_module(
         '"""Generated Unicode data used by language detection and segmentation.',
         "",
         "Generated by generate_unicode_data.py. Do not edit this file manually.",
-        f"UCD source: https://www.unicode.org/Public/{ucdVersion}/ucd/UCD.zip",
-        f"CLDR source: https://www.unicode.org/Public/cldr/{cldrVersion}/cldr-common-{cldrVersion}.zip",
         '"""',
         "",
         "from __future__ import annotations",
@@ -740,6 +870,17 @@ def _render_module(
             "\tlanguage: tuple(span for script in scripts for span in SCRIPT_RANGES[script])",
             "\tfor language, scripts in SUPPORTED_LANGUAGE_SCRIPTS.items()",
             "}",
+        )
+    )
+    if noSpaceScriptRanges is not None:
+        lines.extend(("", "NO_SPACE_SCRIPT_RANGES: dict[str, tuple[tuple[int, int], ...]] = {"))
+        for script, ranges in noSpaceScriptRanges.items():
+            lines.append(f'\t"{script}": (')
+            lines.append(_format_ranges(ranges))
+            lines.append("\t),")
+        lines.append("}")
+    lines.extend(
+        (
             "",
             "SENTENCE_TERMINAL_CODEPOINTS = frozenset((",
             _format_codepoints(sentenceTerminals),
@@ -755,6 +896,43 @@ def _render_module(
                 ")",
             )
         )
+    if graphemeExtendExtraRanges is not None:
+        lines.extend(
+            (
+                "",
+                "GRAPHEME_EXTEND_EXTRA_RANGES: tuple[tuple[int, int], ...] = (",
+                _format_ranges(graphemeExtendExtraRanges, indent="\t"),
+                ")",
+            )
+        )
+    if regionalIndicatorRanges is not None:
+        lines.extend(
+            (
+                "",
+                "REGIONAL_INDICATOR_RANGES: tuple[tuple[int, int], ...] = (",
+                _format_ranges(regionalIndicatorRanges, indent="\t"),
+                ")",
+            )
+        )
+    if ucdCategoryRanges is not None:
+        categoryConstNames = (
+            ("letter", "LETTER_RANGES"),
+            ("number", "NUMBER_RANGES"),
+            ("connector", "CONNECTOR_PUNCTUATION_RANGES"),
+            ("dash", "DASH_PUNCTUATION_RANGES"),
+            ("opening", "OPENING_PUNCTUATION_RANGES"),
+            ("closing", "CLOSING_PUNCTUATION_RANGES"),
+            ("other_punct", "OTHER_PUNCTUATION_RANGES"),
+        )
+        for key, constName in categoryConstNames:
+            lines.extend(
+                (
+                    "",
+                    f"{constName}: tuple[tuple[int, int], ...] = (",
+                    _format_ranges(ucdCategoryRanges[key], indent="\t"),
+                    ")",
+                )
+            )
     if currencySymbolRanges is not None:
         lines.extend(
             (
@@ -843,20 +1021,32 @@ def main() -> int:
         )
     except FileNotFoundError:
         return 1
+    cldrCommonDir = args.cldr_common_dir
+    if cldrCommonDir is None and args.likely_subtags.parent.name == "supplemental":
+        cldrCommonDir = args.likely_subtags.parent.parent
+
+    languageAliases = _language_aliases(cldrCommonDir)
+    primaryLanguageScripts, secondaryLanguageScripts = _language_data_scripts(cldrCommonDir)
     languageScripts = _supported_language_scripts(
         _supported_locales(voicesJsonPath),
         _likely_scripts(args.likely_subtags),
         scriptAliases,
+        languageAliases=languageAliases,
+        primaryLanguageScripts=primaryLanguageScripts,
+        secondaryLanguageScripts=secondaryLanguageScripts,
     )
     requiredScripts = {script for scripts in languageScripts.values() for script in scripts}
+    noSpaceExtraScripts = set(_NO_SPACE_EXTRA_SCRIPTS) - requiredScripts
+    requestedScripts = requiredScripts | noSpaceExtraScripts
     rangesByScript: dict[str, list[tuple[int, int]]] = defaultdict(list)
     for start, end, script in _parse_ucd_records(scriptsPath):
-        if script in requiredScripts:
+        if script in requestedScripts:
             rangesByScript[script].append((start, end))
-    missingScripts = requiredScripts.difference(rangesByScript)
+    missingScripts = requestedScripts.difference(rangesByScript)
     if missingScripts:
         raise ValueError(f"UCD is missing required scripts: {sorted(missingScripts)}")
     scriptRanges = {script: _merge_ranges(rangesByScript[script]) for script in sorted(requiredScripts)}
+    noSpaceScriptRanges = {script: _merge_ranges(rangesByScript[script]) for script in sorted(noSpaceExtraScripts)}
     sentenceTerminals: set[int] = set()
     for start, end, propertyName in _parse_ucd_records(propListPath):
         if propertyName == "Sentence_Terminal":
@@ -864,16 +1054,22 @@ def main() -> int:
     if not sentenceTerminals:
         raise ValueError("UCD PropList.txt contains no Sentence_Terminal data")
 
-    cldrCommonDir = args.cldr_common_dir
-    if cldrCommonDir is None and args.likely_subtags.parent.name == "supplemental":
-        cldrCommonDir = args.likely_subtags.parent.parent
-
     combiningMarkRanges = _extract_combining_mark_ranges(args.ucd_dir)
+    graphemeExtendExtraRanges, regionalIndicatorRanges = _extract_grapheme_break_ranges(
+        args.ucd_dir,
+        combiningMarkRanges,
+    )
+    ucdCategoryRanges = _extract_ucd_category_ranges(args.ucd_dir)
+    letterCodepoints = _expand_ranges_to_set(ucdCategoryRanges["letter"])
     currencySymbolRanges = _extract_currency_symbol_ranges(args.ucd_dir)
     emojiPictographicRanges = _extract_emoji_pictographic_ranges(args.ucd_dir)
     cldrActiveCurrencies = _extract_cldr_active_currencies(cldrCommonDir)
     cldrUnitSymbols = _extract_cldr_unit_symbols(cldrCommonDir)
-    latinLanguageExemplars = _extract_latin_language_exemplars(cldrCommonDir, languageScripts)
+    latinLanguageExemplars = _extract_latin_language_exemplars(
+        cldrCommonDir,
+        languageScripts,
+        letterCodepoints,
+    )
     normalizationTable = _build_normalization_table(args.ucd_dir, cldrCommonDir)
 
     output = _render_module(
@@ -882,7 +1078,11 @@ def main() -> int:
         languageScripts=languageScripts,
         scriptRanges=scriptRanges,
         sentenceTerminals=sentenceTerminals,
+        noSpaceScriptRanges=noSpaceScriptRanges,
         combiningMarkRanges=combiningMarkRanges,
+        graphemeExtendExtraRanges=graphemeExtendExtraRanges,
+        regionalIndicatorRanges=regionalIndicatorRanges,
+        ucdCategoryRanges=ucdCategoryRanges,
         currencySymbolRanges=currencySymbolRanges,
         emojiPictographicRanges=emojiPictographicRanges,
         cldrActiveCurrencies=cldrActiveCurrencies,
@@ -911,8 +1111,10 @@ def main() -> int:
             tempPath.unlink(missing_ok=True)
     print(
         f"Wrote {args.output} for {len(languageScripts)} language roots, "
-        f"{len(scriptRanges)} scripts, {len(sentenceTerminals)} sentence terminals, "
+        f"{len(scriptRanges)} scripts, {len(noSpaceScriptRanges)} extra no-space scripts, "
+        f"{len(sentenceTerminals)} sentence terminals, "
         f"{len(combiningMarkRanges)} combining mark ranges, "
+        f"{len(graphemeExtendExtraRanges)} grapheme extend extra ranges, "
         f"{len(currencySymbolRanges)} currency symbol ranges, "
         f"{len(emojiPictographicRanges)} emoji pictographic ranges, "
         f"{len(cldrActiveCurrencies)} active currencies, "
