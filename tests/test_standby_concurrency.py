@@ -1,25 +1,60 @@
-"""Tests for _StandbyRuntimeManager concurrency patterns.
+"""Concurrency and lifecycle tests for standby._StandbyRuntimeManager.
 
-Since standby.py imports NVDA modules at module level, we test the patterns
-(generation counter, cancelEvent, bridge claim/release) by constructing
-objects with __new__ and testing the invariants directly.
-
-Covers:
-  1. Generation counter ensures stale workers cannot modify shared state.
-  2. cancelEvent propagation between refresh cycles.
-  3. claim_bridge returns bridge when signature matches.
-  4. release_synth_bridge stores bridge for reuse.
-  5. terminate shuts down the manager.
+Loads the real standby module with temporary NVDA stubs (isolated inside
+_load_standby_module) and exercises real _StandbyRuntimeManager state
+transitions, generation-counter fencing, cancelEvent propagation,
+claim/release/terminate synchronization, and lock-free watcher handling.
 """
 
 from __future__ import annotations
 
+import logging
+import sys
 import threading
 import unittest
+from types import ModuleType
+from typing import Any
+from unittest import mock
 
-from tests.test_support import load_driver_module
+from tests.test_support import (
+    DRIVER_DIR,
+    _test_driver_package,
+    is_lock_free_from_other_thread,
+    load_driver_module,
+    load_module_from_path,
+)
 
 bridge_module = load_driver_module("bridge")
+
+
+def _load_standby_module() -> ModuleType:
+    """Load the real standby module with temporary NVDA stubs."""
+    package = _test_driver_package()
+    qualname = f"{package.__name__}.standby"
+    existing = sys.modules.get(qualname)
+    if existing is not None:
+        return existing
+
+    from types import SimpleNamespace
+
+    saved = {name: sys.modules.get(name) for name in ("config", "globalVars", "logHandler")}
+    fakeConfig = ModuleType("config")
+    fakeConfig.conf = {}  # type: ignore[attr-defined]
+    fakeGlobalVars = ModuleType("globalVars")
+    fakeGlobalVars.appArgs = SimpleNamespace(secure=False)  # type: ignore[attr-defined]
+    fakeLogHandler = ModuleType("logHandler")
+    fakeLogHandler.log = logging.getLogger("standby-test")  # type: ignore[attr-defined]
+    sys.modules["config"] = fakeConfig
+    sys.modules["globalVars"] = fakeGlobalVars
+    sys.modules["logHandler"] = fakeLogHandler
+    try:
+        return load_module_from_path(qualname, DRIVER_DIR / "standby.py")
+    finally:
+        for name, prev in saved.items():
+            if prev is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = prev
 
 
 # ---------------------------------------------------------------------------
@@ -33,55 +68,35 @@ class _FakeBridge:
     def __init__(self) -> None:
         self.terminate_calls = 0
 
+    def ensure_connection(self, cancelEvent: Any = None) -> None:
+        pass
+
+    def preload_voice(self, options: Any, cancelEvent: Any = None) -> None:
+        pass
+
     def terminate(self) -> None:
         self.terminate_calls += 1
 
 
-# We construct the manager via __new__ to avoid importing standby.py
-# which requires NVDA's config/globalVars modules.
+class _DummyWorkerThread:
+    """No-op Thread stand-in for synchronous refresh_async state tests."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.started = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def is_alive(self) -> bool:
+        return False
 
 
-class _MinimalManager:
-    """Reimplements _StandbyRuntimeManager's core state fields for testing."""
-
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._bridge = None
-        self._signature = None
-        self._ready = False
-        self._generation = 0
-        self._cancelEvent = None
-        self._worker = None
-        self._watcher = None
-        self._synthActive = False
-        self._shutdown = True
-
-    def initialize(self) -> None:
-        with self._lock:
-            self._shutdown = False
-
-    def _cancel_current_worker_locked(self) -> None:
-        if self._cancelEvent is not None:
-            self._cancelEvent.set()
-        self._cancelEvent = None
-
-    def _clear_standby_locked(self, *, cancelWorker: bool) -> _FakeBridge | None:
-        if cancelWorker:
-            self._cancel_current_worker_locked()
-        bridge = self._bridge
-        self._bridge = None
-        self._signature = None
-        self._ready = False
-        return bridge
-
-    def terminate(self) -> None:
-        with self._lock:
-            self._shutdown = True
-            self._synthActive = False
-            self._generation += 1
-            bridge = self._clear_standby_locked(cancelWorker=True)
-        if bridge is not None:
-            bridge.terminate()
+def _new_manager(*, initialized: bool = True) -> tuple[ModuleType, Any]:
+    standby = _load_standby_module()
+    mgr = standby._StandbyRuntimeManager()
+    if initialized:
+        mgr.initialize()
+    return standby, mgr
 
 
 # ---------------------------------------------------------------------------
@@ -90,18 +105,18 @@ class _MinimalManager:
 
 
 class GenerationCounterTests(unittest.TestCase):
-    """Verify the generation counter pattern."""
+    """Verify real _StandbyRuntimeManager generation-counter fencing."""
 
     def test_refresh_increments_generation(self) -> None:
-        """Each refresh increments the generation counter."""
-        mgr = _MinimalManager()
-        mgr.initialize()
-
-        with mgr._lock:
-            mgr._generation += 1
+        """Each refresh_async increments the generation counter."""
+        standby, mgr = _new_manager()
+        with (
+            mock.patch.object(standby, "keep_browser_runtime_ready_enabled", return_value=True),
+            mock.patch.object(standby.threading, "Thread", _DummyWorkerThread),
+        ):
+            mgr.refresh_async("first")
             gen1 = mgr._generation
-        with mgr._lock:
-            mgr._generation += 1
+            mgr.refresh_async("second")
             gen2 = mgr._generation
 
         self.assertEqual(1, gen1)
@@ -109,62 +124,79 @@ class GenerationCounterTests(unittest.TestCase):
         self.assertGreater(gen2, gen1)
 
     def test_generation_mismatch_cancels_worker(self) -> None:
-        """A worker with an outdated generation should detect staleness."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        """A worker running with an outdated generation aborts without touching state."""
+        standby, mgr = _new_manager()
         mgr._generation = 5
+        emptyCatalog = bridge_module.VoiceCatalog([])
 
-        stale_generation = 3
-        current_generation = mgr._generation
+        with (
+            mock.patch.object(standby, "_installed_catalog", return_value=emptyCatalog),
+            mock.patch.object(standby, "_catalog_signature", return_value=("sig", 0)),
+            mock.patch.object(standby, "ChromeTtsBridge") as mockBridgeCls,
+        ):
+            mgr._run_refresh(3, threading.Event(), "stale worker")
 
-        with mgr._lock:
-            is_stale = stale_generation != current_generation
-
-        self.assertTrue(is_stale)
+        mockBridgeCls.assert_not_called()
+        self.assertIsNone(mgr._bridge)
+        self.assertFalse(mgr._ready)
 
     def test_generation_match_keeps_worker(self) -> None:
-        """A worker with matching generation is not stale."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        """A worker whose generation stays current marks the bridge ready."""
+        standby, mgr = _new_manager()
         mgr._generation = 5
+        emptyCatalog = bridge_module.VoiceCatalog([])
+        fakeBridge = _FakeBridge()
 
-        current_generation = mgr._generation
+        with (
+            mock.patch.object(standby, "keep_browser_runtime_ready_enabled", return_value=True),
+            mock.patch.object(standby, "DirectoryChangeWatcher"),
+            mock.patch.object(standby, "_installed_catalog", return_value=emptyCatalog),
+            mock.patch.object(standby, "_catalog_signature", return_value=("sig", 0)),
+            mock.patch.object(standby, "_warmup_options", return_value=[]),
+            mock.patch.object(standby, "ChromeTtsBridge", return_value=fakeBridge),
+        ):
+            mgr._run_refresh(5, threading.Event(), "matching worker")
 
-        with mgr._lock:
-            is_stale = current_generation != mgr._generation
-
-        self.assertFalse(is_stale)
+        self.assertIs(fakeBridge, mgr._bridge)
+        self.assertTrue(mgr._ready)
 
     def test_claim_increments_generation(self) -> None:
         """claim_bridge increments generation to invalidate old workers."""
-        mgr = _MinimalManager()
-        mgr.initialize()
-        mgr._bridge = _FakeBridge()
+        standby, mgr = _new_manager()
+        emptyCatalog = bridge_module.VoiceCatalog([])
+        fakeBridge = _FakeBridge()
+        mgr._bridge = fakeBridge
         mgr._signature = "sig"
         mgr._ready = True
+        mgr._cancelEvent = threading.Event()
 
-        with mgr._lock:
-            mgr._generation += 1  # simulates claim_bridge
-            mgr._synthActive = True
-            mgr._cancel_current_worker_locked()
+        with mock.patch.object(standby, "_catalog_signature", return_value="sig"):
+            claimed = mgr.claim_bridge(emptyCatalog)
 
+        self.assertIs(fakeBridge, claimed)
         self.assertEqual(1, mgr._generation)
         self.assertTrue(mgr._synthActive)
         self.assertIsNone(mgr._cancelEvent)
 
     def test_release_increments_generation(self) -> None:
-        """release_synth_bridge increments generation."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        """release_synth_bridge increments generation and schedules standby refresh."""
+        standby, mgr = _new_manager()
+        emptyCatalog = bridge_module.VoiceCatalog([])
+        fakeBridge = _FakeBridge()
         mgr._synthActive = True
         mgr._generation = 3
 
-        with mgr._lock:
-            mgr._generation += 1  # simulates release_synth_bridge
-            mgr._synthActive = False
+        with (
+            mock.patch.object(standby, "keep_browser_runtime_ready_enabled", return_value=True),
+            mock.patch.object(standby, "_catalog_signature", return_value="sig"),
+            mock.patch.object(mgr, "refresh_async") as mockRefresh,
+        ):
+            ok = mgr.release_synth_bridge(fakeBridge, emptyCatalog)
 
+        self.assertTrue(ok)
         self.assertEqual(4, mgr._generation)
         self.assertFalse(mgr._synthActive)
+        mockRefresh.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -173,30 +205,11 @@ class GenerationCounterTests(unittest.TestCase):
 
 
 class CancelEventTests(unittest.TestCase):
-    """Verify cancelEvent is set between refresh cycles."""
-
-    def test_cancel_event_blocks_worker(self) -> None:
-        """A set cancelEvent should cause CdpCancelled to be raised."""
-        cancel = threading.Event()
-        cancel.set()
-
-        with self.assertRaises(bridge_module.CdpCancelled):
-            bridge_module._raise_if_cancelled(cancel)
-
-    def test_cancel_event_not_set_allows_proceed(self) -> None:
-        """An unset cancelEvent should not block."""
-        cancel = threading.Event()
-        # Should not raise
-        bridge_module._raise_if_cancelled(cancel)
-
-    def test_none_cancel_event_allows_proceed(self) -> None:
-        """A None cancelEvent should not block."""
-        bridge_module._raise_if_cancelled(None)
+    """Verify real _StandbyRuntimeManager cancelEvent propagation across refresh cycles."""
 
     def test_clear_standby_sets_cancel_event(self) -> None:
         """_cancel_current_worker_locked sets the cancelEvent and clears it."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        _, mgr = _new_manager()
         cancel = threading.Event()
         mgr._cancelEvent = cancel
 
@@ -207,29 +220,29 @@ class CancelEventTests(unittest.TestCase):
 
     def test_clear_standby_handles_none_cancel_event(self) -> None:
         """_cancel_current_worker_locked handles None cancelEvent without raising."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        _, mgr = _new_manager()
         mgr._cancelEvent = None
 
-        # Should not raise
         mgr._cancel_current_worker_locked()
         self.assertIsNone(mgr._cancelEvent)
 
     def test_refresh_cancels_existing_worker(self) -> None:
-        """Starting a new refresh cancels the previous worker's event."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        """Starting a new refresh_async cancels the previous worker's event."""
+        standby, mgr = _new_manager()
+        with (
+            mock.patch.object(standby, "keep_browser_runtime_ready_enabled", return_value=True),
+            mock.patch.object(standby.threading, "Thread", _DummyWorkerThread),
+        ):
+            mgr.refresh_async("first")
+            oldCancel = mgr._cancelEvent
+            mgr.refresh_async("second")
+            newCancel = mgr._cancelEvent
 
-        old_cancel = threading.Event()
-        mgr._cancelEvent = old_cancel
-
-        # Simulate refresh: cancel old, create new
-        mgr._cancel_current_worker_locked()
-        new_cancel = threading.Event()
-        mgr._cancelEvent = new_cancel
-
-        self.assertTrue(old_cancel.is_set())
-        self.assertFalse(new_cancel.is_set())
+        self.assertIsNotNone(oldCancel)
+        self.assertIsNotNone(newCancel)
+        self.assertIsNot(oldCancel, newCancel)
+        self.assertTrue(oldCancel.is_set())
+        self.assertFalse(newCancel.is_set())
 
 
 # ---------------------------------------------------------------------------
@@ -238,94 +251,66 @@ class CancelEventTests(unittest.TestCase):
 
 
 class ClaimBridgeTests(unittest.TestCase):
-    """Verify claim_bridge returns bridge when signature matches."""
+    """Verify real _StandbyRuntimeManager.claim_bridge behavior."""
 
     def test_claim_returns_bridge_when_signature_matches(self) -> None:
         """claim_bridge returns the bridge when catalog signature matches."""
-        mgr = _MinimalManager()
-        mgr.initialize()
-
-        fake_bridge = _FakeBridge()
-        mgr._bridge = fake_bridge
+        standby, mgr = _new_manager()
+        emptyCatalog = bridge_module.VoiceCatalog([])
+        fakeBridge = _FakeBridge()
+        mgr._bridge = fakeBridge
         mgr._signature = "test-signature"
         mgr._ready = True
 
-        # Simulate claim with matching signature
-        with mgr._lock:
-            mgr._generation += 1
-            mgr._synthActive = True
-            mgr._cancel_current_worker_locked()
-            current_signature = "test-signature"
+        with mock.patch.object(standby, "_catalog_signature", return_value="test-signature"):
+            result = mgr.claim_bridge(emptyCatalog)
 
-            result = (
-                mgr._bridge if mgr._bridge is not None and mgr._ready and mgr._signature == current_signature else None
-            )
-            if result is not None:
-                mgr._bridge = None
-                mgr._signature = None
-                mgr._ready = False
-
-        self.assertIs(fake_bridge, result)
+        self.assertIs(fakeBridge, result)
         self.assertIsNone(mgr._bridge)
         self.assertFalse(mgr._ready)
+        self.assertEqual(0, fakeBridge.terminate_calls)
 
     def test_claim_returns_none_when_signature_mismatch(self) -> None:
-        """claim_bridge returns None when catalog signature doesn't match."""
-        mgr = _MinimalManager()
-        mgr.initialize()
-
-        fake_bridge = _FakeBridge()
-        mgr._bridge = fake_bridge
+        """claim_bridge returns None and terminates stale bridge on signature mismatch."""
+        standby, mgr = _new_manager()
+        emptyCatalog = bridge_module.VoiceCatalog([])
+        fakeBridge = _FakeBridge()
+        mgr._bridge = fakeBridge
         mgr._signature = "old-signature"
         mgr._ready = True
 
-        with mgr._lock:
-            mgr._generation += 1
-            mgr._synthActive = True
-            mgr._cancel_current_worker_locked()
-            current_signature = "new-signature"
-
-            if mgr._bridge is not None and mgr._ready and mgr._signature == current_signature:
-                result = mgr._bridge
-                mgr._bridge = None
-            else:
-                bridge_to_terminate = mgr._clear_standby_locked(cancelWorker=False)
-                result = None
-
-        # Termination happens OUTSIDE the lock (same pattern as bridge.py)
-        if bridge_to_terminate is not None:
-            bridge_to_terminate.terminate()
+        with mock.patch.object(standby, "_catalog_signature", return_value="new-signature"):
+            result = mgr.claim_bridge(emptyCatalog)
 
         self.assertIsNone(result)
         self.assertIsNone(mgr._bridge)
-        self.assertEqual(1, fake_bridge.terminate_calls)
+        self.assertEqual(1, fakeBridge.terminate_calls)
 
     def test_claim_returns_none_when_shutdown(self) -> None:
-        """claim_bridge returns None when shutdown is requested."""
-        mgr = _MinimalManager()
-        # Don't call initialize — stays shutdown
+        """claim_bridge returns None when shutdown is active."""
+        standby, mgr = _new_manager(initialized=False)
+        fakeBridge = _FakeBridge()
+        mgr._bridge = fakeBridge
 
-        mgr._bridge = _FakeBridge()
-
-        with mgr._lock:
-            if mgr._shutdown:
-                result = None
+        result = mgr.claim_bridge(bridge_module.VoiceCatalog([]))
 
         self.assertIsNone(result)
+        self.assertEqual(0, fakeBridge.terminate_calls)
 
     def test_claim_returns_none_when_not_ready(self) -> None:
-        """claim_bridge returns None when bridge is not ready."""
-        mgr = _MinimalManager()
-        mgr.initialize()
-
-        mgr._bridge = _FakeBridge()
+        """claim_bridge returns None and cleans up bridge when not ready."""
+        standby, mgr = _new_manager()
+        fakeBridge = _FakeBridge()
+        mgr._bridge = fakeBridge
         mgr._signature = "test"
-        mgr._ready = False  # Not ready
+        mgr._ready = False
 
-        with mgr._lock:
-            result = mgr._bridge if mgr._bridge is not None and mgr._ready else None
+        with mock.patch.object(standby, "_catalog_signature", return_value="test"):
+            result = mgr.claim_bridge(bridge_module.VoiceCatalog([]))
 
         self.assertIsNone(result)
+        self.assertIsNone(mgr._bridge)
+        self.assertEqual(1, fakeBridge.terminate_calls)
 
 
 # ---------------------------------------------------------------------------
@@ -334,61 +319,56 @@ class ClaimBridgeTests(unittest.TestCase):
 
 
 class ReleaseSynthBridgeTests(unittest.TestCase):
-    """Verify release_synth_bridge stores bridge for reuse."""
+    """Verify real _StandbyRuntimeManager.release_synth_bridge behavior."""
 
     def test_release_stores_bridge_for_reuse(self) -> None:
         """release_synth_bridge stores the bridge and sets ready=True."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        standby, mgr = _new_manager()
+        emptyCatalog = bridge_module.VoiceCatalog([])
         mgr._synthActive = True
+        fakeBridge = _FakeBridge()
 
-        fake_bridge = _FakeBridge()
+        with (
+            mock.patch.object(standby, "keep_browser_runtime_ready_enabled", return_value=True),
+            mock.patch.object(standby, "_catalog_signature", return_value="test-sig"),
+            mock.patch.object(mgr, "refresh_async"),
+        ):
+            ok = mgr.release_synth_bridge(fakeBridge, emptyCatalog)
 
-        with mgr._lock:
-            mgr._generation += 1
-            mgr._synthActive = False
-            mgr._cancel_current_worker_locked()
-            mgr._bridge = fake_bridge
-            mgr._signature = "test-sig"
-            mgr._ready = True
-
-        self.assertIs(fake_bridge, mgr._bridge)
+        self.assertTrue(ok)
+        self.assertIs(fakeBridge, mgr._bridge)
+        self.assertEqual("test-sig", mgr._signature)
         self.assertTrue(mgr._ready)
         self.assertFalse(mgr._synthActive)
 
     def test_release_returns_false_when_shutdown(self) -> None:
         """release_synth_bridge returns False when shutdown."""
-        mgr = _MinimalManager()
-        # Don't initialize — stays shutdown
-
-        with mgr._lock:
-            if mgr._shutdown:
-                mgr._synthActive = False
-                result = False
+        _, mgr = _new_manager(initialized=False)
+        mgr._synthActive = True
+        result = mgr.release_synth_bridge(_FakeBridge(), bridge_module.VoiceCatalog([]))
 
         self.assertFalse(result)
         self.assertFalse(mgr._synthActive)
 
     def test_release_terminates_previous_bridge(self) -> None:
         """release_synth_bridge terminates the previous bridge."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        standby, mgr = _new_manager()
+        emptyCatalog = bridge_module.VoiceCatalog([])
         mgr._synthActive = True
+        oldBridge = _FakeBridge()
+        newBridge = _FakeBridge()
+        mgr._bridge = oldBridge
 
-        old_bridge = _FakeBridge()
-        new_bridge = _FakeBridge()
-        mgr._bridge = old_bridge
+        with (
+            mock.patch.object(standby, "keep_browser_runtime_ready_enabled", return_value=True),
+            mock.patch.object(standby, "_catalog_signature", return_value="test-sig"),
+            mock.patch.object(mgr, "refresh_async"),
+        ):
+            ok = mgr.release_synth_bridge(newBridge, emptyCatalog)
 
-        with mgr._lock:
-            previous = mgr._bridge if mgr._bridge is not new_bridge else None
-            mgr._bridge = new_bridge
-            mgr._ready = True
-
-        if previous is not None:
-            previous.terminate()
-
-        self.assertEqual(1, old_bridge.terminate_calls)
-        self.assertIs(new_bridge, mgr._bridge)
+        self.assertTrue(ok)
+        self.assertEqual(1, oldBridge.terminate_calls)
+        self.assertIs(newBridge, mgr._bridge)
 
 
 # ---------------------------------------------------------------------------
@@ -397,36 +377,38 @@ class ReleaseSynthBridgeTests(unittest.TestCase):
 
 
 class TerminateTests(unittest.TestCase):
-    """Verify terminate shuts down the manager."""
+    """Verify real _StandbyRuntimeManager.terminate shuts down the manager."""
 
     def test_terminate_sets_shutdown_flag(self) -> None:
-        """terminate sets _shutdown=True and clears bridge."""
-        mgr = _MinimalManager()
-        mgr.initialize()
-        fake_bridge = _FakeBridge()
-        mgr._bridge = fake_bridge
+        """terminate sets _shutdown=True and clears/terminates bridge."""
+        _, mgr = _new_manager()
+        fakeBridge = _FakeBridge()
+        mgr._bridge = fakeBridge
 
         mgr.terminate()
 
         self.assertTrue(mgr._shutdown)
         self.assertIsNone(mgr._bridge)
-        self.assertEqual(1, fake_bridge.terminate_calls)
+        self.assertEqual(1, fakeBridge.terminate_calls)
 
     def test_terminate_clears_synthetic_active(self) -> None:
-        """terminate clears _synthActive flag."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        """terminate clears _synthActive flag and stops any attached watcher."""
+        _, mgr = _new_manager()
         mgr._synthActive = True
         mgr._bridge = _FakeBridge()
+        watcher = mock.MagicMock()
+        mgr._watcher = watcher
 
         mgr.terminate()
 
         self.assertFalse(mgr._synthActive)
+        self.assertIsNone(mgr._watcher)
+        watcher.signal_stop.assert_called_once()
+        watcher.stop.assert_called_once()
 
     def test_terminate_increments_generation(self) -> None:
         """terminate increments generation to invalidate old workers."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        _, mgr = _new_manager()
         mgr._generation = 5
         mgr._bridge = _FakeBridge()
 
@@ -436,12 +418,97 @@ class TerminateTests(unittest.TestCase):
 
     def test_terminate_handles_none_bridge(self) -> None:
         """terminate handles None bridge without raising."""
-        mgr = _MinimalManager()
-        mgr.initialize()
+        _, mgr = _new_manager()
 
-        # Should not raise
         mgr.terminate()
         self.assertTrue(mgr._shutdown)
+
+
+class _FakeStandbyWatcher:
+    def __init__(self, *args: object, on_stop: Any = None, **kwargs: object) -> None:
+        self.started = False
+        self.signaled = False
+        self.stopped = False
+        self.stop_calls = 0
+        self._on_stop = on_stop
+
+    def start(self) -> None:
+        self.started = True
+
+    def signal_stop(self) -> None:
+        self.signaled = True
+
+    def stop(self) -> None:
+        self.stopped = True
+        self.stop_calls += 1
+        if self._on_stop is not None:
+            self._on_stop()
+
+
+class StandbyRefreshLockSafetyTests(unittest.TestCase):
+    """Verify real _StandbyRuntimeManager._run_refresh avoids holding _lock across I/O and watcher stop."""
+
+    def test_run_refresh_releases_lock_around_catalog_and_watcher_stop(self) -> None:
+        standby = _load_standby_module()
+        mgr = standby._StandbyRuntimeManager()
+        mgr._shutdown = False
+        mgr._generation = 1
+
+        lockFreeObserved: dict[str, bool] = {}
+        oldWatcher = _FakeStandbyWatcher(
+            on_stop=lambda: lockFreeObserved.__setitem__("watcher_stop", is_lock_free_from_other_thread(mgr._lock))
+        )
+        mgr._watcher = oldWatcher
+
+        def fake_installed_catalog() -> object:
+            lockFreeObserved["installed_catalog"] = is_lock_free_from_other_thread(mgr._lock)
+            return bridge_module.VoiceCatalog.load()
+
+        def fake_catalog_signature(cat: object) -> tuple[str, int]:
+            lockFreeObserved["catalog_signature"] = is_lock_free_from_other_thread(mgr._lock)
+            return ("sig", len(getattr(cat, "packages", ())))
+
+        fakeBridgeInst = mock.MagicMock()
+        cancelEvent = threading.Event()
+
+        with (
+            mock.patch.object(standby, "keep_browser_runtime_ready_enabled", return_value=True),
+            mock.patch.object(standby, "DirectoryChangeWatcher", _FakeStandbyWatcher),
+            mock.patch.object(standby, "_installed_catalog", fake_installed_catalog),
+            mock.patch.object(standby, "_catalog_signature", fake_catalog_signature),
+            mock.patch.object(standby, "_warmup_options", return_value=[]),
+            mock.patch.object(standby, "ChromeTtsBridge", return_value=fakeBridgeInst),
+        ):
+            mgr._run_refresh(1, cancelEvent, "test refresh")
+
+        self.assertEqual(1, oldWatcher.stop_calls)
+        self.assertTrue(lockFreeObserved.get("installed_catalog"), lockFreeObserved)
+        self.assertTrue(lockFreeObserved.get("catalog_signature"), lockFreeObserved)
+        self.assertTrue(lockFreeObserved.get("watcher_stop"), lockFreeObserved)
+
+    def test_start_watchers_locked_returns_old_watcher_without_stopping_under_lock(self) -> None:
+        standby = _load_standby_module()
+        mgr = standby._StandbyRuntimeManager()
+        mgr._shutdown = False
+        mgr._synthActive = False
+
+        oldWatcher = _FakeStandbyWatcher()
+        mgr._watcher = oldWatcher
+
+        with (
+            mock.patch.object(standby, "keep_browser_runtime_ready_enabled", return_value=True),
+            mock.patch.object(standby, "DirectoryChangeWatcher", _FakeStandbyWatcher),
+            mgr._lock,
+        ):
+            returned = mgr._start_watchers_locked()
+
+        self.assertIs(oldWatcher, returned)
+        self.assertTrue(oldWatcher.signaled)
+        self.assertFalse(oldWatcher.stopped)
+
+    def test_voice_for_language_handles_empty_catalog_and_missing_fallback(self) -> None:
+        standby = _load_standby_module()
+        self.assertEqual("", standby._voice_for_language(bridge_module.VoiceCatalog([]), "fr-FR", "missing-voice"))
 
 
 if __name__ == "__main__":

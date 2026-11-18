@@ -15,15 +15,18 @@ serve.
 from __future__ import annotations
 
 import argparse
+import ast
 import concurrent.futures
 import io
 import json
 import re
 import sys
+import tempfile
 import threading
 import time
+import urllib.parse
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +60,8 @@ ENGINE_VERSION_PATTERN = re.compile(r"^\d{8}(?:\.\d+)*$")
 MAX_WORKERS = 15
 REQUEST_TIMEOUT = 20
 MAX_RETRIES = 2
+MAX_PACKAGE_BYTES = 512 * 1024 * 1024
+MAX_TEXTPROTO_BYTES = 10 * 1024 * 1024
 
 # Thread lock for console output
 output_lock = threading.Lock()
@@ -119,11 +124,18 @@ def catalog_engine_version() -> str:
     for candidate in CATALOG_MODULE_CANDIDATES:
         try:
             text = candidate.read_text(encoding="utf-8-sig")
-        except OSError:
+            tree = ast.parse(text, filename=str(candidate))
+        except (OSError, SyntaxError):
             continue
-        match = re.search(r'(?m)^ENGINE_VERSION\s*=\s*["\']([^"\']+)["\']', text)
-        if match:
-            return match.group(1)
+        for node in tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not any(isinstance(target, ast.Name) and target.id == "ENGINE_VERSION" for target in targets):
+                continue
+            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                return node.value.value
+            break
     return ""
 
 
@@ -152,6 +164,8 @@ def check_engine_version_alignment(bundledVersion: str, configuredVersion: str) 
 def select_engine_voices_json(
     engineRoots: Iterable[Path] | None = None,
     explicitVoicesJson: Path | None = None,
+    *,
+    configuredVersion: str | None = None,
 ) -> Path:
     """Resolve the newest bundled engine catalog, aborting unless the engine version is verified."""
     if explicitVoicesJson is not None:
@@ -186,7 +200,8 @@ def select_engine_voices_json(
         )
         sys.exit(1)
 
-    problem = check_engine_version_alignment(engineDir.name, catalog_engine_version())
+    expectedVersion = catalog_engine_version() if configuredVersion is None else configuredVersion
+    problem = check_engine_version_alignment(engineDir.name, expectedVersion)
     if problem is not None:
         print(f"[ABORT] Error: {problem}", file=sys.stderr)
         sys.exit(1)
@@ -325,6 +340,63 @@ def format_speaker_name(voice_id: str, native_name: str, idx: int, num_speakers:
         return f"Google {native_name} ({suffix})" if num_speakers == 1 else f"Google {native_name} {idx} ({suffix})"
 
 
+_SHARED_MULTI_DEPENDENCY_RE = re.compile(r"-(?:lemonbalm|locomel)(?:-|$)")
+
+
+def dependent_voice_id_for_package(voice_id: str) -> str:
+    """Return the required base package ID for delta voice packages, or empty string."""
+    normalized = voice_id.strip()
+    if normalized.endswith("-seanet"):
+        return re.sub(r"-seanet$", "", normalized)
+    locale_prefix, sep, _ = normalized.partition("-x-")
+    if sep and locale_prefix and _SHARED_MULTI_DEPENDENCY_RE.search(normalized):
+        return f"{locale_prefix}-x-multi"
+    return ""
+
+
+def _extract_speakers_blocks(text: str) -> list[str]:
+    blocks: list[str] = []
+    idx = 0
+    length = len(text)
+    pattern = re.compile(r"\bspeakers\s*\{")
+    while idx < length:
+        match = pattern.search(text, idx)
+        if match is None:
+            break
+        start = match.end()
+        depth = 1
+        pos = start
+        in_string = False
+        escaped = False
+        while pos < length and depth > 0:
+            ch = text[pos]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+            elif ch == '"':
+                in_string = True
+            elif ch == "#":
+                newline = text.find("\n", pos)
+                if newline == -1:
+                    pos = length
+                    break
+                pos = newline
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    blocks.append(text[start:pos])
+                    break
+            pos += 1
+        idx = pos + 1
+    return blocks
+
+
 def extract_speakers_from_textproto(content_bytes: bytes) -> list[tuple[str, str]]:
     try:
         text = content_bytes.decode("utf-8", errors="ignore")
@@ -334,18 +406,45 @@ def extract_speakers_from_textproto(content_bytes: bytes) -> list[tuple[str, str
     speakers: list[tuple[str, str]] = []
     seen_speakers: set[str] = set()
 
-    blocks = re.findall(r"speakers\s*\{([^}]+)\}", text)
-    for block in blocks:
-        spk_match = re.search(r'speaker:\s*"([^"]+)"', block)
-        gen_match = re.search(r'gender:\s*"([^"]+)"', block)
+    for block in _extract_speakers_blocks(text):
+        spk_match = re.search(r'\bspeaker:\s*"((?:\\.|[^"\\])*)"', block)
+        gen_match = re.search(r'\bgender:\s*"((?:\\.|[^"\\])*)"', block)
         if spk_match:
             spk_code = spk_match.group(1).strip()
-            gen_str = gen_match.group(1).strip() if gen_match else "female"
-            if spk_code not in seen_speakers:
+            gen_str = (gen_match.group(1).strip() if gen_match else "") or "female"
+            if spk_code and spk_code not in seen_speakers:
                 seen_speakers.add(spk_code)
                 speakers.append((spk_code, gen_str))
 
     return speakers
+
+
+def _read_bounded_response_bytes(response: Any, max_bytes: int) -> bytes:
+    headers = getattr(response, "headers", None)
+    content_length = headers.get("Content-Length") if isinstance(headers, dict) or hasattr(headers, "get") else None
+    if content_length is not None:
+        try:
+            parsed_length = int(content_length)
+        except (TypeError, ValueError):
+            parsed_length = None
+        if parsed_length is not None and parsed_length > max_bytes:
+            raise ValueError(f"Package size {parsed_length} bytes exceeds limit ({max_bytes} bytes)")
+
+    iter_content = getattr(response, "iter_content", None)
+    if callable(iter_content):
+        chunks = bytearray()
+        for chunk in iter_content(chunk_size=1024 * 1024):
+            if not chunk:
+                continue
+            chunks.extend(chunk)
+            if len(chunks) > max_bytes:
+                raise ValueError(f"Downloaded package exceeds limit ({max_bytes} bytes)")
+        return bytes(chunks)
+
+    payload = response.content
+    if not isinstance(payload, (bytes, bytearray)) or len(payload) > max_bytes:
+        raise ValueError(f"Downloaded package exceeds limit ({max_bytes} bytes)")
+    return bytes(payload)
 
 
 def fetch_new_package_speakers(
@@ -353,6 +452,10 @@ def fetch_new_package_speakers(
 ) -> list[dict[str, str]] | None:
     voice_id = pkg_info["id"]
     url = pkg_info["url"]
+    if not isinstance(url, str) or not url.lower().startswith("https://"):
+        with output_lock:
+            print(f"[ERROR] Refusing non-HTTPS URL for {voice_id}: {url!r}", file=sys.stderr, flush=True)
+        return None
     locale = voice_id.split("-x-")[0]
     native_name = get_native_language_name(locale)
 
@@ -361,16 +464,34 @@ def fetch_new_package_speakers(
             with output_lock:
                 print(f"[FETCHING] {voice_id} ...", flush=True)
 
-            response = session.get(url, timeout=REQUEST_TIMEOUT)
-            if response.status_code != 200:
-                raise requests.RequestException(f"HTTP {response.status_code}")
+            response = session.get(url, timeout=REQUEST_TIMEOUT, stream=True)
+            try:
+                final_url = getattr(response, "url", None)
+                if isinstance(final_url, str) and final_url and not final_url.lower().startswith("https://"):
+                    raise ValueError(f"Redirected to non-HTTPS URL for {voice_id}: {final_url!r}")
+                if response.status_code != 200:
+                    raise requests.RequestException(f"HTTP {response.status_code}")
 
-            payload = response.content
+                payload = _read_bounded_response_bytes(response, MAX_PACKAGE_BYTES)
+            finally:
+                close_fn = getattr(response, "close", None)
+                if callable(close_fn):
+                    close_fn()
+
             raw_speakers: list[tuple[str, str]] = []
 
             with zipfile.ZipFile(io.BytesIO(payload), "r") as zf:
-                if "backend_pipeline.textproto" in zf.namelist():
-                    textproto_bytes = zf.read("backend_pipeline.textproto")
+                try:
+                    info = zf.getinfo("backend_pipeline.textproto")
+                except KeyError:
+                    info = None
+                if info is not None:
+                    if info.file_size > MAX_TEXTPROTO_BYTES:
+                        raise ValueError(f"backend_pipeline.textproto exceeds size limit ({info.file_size} bytes)")
+                    with zf.open(info, "r") as member:
+                        textproto_bytes = member.read(MAX_TEXTPROTO_BYTES + 1)
+                    if len(textproto_bytes) > MAX_TEXTPROTO_BYTES:
+                        raise ValueError("backend_pipeline.textproto exceeded size limit while reading")
                     raw_speakers = extract_speakers_from_textproto(textproto_bytes)
 
             # If no textproto found (e.g. locomel binary compiled protobuf), inherit speaker codes from base multi package
@@ -416,6 +537,74 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _fetch_speaker_wave(
+    session: requests.Session | Callable[[], requests.Session],
+    executor: concurrent.futures.ThreadPoolExecutor,
+    packages: list[dict[str, Any]],
+    speaker_snapshot: dict[str, dict[str, Any]],
+    merged_map: dict[str, dict[str, Any]],
+    fallback_speakers: dict[str, list[dict[str, Any]]] | None = None,
+) -> None:
+    if not packages:
+        return
+    session_factory = session if callable(session) else (lambda: session)
+    thread_local = threading.local()
+    created_sessions: list[requests.Session] = []
+    sessions_lock = threading.Lock()
+
+    def _run_pkg(pkg_copy: dict[str, Any]) -> list[dict[str, Any]] | None:
+        worker_session = getattr(thread_local, "session", None)
+        if worker_session is None:
+            worker_session = session_factory()
+            thread_local.session = worker_session
+            if callable(session):
+                with sessions_lock:
+                    created_sessions.append(worker_session)
+        return fetch_new_package_speakers(worker_session, pkg_copy, speaker_snapshot)
+
+    try:
+        future_to_pkg = {executor.submit(_run_pkg, dict(pkg)): pkg for pkg in packages}
+        for future in concurrent.futures.as_completed(future_to_pkg):
+            pkg = future_to_pkg[future]
+            speakers = future.result()
+            if speakers:
+                merged_map[pkg["id"]]["speakers"] = speakers
+            elif fallback_speakers and pkg["id"] in fallback_speakers:
+                print(f"[WARN] Keeping previous speaker metadata for {pkg['id']} after fetch failure.")
+                merged_map[pkg["id"]]["speakers"] = fallback_speakers[pkg["id"]]
+            else:
+                print(f"[WARN] Removing {pkg['id']} due to missing speakers.")
+                merged_map.pop(pkg["id"], None)
+    finally:
+        for created in created_sessions:
+            close_fn = getattr(created, "close", None)
+            if callable(close_fn):
+                close_fn()
+
+
+def _atomic_write_json(target_path: Path, payload: object) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=target_path.parent,
+            prefix=f".{target_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temp_path = Path(stream.name)
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        temp_path.replace(target_path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 def main() -> None:
     args = _parse_args()
     print("=== Google TTS Voice Catalog Generator ===")
@@ -438,7 +627,7 @@ def main() -> None:
         sys.exit(1)
 
     print(f"Reading source catalog from: {source_json_path}")
-    with open(source_json_path, encoding="utf-8") as f:
+    with open(source_json_path, encoding="utf-8-sig") as f:
         source_data = json.load(f)
 
     source_packs = source_data.get("packs", [])
@@ -450,7 +639,7 @@ def main() -> None:
     existing_entries: dict[str, dict[str, Any]] = {}
     if voices_json_path.exists():
         try:
-            with open(voices_json_path, encoding="utf-8") as f:
+            with open(voices_json_path, encoding="utf-8-sig") as f:
                 for item in json.load(f):
                     if isinstance(item, dict) and "id" in item:
                         existing_entries[item["id"]] = item
@@ -477,7 +666,10 @@ def main() -> None:
         if not urls:
             continue
         # Prefer dl.google.com url if present
-        url = next((u for u in urls if "dl.google.com" in u), urls[0])
+        url = next(
+            (u for u in urls if (urllib.parse.urlparse(u).hostname or "").lower() == "dl.google.com"),
+            urls[0],
+        )
 
         entry: dict[str, Any] = {
             "id": voice_id,
@@ -488,12 +680,14 @@ def main() -> None:
             "remote": True,
         }
 
-        if voice_id.endswith("-seanet"):
-            entry["dependentVoiceId"] = re.sub(r"-seanet$", "", voice_id)
+        dependent_voice_id = dependent_voice_id_for_package(voice_id)
+        if dependent_voice_id:
+            entry["dependentVoiceId"] = dependent_voice_id
 
-        if voice_id in existing_entries and "speakers" in existing_entries[voice_id]:
-            # Preserve existing speakers array
-            entry["speakers"] = existing_entries[voice_id]["speakers"]
+        existing_item = existing_entries.get(voice_id)
+        if existing_item is not None and "speakers" in existing_item and existing_item.get("fileId") == file_id:
+            # Preserve existing speakers array when package revision is unchanged
+            entry["speakers"] = existing_item["speakers"]
             merged_map[voice_id] = entry
         else:
             merged_map[voice_id] = entry
@@ -503,31 +697,47 @@ def main() -> None:
     print(f"Fetching speaker metadata for {len(new_packages_to_fetch)} new packages concurrently...\n")
 
     if new_packages_to_fetch:
-        with (
-            requests.Session() as session,
-            concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor,
-        ):
-            future_to_pkg = {
-                executor.submit(fetch_new_package_speakers, session, pkg, merged_map): pkg
-                for pkg in new_packages_to_fetch
+        fallback_speakers = {
+            vid: list(item["speakers"])
+            for vid, item in existing_entries.items()
+            if isinstance(item.get("speakers"), list) and item["speakers"]
+        }
+        base_multi_packages = [pkg for pkg in new_packages_to_fetch if pkg["id"].endswith("-x-multi")]
+        dependent_packages = [pkg for pkg in new_packages_to_fetch if not pkg["id"].endswith("-x-multi")]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            wave1_snapshot = {
+                vid: {"speakers": list(item["speakers"])} for vid, item in merged_map.items() if "speakers" in item
             }
-            for future in concurrent.futures.as_completed(future_to_pkg):
-                pkg = future_to_pkg[future]
-                speakers = future.result()
-                if speakers:
-                    merged_map[pkg["id"]]["speakers"] = speakers
-                else:
-                    print(f"[WARN] Removing {pkg['id']} due to missing speakers.")
-                    merged_map.pop(pkg["id"], None)
+            _fetch_speaker_wave(
+                requests.Session,
+                executor,
+                base_multi_packages,
+                wave1_snapshot,
+                merged_map,
+                fallback_speakers,
+            )
+            wave2_snapshot = {
+                vid: {"speakers": list(item["speakers"])} for vid, item in merged_map.items() if "speakers" in item
+            }
+            _fetch_speaker_wave(
+                requests.Session,
+                executor,
+                dependent_packages,
+                wave2_snapshot,
+                merged_map,
+                fallback_speakers,
+            )
+
+    for entry in merged_map.values():
+        dependent_voice_id = entry.get("dependentVoiceId")
+        if dependent_voice_id and dependent_voice_id not in merged_map:
+            entry.pop("dependentVoiceId", None)
 
     # Sort by language code (locale) and then by package ID
     sorted_entries = sorted(merged_map.values(), key=lambda x: (x["id"].split("-x-")[0].lower(), x["id"].lower()))
 
-    # Save updated content directly to voices.json
-    voices_json_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(voices_json_path, "w", encoding="utf-8") as f:
-        json.dump(sorted_entries, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    # Save updated content atomically to voices.json
+    _atomic_write_json(voices_json_path, sorted_entries)
 
     print("\n=== Catalog Update Complete ===")
     print(f"Total entries in voices.json: {len(sorted_entries)}")

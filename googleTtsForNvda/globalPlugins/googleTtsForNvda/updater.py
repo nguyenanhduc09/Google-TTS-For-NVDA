@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import http.client
 import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 ADDON_ID = "googleTtsForNvda"
 BUILD_INFO_FILE_NAME = "buildInfo.json"
@@ -74,8 +76,27 @@ def _build_info_path() -> Path:
 
 def _strip_manifest_value(value: str) -> str:
     value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        return value[1:-1].strip()
+    if len(value) >= 2 and value[0] in ("'", '"'):
+        quote = value[0]
+        escaped = False
+        chars: list[str] = []
+        for idx in range(1, len(value)):
+            ch = value[idx]
+            if escaped:
+                chars.append(ch)
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = True
+                continue
+            if ch == quote:
+                trailing = value[idx + 1 :].lstrip()
+                if not trailing or trailing.startswith("#"):
+                    return "".join(chars).strip()
+                break
+            chars.append(ch)
+    if "#" in value:
+        return value.split("#", 1)[0].strip()
     return value
 
 
@@ -91,7 +112,7 @@ def current_version() -> str:
 
 
 def _non_negative_int(value: Any, key: str, source: str) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, (bool, float)):
         raise UpdateError(f"The {source} has an invalid {key}.")
     try:
         number = int(value)
@@ -115,6 +136,9 @@ def _read_build_info_json() -> dict[str, Any]:
         raise UpdateError("The installed add-on build information is not valid JSON.") from exc
     if not isinstance(data, dict):
         raise UpdateError("The installed add-on build information is not a JSON object.")
+    schema = data.get("schema")
+    if schema is not None and (isinstance(schema, bool) or schema != 1):
+        raise UpdateError("The installed add-on build information has an unsupported schema.")
     return data
 
 
@@ -128,8 +152,16 @@ def current_update_build(currentVersion: str | None = None) -> int:
     if baseVersion is not None:
         if not isinstance(baseVersion, str) or not baseVersion.strip():
             raise UpdateError("The installed add-on build information has an invalid baseVersion.")
-        if baseVersion.strip() != currentVersion:
-            return 0
+        strippedBaseVersion = baseVersion.strip()
+        if strippedBaseVersion != currentVersion:
+            try:
+                if _is_newer_version(strippedBaseVersion, currentVersion) or _is_newer_version(
+                    currentVersion,
+                    strippedBaseVersion,
+                ):
+                    return 0
+            except UpdateError:
+                return 0
     value = data.get("updateBuild", 0)
     return _non_negative_int(value, "updateBuild", "installed add-on build information")
 
@@ -141,13 +173,35 @@ def _version_parts(version: str) -> tuple[int, ...]:
     return parts
 
 
+def _version_comparison_key(version: str) -> tuple[tuple[int, ...], int, tuple[tuple[int, int | str], ...]]:
+    stripped = version.strip()
+    base = stripped.split("+", 1)[0]
+    mainPart, sep, prePart = base.partition("-")
+    if not sep:
+        match = re.match(r"^\s*v?(\d+(?:\.\d+)*)(.*)$", base, flags=re.IGNORECASE)
+        if match and match.group(2).strip("._ "):
+            mainPart = match.group(1)
+            prePart = match.group(2).strip("._ ")
+    numericParts = _version_parts(mainPart)
+    normalizedPre = prePart.strip()
+    if not normalizedPre:
+        return (numericParts, 1, ())
+    preTokens: list[tuple[int, int | str]] = []
+    for token in re.findall(r"\d+|[A-Za-z]+", normalizedPre):
+        if token.isdigit():
+            preTokens.append((0, int(token)))
+        else:
+            preTokens.append((1, token.casefold()))
+    return (numericParts, 0, tuple(preTokens))
+
+
 def _is_newer_version(latestVersion: str, currentVersion: str) -> bool:
-    latestParts = _version_parts(latestVersion)
-    currentParts = _version_parts(currentVersion)
+    latestParts, latestIsRelease, latestPre = _version_comparison_key(latestVersion)
+    currentParts, currentIsRelease, currentPre = _version_comparison_key(currentVersion)
     maxLength = max(len(latestParts), len(currentParts))
     latestParts += (0,) * (maxLength - len(latestParts))
     currentParts += (0,) * (maxLength - len(currentParts))
-    return latestParts > currentParts
+    return (latestParts, latestIsRelease, latestPre) > (currentParts, currentIsRelease, currentPre)
 
 
 def _is_update_available(update: UpdateInfo, currentVersion: str, currentUpdateBuild: int) -> bool:
@@ -177,7 +231,7 @@ def _optional_string(data: dict[str, Any], key: str) -> str:
 
 def _required_size(data: dict[str, Any]) -> int:
     value = data.get("size")
-    if isinstance(value, bool):
+    if isinstance(value, (bool, float)):
         raise UpdateError("The update manifest has an invalid size.")
     try:
         size = int(value)
@@ -197,11 +251,34 @@ def _sha256(data: dict[str, Any]) -> str:
     return value
 
 
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+)
+
+
 def _safe_update_file_name(fileName: str) -> str:
     fileName = fileName.strip()
-    if not fileName or "/" in fileName or "\\" in fileName or fileName in (".", ".."):
+    if (
+        not fileName
+        or "/" in fileName
+        or "\\" in fileName
+        or ":" in fileName
+        or any(ch in '<>"|?*' for ch in fileName)
+        or fileName in (".", "..")
+        or any(ord(ch) < 32 for ch in fileName)
+    ):
         raise UpdateError("The update manifest has an invalid fileName.")
     if not fileName.lower().endswith(".nvda-addon"):
+        raise UpdateError("The update manifest has an invalid fileName.")
+    stem = fileName[: -len(".nvda-addon")]
+    if not stem or stem.endswith((".", " ")) or stem.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
         raise UpdateError("The update manifest has an invalid fileName.")
     return fileName
 
@@ -228,19 +305,61 @@ def _release_notes(data: dict[str, Any], locale: str | None) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _is_reparse_or_symlink(path: Path) -> bool:
+    try:
+        if path.is_symlink():
+            return True
+        reparseFlag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        if reparseFlag:
+            st = os.lstat(path)
+            if getattr(st, "st_file_attributes", 0) & reparseFlag:
+                return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return False
+
+
+def _ensure_safe_download_dir() -> Path:
+    downloadDir = _update_download_dir()
+    tempRoot = Path(tempfile.gettempdir())
+    try:
+        resolvedTempRoot = tempRoot.resolve()
+    except OSError:
+        resolvedTempRoot = tempRoot
+    current = downloadDir
+    while current != current.parent:
+        if current in (tempRoot, resolvedTempRoot):
+            break
+        if _is_reparse_or_symlink(current):
+            raise UpdateError("Could not use the update download folder because it is a symbolic link or junction.")
+        with contextlib.suppress(OSError):
+            if current.resolve() == resolvedTempRoot:
+                break
+        current = current.parent
+    downloadDir.mkdir(parents=True, exist_ok=True)
+    if _is_reparse_or_symlink(downloadDir):
+        raise UpdateError("Could not use the update download folder because it is a symbolic link or junction.")
+    return downloadDir
+
+
 def _parse_update_info(data: dict[str, Any], locale: str | None) -> UpdateInfo:
     addonId = _required_string(data, "addonId")
     if addonId != ADDON_ID:
         raise UpdateError("The update manifest is for another add-on.")
     channel = data.get("channel")
-    if isinstance(channel, str) and channel and channel != UPDATE_CHANNEL:
+    if channel is not None and (not isinstance(channel, str) or channel != UPDATE_CHANNEL):
         raise UpdateError("The update manifest is not for the stable channel.")
+    url = _required_string(data, "url")
+    if urlparse(url).scheme.lower() != "https":
+        raise UpdateError("The update download URL must use HTTPS.")
     version = _required_string(data, "version")
     baseVersion = _optional_string(data, "baseVersion") or version
     displayVersion = _optional_string(data, "displayVersion") or version
     return UpdateInfo(
         version=displayVersion,
-        url=_required_string(data, "url"),
+        url=url,
         size=_required_size(data),
         sha256=_sha256(data),
         minimumNVDAVersion=_required_string(data, "minimumNVDAVersion"),
@@ -252,13 +371,43 @@ def _parse_update_info(data: dict[str, Any], locale: str | None) -> UpdateInfo:
     )
 
 
+def _response_uses_https(response: Any, fallbackUrl: str) -> bool:
+    finalUrl = getattr(response, "geturl", lambda: fallbackUrl)()
+    if not isinstance(finalUrl, str) or not finalUrl:
+        finalUrl = fallbackUrl
+    return urlparse(finalUrl).scheme.lower() == "https"
+
+
+class _HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject HTTP redirects that downgrade HTTPS update manifest or package URLs."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> Any:
+        resolvedUrl = urljoin(req.full_url, str(newurl))
+        if urlparse(resolvedUrl).scheme.lower() != "https":
+            raise UpdateError("The update URL must use HTTPS.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_STDLIB_URLOPEN = urllib.request.urlopen
+_HTTPS_OPENER = urllib.request.build_opener(_HttpsOnlyRedirectHandler())
+
+
+def _open_https_url(request: urllib.request.Request, *, timeout: float) -> Any:
+    if urllib.request.urlopen is not _STDLIB_URLOPEN:
+        return urllib.request.urlopen(request, timeout=timeout)
+    return _HTTPS_OPENER.open(request, timeout=timeout)
+
+
 def fetch_update_manifest(
     manifestUrl: str = UPDATE_MANIFEST_URL,
     timeout: int = 20,
 ) -> tuple[dict[str, Any], Path]:
+    if urlparse(manifestUrl).scheme.lower() != "https":
+        raise UpdateError("The update manifest URL must use HTTPS.")
     manifestPath = _update_manifest_path()
-    with contextlib.suppress(OSError):
-        _remove_file_if_present(manifestPath)
+    if not _is_reparse_or_symlink(manifestPath.parent) and not _is_reparse_or_symlink(manifestPath):
+        with contextlib.suppress(OSError):
+            _remove_file_if_present(manifestPath)
     request = urllib.request.Request(
         manifestUrl,
         headers={
@@ -267,9 +416,13 @@ def fetch_update_manifest(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _open_https_url(request, timeout=timeout) as response:
+            if not _response_uses_https(response, manifestUrl):
+                raise UpdateError("The update manifest URL must use HTTPS.")
             rawData = response.read(MAX_UPDATE_MANIFEST_BYTES + 1)
-    except OSError as exc:
+    except UpdateError:
+        raise
+    except (OSError, http.client.HTTPException, ValueError) as exc:
         raise UpdateError("Could not download the update manifest.") from exc
     if len(rawData) > MAX_UPDATE_MANIFEST_BYTES:
         raise UpdateError("The update manifest is too large.")
@@ -279,14 +432,26 @@ def fetch_update_manifest(
         raise UpdateError("The update manifest is not valid JSON.") from exc
     if not isinstance(data, dict):
         raise UpdateError("The update manifest is not a JSON object.")
+    tempPath: Path | None = None
     try:
-        _update_download_dir().mkdir(parents=True, exist_ok=True)
-        partialPath = manifestPath.with_name(f"{manifestPath.name}.download")
-        _remove_file_if_present(partialPath)
-        partialPath.write_bytes(rawData)
-        os.replace(os.fspath(partialPath), os.fspath(manifestPath))
+        downloadDir = _ensure_safe_download_dir()
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=downloadDir,
+            prefix=f"{manifestPath.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as outFile:
+            tempPath = Path(outFile.name)
+            outFile.write(rawData)
+        os.replace(os.fspath(tempPath), os.fspath(manifestPath))
+        tempPath = None
     except OSError as exc:
         raise UpdateError("Could not save the update manifest.") from exc
+    finally:
+        if tempPath is not None:
+            with contextlib.suppress(OSError):
+                _remove_file_if_present(tempPath)
     return data, manifestPath
 
 
@@ -352,6 +517,7 @@ def download_update(
     progress: Callable[[int, int], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
     timeout: int = 60,
+    on_response: Callable[[Any], None] | None = None,
 ) -> DownloadedUpdate:
     _raise_if_cancelled(cancel_requested)
     if update.size > MAX_UPDATE_PACKAGE_BYTES:
@@ -359,16 +525,25 @@ def download_update(
     parsedUrl = urlparse(update.url)
     if parsedUrl.scheme.lower() != "https":
         raise UpdateError("The update download URL must use HTTPS.")
-    downloadDir = _update_download_dir()
     try:
-        downloadDir.mkdir(parents=True, exist_ok=True)
+        downloadDir = _ensure_safe_download_dir()
+    except UpdateError:
+        raise
     except OSError as exc:
         raise UpdateError("Could not create the update download folder.") from exc
     targetPath = _download_path_for_update(update)
-    partialPath = targetPath.with_name(f"{targetPath.name}.download")
+    if _is_reparse_or_symlink(targetPath):
+        raise UpdateError("Could not prepare the update download file.")
     try:
-        _remove_file_if_present(partialPath)
         _remove_file_if_present(targetPath)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=downloadDir,
+            prefix=f"{targetPath.name}.",
+            suffix=".download",
+            delete=False,
+        ) as tempFile:
+            partialPath = Path(tempFile.name)
     except OSError as exc:
         raise UpdateError("Could not prepare the update download file.") from exc
     request = urllib.request.Request(
@@ -382,7 +557,12 @@ def download_update(
     digest = hashlib.sha256()
     try:
         _raise_if_cancelled(cancel_requested)
-        with urllib.request.urlopen(request, timeout=timeout) as response, partialPath.open("wb") as outFile:
+        with _open_https_url(request, timeout=timeout) as response, partialPath.open("wb") as outFile:
+            if on_response is not None:
+                with contextlib.suppress(Exception):
+                    on_response(response)
+            if not _response_uses_https(response, update.url):
+                raise UpdateError("The update download URL must use HTTPS.")
             while True:
                 _raise_if_cancelled(cancel_requested)
                 chunk = response.read(DOWNLOAD_CHUNK_SIZE)
@@ -397,28 +577,49 @@ def download_update(
                 if progress is not None:
                     progress(received, update.size)
                 _raise_if_cancelled(cancel_requested)
+    except UpdateError:
+        with contextlib.suppress(OSError):
+            _remove_file_if_present(partialPath)
+        raise
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        with contextlib.suppress(OSError):
+            _remove_file_if_present(partialPath)
+        _raise_if_cancelled(cancel_requested)
+        raise UpdateError("Could not download the update package.") from exc
+    except Exception:
+        with contextlib.suppress(OSError):
+            _remove_file_if_present(partialPath)
+        _raise_if_cancelled(cancel_requested)
+        raise
+    finally:
+        if on_response is not None:
+            with contextlib.suppress(Exception):
+                on_response(None)
+    if received != update.size:
+        with contextlib.suppress(OSError):
+            _remove_file_if_present(partialPath)
+        raise UpdateError("The downloaded update package size does not match the update manifest.")
+    try:
+        _raise_if_cancelled(cancel_requested)
     except UpdateCancelled:
         with contextlib.suppress(OSError):
             _remove_file_if_present(partialPath)
         raise
-    except OSError as exc:
-        _remove_file_if_present(partialPath)
-        raise UpdateError("Could not download the update package.") from exc
-    except Exception:
-        _remove_file_if_present(partialPath)
-        raise
-    if received != update.size:
-        _remove_file_if_present(partialPath)
-        raise UpdateError("The downloaded update package size does not match the update manifest.")
-    _raise_if_cancelled(cancel_requested)
     if digest.hexdigest().casefold() != update.sha256.casefold():
-        _remove_file_if_present(partialPath)
+        with contextlib.suppress(OSError):
+            _remove_file_if_present(partialPath)
         raise UpdateError("The downloaded update package checksum does not match the update manifest.")
-    _raise_if_cancelled(cancel_requested)
+    try:
+        _raise_if_cancelled(cancel_requested)
+    except UpdateCancelled:
+        with contextlib.suppress(OSError):
+            _remove_file_if_present(partialPath)
+        raise
     try:
         os.replace(os.fspath(partialPath), os.fspath(targetPath))
     except OSError as exc:
-        _remove_file_if_present(partialPath)
+        with contextlib.suppress(OSError):
+            _remove_file_if_present(partialPath)
         raise UpdateError("Could not finalize the downloaded update package.") from exc
     try:
         _raise_if_cancelled(cancel_requested)
@@ -444,8 +645,25 @@ def remove_update_manifest(updateCheckResult: UpdateCheckResult) -> None:
 def cleanup_update_files() -> None:
     downloadDir = _update_download_dir()
     try:
-        if downloadDir.is_dir() and not downloadDir.is_symlink():
-            shutil.rmtree(downloadDir)
+        if _is_reparse_or_symlink(downloadDir):
+            if os.path.isdir(downloadDir):
+                os.rmdir(downloadDir)
+            else:
+                _remove_file_if_present(downloadDir)
+        elif downloadDir.is_dir():
+            for entry in list(downloadDir.iterdir()):
+                with contextlib.suppress(OSError):
+                    if _is_reparse_or_symlink(entry):
+                        if os.path.isdir(entry):
+                            os.rmdir(entry)
+                        else:
+                            _remove_file_if_present(entry)
+                    elif entry.is_dir():
+                        shutil.rmtree(entry)
+                    else:
+                        _remove_file_if_present(entry)
+            with contextlib.suppress(OSError):
+                downloadDir.rmdir()
         else:
             _remove_file_if_present(downloadDir)
     except FileNotFoundError:

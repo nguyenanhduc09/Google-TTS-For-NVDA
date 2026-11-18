@@ -10,8 +10,10 @@ from __future__ import annotations
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
-from tests.test_support import load_driver_module
+from tests.test_support import FakeConf, load_driver_module
 
 bridge = load_driver_module("bridge")
 
@@ -27,14 +29,9 @@ class SafeJoinTests(unittest.TestCase):
     def setUp(self) -> None:
         import tempfile
 
-        self._tmpdir = Path(tempfile.mkdtemp())
+        self._tmpdir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self._root = self._tmpdir / "root"
         self._root.mkdir()
-
-    def tearDown(self) -> None:
-        import shutil
-
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_normal_relative_path(self) -> None:
         result = bridge._safe_join(self._root, "subdir/file.txt")
@@ -458,12 +455,144 @@ class ElevateChromePriorityTests(unittest.TestCase):
     """Verify _elevate_chrome_priority handles process tree and invalid PIDs safely."""
 
     def test_elevate_current_process_does_not_raise(self) -> None:
+        import ctypes
         import os
+        import sys
 
-        bridge._elevate_chrome_priority(os.getpid())
+        if sys.platform != "win32":
+            bridge._elevate_chrome_priority(os.getpid())
+            return
+
+        class _PowerThrottlingState(ctypes.Structure):
+            _fields_ = [
+                ("Version", ctypes.c_uint32),
+                ("ControlMask", ctypes.c_uint32),
+                ("StateMask", ctypes.c_uint32),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = ctypes.WINFUNCTYPE(ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32)(
+            ("OpenProcess", kernel32)
+        )
+        get_priority_class = ctypes.WINFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p)(("GetPriorityClass", kernel32))
+        set_priority_class = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)(
+            ("SetPriorityClass", kernel32)
+        )
+        close_handle = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p)(("CloseHandle", kernel32))
+
+        process_power_throttling = 4
+        get_process_information = (
+            ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)(
+                ("GetProcessInformation", kernel32)
+            )
+            if hasattr(kernel32, "GetProcessInformation")
+            else None
+        )
+        set_process_information = (
+            ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)(
+                ("SetProcessInformation", kernel32)
+            )
+            if hasattr(kernel32, "SetProcessInformation")
+            else None
+        )
+
+        process_query_limited_information = 0x1000
+        process_set_information = 0x0200
+        handle = open_process(process_query_limited_information | process_set_information, False, os.getpid())
+        prior_priority = get_priority_class(handle) if handle else 0
+        prior_throttling = _PowerThrottlingState(1, 0, 0)
+        has_prior_throttling = bool(
+            handle
+            and get_process_information is not None
+            and get_process_information(
+                handle,
+                process_power_throttling,
+                ctypes.cast(ctypes.byref(prior_throttling), ctypes.c_void_p),
+                ctypes.sizeof(prior_throttling),
+            )
+        )
+        try:
+            bridge._elevate_chrome_priority(os.getpid())
+        finally:
+            if handle:
+                if prior_priority:
+                    set_priority_class(handle, prior_priority)
+                if set_process_information is not None:
+                    restore_state = prior_throttling if has_prior_throttling else _PowerThrottlingState(1, 0, 0)
+                    set_process_information(
+                        handle,
+                        process_power_throttling,
+                        ctypes.cast(ctypes.byref(restore_state), ctypes.c_void_p),
+                        ctypes.sizeof(restore_state),
+                    )
+                close_handle(handle)
 
     def test_elevate_invalid_pid_does_not_raise(self) -> None:
         bridge._elevate_chrome_priority(999999)
+
+
+class ProcessMemoryCountersTests(unittest.TestCase):
+    """Verify _process_memory_counters prefers limited query rights and falls back safely."""
+
+    def test_prefers_limited_information_before_vm_read(self) -> None:
+        import ctypes
+        import os
+        from unittest.mock import MagicMock, patch
+
+        if os.name != "nt":
+            self.assertIsNone(bridge._process_memory_counters(os.getpid()))
+            return
+
+        requested_access: list[int] = []
+        fake_handle = 0x1234
+
+        def fake_open_process(desired_access: int, _inherit: bool, _pid: int) -> int:
+            requested_access.append(desired_access)
+            return fake_handle if desired_access == 0x1000 else 0
+
+        def fake_get_memory_info(_handle: int, counters_ptr: Any, _size: int) -> int:
+            counters = ctypes.cast(counters_ptr, ctypes.POINTER(ctypes.c_byte))
+            # Just return failure if size unexpected; otherwise leave zeroed counters with valid success.
+            _ = counters
+            return 1
+
+        fake_kernel32 = MagicMock()
+        fake_psapi = MagicMock()
+
+        def fake_win_dll(name: str, **_kwargs: Any) -> Any:
+            return fake_kernel32 if name == "kernel32" else fake_psapi
+
+        def _query(open_fn: Any) -> tuple[int, int] | None:
+            def _winfunctype(_restype: Any, *_argtypes: Any) -> Any:
+                def factory(spec: tuple[str, Any]) -> Any:
+                    fn_name, _dll = spec
+                    if fn_name == "OpenProcess":
+                        return open_fn
+                    if fn_name == "GetProcessMemoryInfo":
+                        return fake_get_memory_info
+                    return lambda *_a: 1
+
+                return factory
+
+            with (
+                patch.object(ctypes, "WinDLL", side_effect=fake_win_dll),
+                patch.object(ctypes, "WINFUNCTYPE", side_effect=_winfunctype),
+            ):
+                return bridge._process_memory_counters(4321)
+
+        result = _query(fake_open_process)
+        self.assertEqual([0x1000], requested_access)
+        self.assertEqual((0, 0), result)
+
+        requested_access.clear()
+
+        def fallback_open_process(desired_access: int, _inherit: bool, _pid: int) -> int:
+            requested_access.append(desired_access)
+            return 0 if desired_access == 0x1000 else fake_handle
+
+        fallback_result = _query(fallback_open_process)
+        self.assertEqual([0x1000, 0x0410], requested_access)
+        self.assertEqual((0, 0), fallback_result)
 
 
 # ---------------------------------------------------------------------------
@@ -491,37 +620,68 @@ class HiddenChromeStartupKwargsTests(unittest.TestCase):
 
 
 class BrowserProcessManagerSpawnTests(unittest.TestCase):
-    """Verify browser process spawning isolates standard handles."""
+    """Verify browser process spawning and shutdown isolation/guards."""
+
+    @staticmethod
+    def _spawn_browser_with_patches(
+        temp_dir: str,
+        *,
+        sync_profile_state: bool = False,
+        read_devtools_port: Any = 9222,
+        stop_calls: list[bool] | None = None,
+    ) -> tuple[Any, Path, Any]:
+        from unittest.mock import MagicMock, patch
+
+        profile_dir = Path(temp_dir)
+        pm = bridge.BrowserProcessManager(catalog=bridge.VoiceCatalog([]))
+        pm._serverPort = 8080
+        mock_proc = MagicMock()
+        mock_proc.pid = 4321
+
+        def _get_profile(runtime: str, usePersistentProfile: bool = True, cancelEvent: Any = None) -> Path:
+            if sync_profile_state:
+                pm._profileDir = profile_dir
+                pm._profileRuntime = runtime
+                pm._profileIsPersistent = usePersistentProfile
+            return profile_dir
+
+        original_stop = pm._stop_browser_process
+
+        def _spy_stop(*, removeProfile: bool = True) -> None:
+            if stop_calls is not None:
+                stop_calls.append(removeProfile)
+            original_stop(removeProfile=removeProfile)
+
+        port_patch = (
+            patch.object(pm, "_read_devtools_port", side_effect=read_devtools_port)
+            if isinstance(read_devtools_port, BaseException)
+            else patch.object(pm, "_read_devtools_port", return_value=read_devtools_port)
+        )
+        with (
+            patch.object(pm, "_get_browser_profile_dir", side_effect=_get_profile),
+            patch.object(pm, "_page_url", return_value="http://127.0.0.1:8080/index.html"),
+            port_patch,
+            patch.object(pm, "_stop_browser_process", side_effect=_spy_stop),
+            patch.object(bridge, "_hide_chrome_windows"),
+            patch.object(bridge, "_elevate_chrome_priority"),
+            patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
+        ):
+            pm._start_browser_choice("chrome", "placeholder_browser.exe")
+        return pm, profile_dir, mock_popen
 
     def test_start_browser_choice_passes_devnull_handles(self) -> None:
         import subprocess
         import tempfile
-        from unittest.mock import MagicMock, patch
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            profile_dir = Path(temp_dir)
-            pm = bridge.BrowserProcessManager(catalog=bridge.VoiceCatalog([]))
-            pm._serverPort = 8080
-            mock_proc = MagicMock()
-            mock_proc.pid = 4321
-
-            with (
-                patch.object(pm, "_get_browser_profile_dir", return_value=profile_dir),
-                patch.object(pm, "_page_url", return_value="http://127.0.0.1:8080/index.html"),
-                patch.object(pm, "_read_devtools_port", return_value=9222),
-                patch.object(bridge, "_hide_chrome_windows"),
-                patch.object(bridge, "_elevate_chrome_priority"),
-                patch("subprocess.Popen", return_value=mock_proc) as mock_popen,
-            ):
-                pm._start_browser_choice("chrome", "placeholder_browser.exe")
-
-                mock_popen.assert_called_once()
-                pos_args, kwargs = mock_popen.call_args
-                launch_args = pos_args[0]
-                self.assertFalse(any(str(arg).startswith("--remote-allow-origins") for arg in launch_args))
-                self.assertEqual(subprocess.DEVNULL, kwargs.get("stdin"))
-                self.assertEqual(subprocess.DEVNULL, kwargs.get("stdout"))
-                self.assertEqual(subprocess.DEVNULL, kwargs.get("stderr"))
+            _pm, _profile_dir, mock_popen = self._spawn_browser_with_patches(temp_dir)
+            mock_popen.assert_called_once()
+            pos_args, kwargs = mock_popen.call_args
+            launch_args = pos_args[0]
+            self.assertFalse(any(str(arg).startswith("--remote-allow-origins") for arg in launch_args))
+            self.assertEqual(subprocess.DEVNULL, kwargs.get("stdin"))
+            self.assertEqual(subprocess.DEVNULL, kwargs.get("stdout"))
+            self.assertEqual(subprocess.DEVNULL, kwargs.get("stderr"))
 
     def test_cdp_client_connect_suppresses_origin_header(self) -> None:
         from unittest.mock import MagicMock, patch
@@ -542,7 +702,129 @@ class BrowserProcessManagerSpawnTests(unittest.TestCase):
                 "ws://127.0.0.1:9222/devtools/page/test",
                 timeout=15,
                 suppress_origin=True,
+                http_no_proxy=["127.0.0.1", "localhost", "::1"],
             )
+
+    def test_start_browser_choice_stops_spawned_process_without_removing_persistent_profile_on_cancel(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            stop_calls: list[bool] = []
+            with self.assertRaises(bridge.CdpCancelled):
+                self._spawn_browser_with_patches(
+                    temp_dir,
+                    sync_profile_state=True,
+                    read_devtools_port=bridge.CdpCancelled(),
+                    stop_calls=stop_calls,
+                )
+
+            self.assertEqual([False], stop_calls)
+            self.assertTrue(Path(temp_dir).exists())
+
+    def test_browser_process_manager_terminate_server_shutdown_guards(self) -> None:
+        catalog = SimpleNamespace(to_runtime_json=lambda: "{}")
+
+        def new_manager() -> Any:
+            mgr = bridge.BrowserProcessManager.__new__(bridge.BrowserProcessManager)
+            mgr._lock = threading.RLock()
+            mgr._catalog = catalog
+            mgr._chromeProcess = None
+            mgr._debugPort = None
+            mgr._serverPort = 12345
+            mgr._profileDir = None
+            mgr._profileRuntime = None
+            mgr._profileIsPersistent = True
+            return mgr
+
+        # 1. Dead or None _serverThread must NOT call server.shutdown(), only server_close().
+        for threadObj in (None, SimpleNamespace(is_alive=lambda: False, join=lambda timeout=None: None)):
+            mgr = new_manager()
+            events: list[str] = []
+            mgr._server = SimpleNamespace(
+                shutdown=lambda _ev=events: _ev.append("shutdown"),
+                server_close=lambda _ev=events: _ev.append("close"),
+            )
+            mgr._serverThread = threadObj
+            mgr.terminate()
+            self.assertEqual(["close"], events)
+            self.assertIsNone(mgr._server)
+            self.assertIsNone(mgr._serverThread)
+            self.assertIsNone(mgr._serverPort)
+
+        # 2. Terminating from inside the server thread itself must skip shutdown()/join().
+        mgr = new_manager()
+        selfEvents: list[str] = []
+        currentThread = threading.current_thread()
+        mgr._server = SimpleNamespace(
+            shutdown=lambda: selfEvents.append("shutdown"),
+            server_close=lambda: selfEvents.append("close"),
+        )
+        mgr._serverThread = currentThread
+        mgr.terminate()
+        self.assertEqual(["close"], selfEvents)
+
+        # 3. Alive background _serverThread MUST call shutdown(), join(timeout=2), and server_close().
+        mgr = new_manager()
+        aliveEvents: list[Any] = []
+        mgr._server = SimpleNamespace(
+            shutdown=lambda: aliveEvents.append("shutdown"),
+            server_close=lambda: aliveEvents.append("close"),
+        )
+        mgr._serverThread = SimpleNamespace(
+            is_alive=lambda: True,
+            join=lambda timeout=None: aliveEvents.append(("join", timeout)),
+        )
+        mgr.terminate()
+        self.assertEqual(["shutdown", ("join", 2), "close"], aliveEvents)
+
+
+class ConfiguredKeepBrowserRuntimeReadyTests(unittest.TestCase):
+    """Verify configured_keep_browser_runtime_ready parses bools, strings, and None properly."""
+
+    def test_string_and_bool_values(self) -> None:
+        from unittest.mock import patch
+
+        cases = (
+            ("false", False),
+            ("False", False),
+            ("0", False),
+            ("off", False),
+            (False, False),
+            ("true", True),
+            ("1", True),
+            ("yes", True),
+            ("on", True),
+            (True, True),
+            (None, bridge.DEFAULT_KEEP_BROWSER_RUNTIME_READY),
+        )
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                fake_conf = {bridge.CONFIG_SECTION: {bridge.CONFIG_KEEP_BROWSER_RUNTIME_READY: raw}}
+                fake_config_mod = SimpleNamespace(conf=fake_conf)
+                with patch.object(bridge, "config", fake_config_mod):
+                    self.assertEqual(expected, bridge.configured_keep_browser_runtime_ready())
+
+
+class EnsureConfigSpecTests(unittest.TestCase):
+    """Verify ensure_config_spec registers defaults and evicts poisoned cache entries."""
+
+    def test_ensure_config_spec_evicts_poisoned_cache_entries(self) -> None:
+        from unittest.mock import patch
+
+        fake_conf = FakeConf(
+            cache={bridge.CONFIG_SECTION: SimpleNamespace(_spec={})},
+            root_cache={bridge.CONFIG_SECTION: KeyError},
+        )
+        fake_config = SimpleNamespace(conf=fake_conf)
+        with patch.object(bridge, "config", fake_config):
+            bridge.ensure_config_spec()
+            self.assertIn(bridge.CONFIG_SECTION, fake_conf.spec)
+            self.assertIn(
+                bridge.CONFIG_AUTO_UPDATE_CHECK,
+                fake_conf.spec[bridge.CONFIG_SECTION],
+            )
+            self.assertNotIn(bridge.CONFIG_SECTION, fake_conf._cache)
+            self.assertNotIn(bridge.CONFIG_SECTION, fake_conf.rootSection._cache)
 
 
 if __name__ == "__main__":

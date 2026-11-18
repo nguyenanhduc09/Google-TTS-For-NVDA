@@ -1,5 +1,5 @@
 # When running or verifying this workflow locally, run all commands:
-# python -m ruff check --fix ; python -m ruff format ; python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py ; python -m unittest discover -s tests -v ; git clean -fdX
+# python -m ruff check --fix ; python -m ruff format ; python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py build_i18n.py generate_unicode_data.py generate_voices_json.py make_update_manifest.py ; python -m unittest discover -s tests -v ; git clean -fdX
 
 name: Tests
 
@@ -41,7 +41,7 @@ jobs:
         run: python -m ruff format --check .
 
       - name: Mypy type check
-        run: python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py
+        run: python -m mypy --config-file mypy.ini --explicit-package-bases --exclude "websocketClientRepo" googleTtsForNvda/synthDrivers/ tests/ googleTtsForNvda/globalPlugins/googleTtsForNvda/__init__.py googleTtsForNvda/globalPlugins/googleTtsForNvda/settings.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updateGui.py googleTtsForNvda/globalPlugins/googleTtsForNvda/uiUtils.py googleTtsForNvda/globalPlugins/googleTtsForNvda/updater.py googleTtsForNvda/globalPlugins/googleTtsForNvda/voiceManager.py build_i18n.py generate_unicode_data.py generate_voices_json.py make_update_manifest.py
 
       - name: Run tests
         run: python -m unittest discover -s tests -v

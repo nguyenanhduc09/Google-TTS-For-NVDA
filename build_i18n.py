@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+from collections.abc import Callable
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -55,7 +56,29 @@ DOC_EN_PATH = DOC_DIR / "en" / "readme.html"
 TRANSLATABLE_DOC_TAGS = frozenset(
     {"title", "h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "th", "td", "dt", "dd", "caption", "blockquote", "summary"}
 )
-DOC_STRUCTURAL_CONTAINER_TAGS = frozenset({"ul", "ol", "dl", "table", "thead", "tbody", "tfoot", "tr"})
+DOC_STRUCTURAL_CONTAINER_TAGS = frozenset(
+    {
+        "ul",
+        "ol",
+        "dl",
+        "table",
+        "thead",
+        "tbody",
+        "tfoot",
+        "tr",
+        "div",
+        "section",
+        "article",
+        "aside",
+        "details",
+        "figure",
+        "figcaption",
+        "header",
+        "footer",
+        "nav",
+        "main",
+    }
+)
 
 
 def _relative_to_addon(path: Path) -> Path:
@@ -73,23 +96,25 @@ POEDIT_MSGMERGE_RELATIVE_PATH = Path("Poedit") / "GettextTools" / "bin" / "msgme
 POEDIT_MSGFMT_RELATIVE_PATH = Path("Poedit") / "GettextTools" / "bin" / "msgfmt.exe"
 MANIFEST_KEYS = ("summary", "description", "changelog")
 PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
-# Unnamed percent interpolations (e.g. %s, %d, %10.2f, %-5s, but not %%)
+# Unnamed percent interpolations (e.g. %s, %d, %10.2f, %-5s, but not %% or 50%+a)
 RE_UNNAMED_PERCENT = re.compile(
     r"""
-    %
+    (?:(?<!\d)%|%(?![+-]))
     [#0+-]*
     \d*
     (?:\.\d+)?
     [hlL]?
     [diouxXeEfFgGcrsa]
+    (?![A-Za-z])
     """,
     flags=re.VERBOSE,
 )
 # Named percent interpolations (e.g. %(name)s, %(count)02d, %(name)-10s)
 RE_NAMED_PERCENT = re.compile(r"%\([^()]+\)[#0+\- ]*\d*(?:\.\d+)?[a-zA-Z]")
-# Brace format interpolations (e.g. {name}, {name:format}, {0})
-RE_FORMAT = re.compile(r"{([^{}:]*):?[^{}]*}")
+# Brace format interpolations (e.g. {name}, {name!r}, {name:format}, {0})
+RE_FORMAT = re.compile(r"\{([^{}:!]*)(?:![^{}:]*)?(?::[^{}]*)?\}")
 VOID_HTML_TAGS = frozenset({"br", "hr", "img", "input", "meta", "link"})
+ALL_VOID_HTML_TAGS = VOID_HTML_TAGS | {"area", "base", "col", "embed", "param", "source", "track", "wbr"}
 DANGEROUS_HTML_TAGS = frozenset(
     {
         "script",
@@ -110,22 +135,40 @@ DANGEROUS_HTML_TAGS = frozenset(
         "source",
     }
 )
-OPEN_HTML_TAG_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9]*)(?:[\s/][^>]*)?>")
+_TAG_ATTRS_PATTERN = r"""(?:[\s/](?:[^>"']|"[^"]*"|'[^']*')*)?"""
+OPEN_HTML_TAG_RE = re.compile(rf"<([a-zA-Z][a-zA-Z0-9]*){_TAG_ATTRS_PATTERN}>")
+_FULL_OPEN_TAG_RE = re.compile(rf"<([a-zA-Z][a-zA-Z0-9]*)({_TAG_ATTRS_PATTERN})>")
 CLOSE_HTML_TAG_RE = re.compile(r"</([a-zA-Z][a-zA-Z0-9]*)\s*>")
-HTML_TAG_TOKEN_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)(?:[\s/][^>]*)?>")
-HREF_ATTR_RE = re.compile(
-    r"""<a[\s/][^>]*?(?<![\w-])href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
-    re.IGNORECASE,
-)
-EVENT_HANDLER_ATTR_RE = re.compile(r"""<[a-zA-Z][a-zA-Z0-9]*[\s/][^>]*?(?<![\w-])on[a-zA-Z]+\s*=""", re.IGNORECASE)
-STYLE_ATTR_RE = re.compile(r"""<[a-zA-Z][a-zA-Z0-9]*[\s/][^>]*?(?<![\w-])style\s*=""", re.IGNORECASE)
+HTML_TAG_TOKEN_RE = re.compile(rf"<(/?)([a-zA-Z][a-zA-Z0-9]*){_TAG_ATTRS_PATTERN}>")
+_TAG_ATTR_PAIR_RE = re.compile(r"""([^\s/>="'<]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']*)))?""")
+_EVENT_HANDLER_NAME_RE = re.compile(r"^on[a-z]+$")
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _iter_tag_attributes(attrs_raw: str) -> list[tuple[str, str]]:
+    attrs: list[tuple[str, str]] = []
+    for match in _TAG_ATTR_PAIR_RE.finditer(attrs_raw):
+        name = html.unescape(match.group(1)).strip().lower()
+        val = (
+            match.group(2)
+            if match.group(2) is not None
+            else match.group(3)
+            if match.group(3) is not None
+            else (match.group(4) or "")
+        )
+        attrs.append((name, val))
+    return attrs
 
 
 def _extract_hrefs(text: str) -> list[str]:
+    cleaned = HTML_COMMENT_RE.sub("", text)
     hrefs: list[str] = []
-    for m in HREF_ATTR_RE.finditer(text):
-        val = m.group(1) or m.group(2) or m.group(3) or ""
-        hrefs.append(val)
+    for match in _FULL_OPEN_TAG_RE.finditer(cleaned):
+        if match.group(1).lower() != "a":
+            continue
+        for attr_name, attr_val in _iter_tag_attributes(match.group(2)):
+            if attr_name == "href":
+                hrefs.append(attr_val)
     return hrefs
 
 
@@ -211,78 +254,147 @@ def _atomic_write_text(target_path: Path, content: str, prefix: str = ".tmp-") -
     _atomic_write_bytes(target_path, content.encode("utf-8"), prefix=prefix)
 
 
+def _split_lf(text: str) -> list[str]:
+    """Split text on CR/LF newlines only, preserving Unicode line separators (e.g. U+2028) inside lines."""
+    if not text:
+        return []
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    if normalized.endswith("\n"):
+        normalized = normalized[:-1]
+        if not normalized:
+            return [""]
+    return normalized.split("\n")
+
+
 def _decode_po_string(token: str) -> str:
+    if not (token.startswith('"') and token.endswith('"')) or token.startswith('"""'):
+        raise ValueError(f"malformed PO string {token!r}: expected double-quoted string")
     try:
         val = ast.literal_eval(token)
-        return val if isinstance(val, str) else str(val)
+        if not isinstance(val, str):
+            raise ValueError(f"expected str literal, got {type(val).__name__}")
+        return val
     except (SyntaxError, ValueError) as exc:
         raise ValueError(f"malformed PO string {token!r}: {exc}") from exc
 
 
-def _iter_po_entries(path: Path) -> list[tuple[str, str, bool]]:
-    entries: list[tuple[str, str, bool]] = []
+def _match_po_keyword(line: str, keyword: str) -> str | None:
+    prefix_len = len(keyword)
+    if line == keyword:
+        return ""
+    if line.startswith(keyword) and line[prefix_len : prefix_len + 1] in (" ", "\t", '"'):
+        return line[prefix_len:].strip()
+    return None
+
+
+def _iter_po_records(path: Path) -> list[tuple[str | None, str, str, bool]]:
+    entries: list[tuple[str | None, str, str, bool]] = []
+    msgctxt_parts: list[str] = []
     msgid_parts: list[str] = []
     msgstr_parts: list[str] = []
-    active: str | None = None
+    plural_parts: list[str] = []
+    has_msgctxt = False
     has_msgid = False
+    has_msgstr = False
+    has_msgstr_zero = False
+    active: str | None = None
     next_fuzzy = False
     is_fuzzy = False
 
-    def commit() -> None:
-        nonlocal msgid_parts, msgstr_parts, active, has_msgid, is_fuzzy
+    def commit(*, reset_next_fuzzy: bool = False) -> None:
+        nonlocal msgctxt_parts, msgid_parts, msgstr_parts, plural_parts
+        nonlocal has_msgctxt, has_msgid, has_msgstr, has_msgstr_zero, active, is_fuzzy, next_fuzzy
         if has_msgid:
+            if not has_msgstr:
+                msgid_preview = "".join(msgid_parts)[:60]
+                raise ValueError(f"missing msgstr for msgid {msgid_preview!r} in PO file {path.name}")
+            ctx = "".join(msgctxt_parts) if has_msgctxt else None
             msgid = "".join(msgid_parts)
-            msgstr = "".join(msgstr_parts)
-            entries.append((msgid, msgstr, is_fuzzy))
+            msgstr = "".join(msgstr_parts) if msgstr_parts else "".join(plural_parts)
+            entries.append((ctx, msgid, msgstr, is_fuzzy))
+        elif has_msgctxt:
+            raise ValueError(f"msgctxt without msgid in PO file {path.name}")
+        msgctxt_parts = []
         msgid_parts = []
         msgstr_parts = []
-        active = None
+        plural_parts = []
+        has_msgctxt = False
         has_msgid = False
+        has_msgstr = False
+        has_msgstr_zero = False
+        active = None
         is_fuzzy = False
+        if reset_next_fuzzy:
+            next_fuzzy = False
 
-    for raw_line in path.read_text(encoding="utf-8-sig").splitlines():
+    for raw_line in _split_lf(path.read_text(encoding="utf-8-sig")):
         line = raw_line.strip()
         if not line:
-            commit()
+            commit(reset_next_fuzzy=True)
             continue
         if line.startswith("#~"):
-            commit()
-            next_fuzzy = False
+            commit(reset_next_fuzzy=True)
             continue
         if line.startswith("#,") and re.search(r"\bfuzzy\b", line):
             next_fuzzy = True
             continue
         if line.startswith("#"):
             continue
-        if (line.startswith("msgctxt") and line[7:8] in (" ", "\t")) or line == "msgctxt":
+        if (rest := _match_po_keyword(line, "msgctxt")) is not None:
             commit()
             active = "msgctxt"
+            has_msgctxt = True
+            if rest:
+                msgctxt_parts.append(_decode_po_string(rest))
             continue
         if line.startswith('"') and active == "msgctxt":
+            msgctxt_parts.append(_decode_po_string(line))
             continue
-        if (line.startswith("msgid_plural") and line[12:13] in (" ", "\t")) or line == "msgid_plural":
+        if (rest := _match_po_keyword(line, "msgid_plural")) is not None:
+            if not has_msgid:
+                raise ValueError(f"msgid_plural without msgid in PO file {path.name}: {line!r}")
             active = "msgid_plural"
+            if rest:
+                _decode_po_string(rest)
             continue
         if line.startswith('"') and active == "msgid_plural":
+            _decode_po_string(line)
             continue
-        if line.startswith("msgstr["):
-            active = "msgstr_plural"
+        plural_match = re.match(r"^msgstr\[(\d+)\](?:\s*(.*))?$", line)
+        if plural_match:
+            if not has_msgid:
+                raise ValueError(f"msgstr[...] without msgid in PO file {path.name}: {line!r}")
+            plural_idx = int(plural_match.group(1))
+            active = "msgstr_0" if plural_idx == 0 else "msgstr_plural"
+            has_msgstr = True
+            rest = (plural_match.group(2) or "").strip()
+            if rest:
+                decoded = _decode_po_string(rest)
+                if plural_idx == 0 and not has_msgstr_zero:
+                    plural_parts.append(decoded)
+            if plural_idx == 0:
+                has_msgstr_zero = True
             continue
-        if line.startswith('"') and active == "msgstr_plural":
+        if line.startswith('"') and active in ("msgstr_0", "msgstr_plural"):
+            decoded = _decode_po_string(line)
+            if active == "msgstr_0":
+                plural_parts.append(decoded)
             continue
-        if (line.startswith("msgid") and line[5:6] in (" ", "\t")) or line == "msgid":
-            commit()
+        if (rest := _match_po_keyword(line, "msgid")) is not None:
+            if has_msgid:
+                commit()
             active = "msgid"
             has_msgid = True
             is_fuzzy = next_fuzzy
             next_fuzzy = False
-            rest = line[5:].strip()
             if rest:
                 msgid_parts.append(_decode_po_string(rest))
             continue
-        if (line.startswith("msgstr") and line[6:7] in (" ", "\t")) or line == "msgstr":
+        if (rest := _match_po_keyword(line, "msgstr")) is not None:
+            if not has_msgid:
+                raise ValueError(f"msgstr without preceding msgid in PO file {path.name}: {line!r}")
             active = "msgstr"
-            rest = line[6:].strip()
+            has_msgstr = True
             if rest:
                 msgstr_parts.append(_decode_po_string(rest))
             continue
@@ -292,8 +404,13 @@ def _iter_po_entries(path: Path) -> list[tuple[str, str, bool]]:
         if line.startswith('"') and active == "msgstr":
             msgstr_parts.append(_decode_po_string(line))
             continue
-    commit()
+        raise ValueError(f"unexpected line in PO file {path.name}: {line!r}")
+    commit(reset_next_fuzzy=True)
     return entries
+
+
+def _iter_po_entries(path: Path) -> list[tuple[str, str, bool]]:
+    return [(msgid, msgstr, is_fuzzy) for _ctx, msgid, msgstr, is_fuzzy in _iter_po_records(path)]
 
 
 def _parse_po(
@@ -304,7 +421,7 @@ def _parse_po(
 ) -> dict[str, str]:
     entries: dict[str, str] = {}
     for msgid, msgstr, is_fuzzy in _iter_po_entries(path):
-        if is_fuzzy and not include_fuzzy:
+        if is_fuzzy and not include_fuzzy and msgid != "":
             if include_untranslated:
                 entries[msgid] = ""
         elif msgstr or include_untranslated:
@@ -328,6 +445,8 @@ def _function_name(node: ast.AST) -> str:
 def _translatable_source_messages() -> dict[str, list[str]]:
     messages: dict[str, list[str]] = {}
     for key, value in _manifest_values().items():
+        if not value:
+            continue
         messages.setdefault(value, []).append(f"manifest.ini:{key}")
     for source_dir in TRANSLATABLE_SOURCE_DIRS:
         for path in sorted(source_dir.rglob("*.py")):
@@ -367,7 +486,15 @@ def _manifest_version() -> str:
 
 def _po_escape(value: str) -> str:
     return (
-        value.replace("\\", "\\\\").replace('"', '\\"').replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n")
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\a", "\\a")
+        .replace("\b", "\\b")
+        .replace("\f", "\\f")
+        .replace("\v", "\\v")
+        .replace("\t", "\\t")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
     )
 
 
@@ -375,7 +502,7 @@ def _po_quoted_lines(value: str) -> list[str]:
     normalized = value.replace("\r\n", "\n").replace("\r", "\n")
     if not normalized:
         return ['""']
-    parts = normalized.splitlines(keepends=True)
+    parts = re.findall(r"[^\n]*\n|[^\n]+", normalized)
     if len(parts) == 1:
         return [f'"{_po_escape(normalized)}"']
     return ['""'] + [f'"{_po_escape(part)}"' for part in parts]
@@ -405,7 +532,7 @@ def _build_po_header(
             '"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\\n"',
             '"Last-Translator: FULL NAME <EMAIL@ADDRESS>\\n"',
             '"Language-Team: LANGUAGE <LL@li.org>\\n"',
-            f'"Language: {language}\\n"',
+            f'"Language: {_po_escape(language)}\\n"',
             '"MIME-Version: 1.0\\n"',
             '"Content-Type: text/plain; charset=UTF-8\\n"',
             '"Content-Transfer-Encoding: 8bit\\n"',
@@ -419,17 +546,29 @@ def _extract_po_header_comments(po_path: Path) -> list[str]:
     if not po_path.is_file():
         return comments
     try:
-        for raw_line in po_path.read_text(encoding="utf-8-sig").splitlines():
+        for raw_line in _split_lf(po_path.read_text(encoding="utf-8-sig")):
             line = raw_line.strip()
             if not line:
                 continue
             if line.startswith("#"):
-                comments.append(line)
+                if not line.startswith(("#:", "#,", "#|", "#~")):
+                    comments.append(line)
             else:
+                if not re.match(r'^msgid(?:\s+""|"")$', line):
+                    return []
                 break
     except Exception:
         pass
     return comments
+
+
+def _default_po_comments(description: str = "translation") -> list[str]:
+    return [
+        f"# Google TTS For NVDA {description}.",
+        "# Copyright (C) 2026 Google TTS For NVDA contributors",
+        "# This file is distributed under the same license as the add-on.",
+        "#",
+    ]
 
 
 def _merge_po_header(
@@ -440,12 +579,7 @@ def _merge_po_header(
 ) -> list[str]:
     version = _manifest_version()
     lines: list[str] = []
-    fallback_comments = default_comments or [
-        "# Google TTS For NVDA translation.",
-        "# Copyright (C) 2026 Google TTS For NVDA contributors",
-        "# This file is distributed under the same license as the add-on.",
-        "#",
-    ]
+    fallback_comments = default_comments or _default_po_comments("translation")
     if comments:
         lines.extend(comments)
     else:
@@ -460,12 +594,12 @@ def _merge_po_header(
         return _build_po_header(comments=comments or fallback_comments, language=language)
 
     header_dict: dict[str, str] = {}
-    for hline in old_header_str.splitlines():
+    for hline in _split_lf(old_header_str):
         if ":" in hline:
             k, v = hline.split(":", 1)
             header_dict[k.strip()] = v.strip()
 
-    header_dict["Project-Id-Version"] = f"Google TTS For NVDA {_po_escape(version)}"
+    header_dict["Project-Id-Version"] = f"Google TTS For NVDA {version}"
     header_dict.setdefault("Report-Msgid-Bugs-To", "")
     header_dict.setdefault("POT-Creation-Date", "YEAR-MO-DA HO:MI+ZONE")
     header_dict.setdefault("PO-Revision-Date", "YEAR-MO-DA HO:MI+ZONE")
@@ -491,23 +625,16 @@ def _merge_po_header(
     ]
     for k in ordered_keys:
         if k in header_dict:
-            lines.append(f'"{k}: {header_dict[k]}\\n"')
+            lines.append(f'"{_po_escape(k)}: {_po_escape(header_dict[k])}\\n"')
     for k, v in header_dict.items():
         if k not in ordered_keys:
-            lines.append(f'"{k}: {v}\\n"')
+            lines.append(f'"{_po_escape(k)}: {_po_escape(v)}\\n"')
     return lines
 
 
 def _write_pot(messages: dict[str, list[str]], pot_path: Path | None = None) -> Path:
     target_pot = POT_PATH if pot_path is None else pot_path
-    lines = _build_po_header(
-        comments=[
-            "# Google TTS For NVDA translation template.",
-            "# Copyright (C) 2026 Google TTS For NVDA contributors",
-            "# This file is distributed under the same license as the add-on.",
-            "#",
-        ]
-    )
+    lines = _build_po_header(comments=_default_po_comments("translation template"))
     for msgid, locations in sorted(messages.items(), key=lambda item: item[0].lower()):
         lines.append("")
         for location in sorted(locations):
@@ -551,27 +678,45 @@ def _find_msgfmt(configured_path: Path | None = None) -> Path | None:
     return _find_gettext_tool("msgfmt", POEDIT_MSGFMT_RELATIVE_PATH, configured_path)
 
 
-def _check_po_syntax_with_msgfmt(po_path: Path, msgfmt_path: Path | None = None) -> list[str]:
+def _gettext_c_env() -> dict[str, str]:
+    return {**os.environ, "LANG": "C", "LANGUAGE": "C", "LC_ALL": "C", "LC_MESSAGES": "C"}
+
+
+def _run_msgfmt_command(msgfmt_path: Path, output_path: Path, po_path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(msgfmt_path), "-o", str(output_path), str(po_path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_gettext_c_env(),
+        check=False,
+    )
+
+
+def _po_has_charset(po_path: Path) -> bool:
+    try:
+        content = po_path.read_text(encoding="utf-8-sig", errors="replace")
+        return "charset=" in content.lower()
+    except Exception:
+        return False
+
+
+def _check_po_syntax_with_msgfmt(
+    po_path: Path,
+    msgfmt_path: Path | None = None,
+    *,
+    _verified_charset: bool = False,
+) -> list[str]:
     """Check the syntax of a PO file using msgfmt."""
     actual_msgfmt = msgfmt_path if msgfmt_path is not None else _find_msgfmt()
     if actual_msgfmt is None or not actual_msgfmt.is_file() or not po_path.is_file():
         return []
-    try:
-        content = po_path.read_text(encoding="utf-8-sig", errors="replace")
-        if "charset=" not in content.lower():
-            return []
-    except Exception:
+    if not _verified_charset and not _po_has_charset(po_path):
         return []
     try:
-        result = subprocess.run(
-            [str(actual_msgfmt), "-o", os.devnull, str(po_path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
+        result = _run_msgfmt_command(actual_msgfmt, Path(os.devnull), po_path)
         if result.returncode != 0:
             output = result.stderr.strip().replace("\r\n", "\n")
             if output:
@@ -589,23 +734,37 @@ def _check_po_syntax_with_msgfmt(po_path: Path, msgfmt_path: Path | None = None)
         return [f"{po_path.name}: could not run msgfmt: {exc}"]
 
 
+def _check_po_syntax(po_path: Path, msgfmt_path: Path | None = None) -> list[str]:
+    """Check PO syntax using msgfmt when usable, falling back to pure-Python validation."""
+    if not po_path.is_file():
+        return []
+    actual_msgfmt = msgfmt_path if msgfmt_path is not None else _find_msgfmt()
+    if actual_msgfmt is not None and actual_msgfmt.is_file() and _po_has_charset(po_path):
+        return _check_po_syntax_with_msgfmt(po_path, actual_msgfmt, _verified_charset=True)
+    return _check_po_syntax_fallback(po_path)
+
+
 def _check_po_syntax_fallback(po_path: Path) -> list[str]:
     """Pure-Python PO syntax validation when msgfmt is unavailable."""
     if not po_path.is_file():
         return []
     errors: list[str] = []
-    seen_msgids: set[str] = set()
+    seen_keys: set[tuple[str | None, str]] = set()
     try:
-        for msgid, _msgstr, _fuzzy in _iter_po_entries(po_path):
+        for ctx, msgid, _msgstr, _fuzzy in _iter_po_records(po_path):
             if not msgid:
                 continue
-            if msgid in seen_msgids:
+            key = (ctx, msgid)
+            if key in seen_keys:
                 errors.append(f"{po_path.name}: duplicate message definition for {_message_preview(msgid)!r}")
             else:
-                seen_msgids.add(msgid)
+                seen_keys.add(key)
     except Exception as exc:
         errors.append(f"{po_path.name}: PO syntax error: {exc}")
     return errors
+
+
+_OBSOLETE_START_RE = re.compile(r"^#~\s*(?:msgctxt|msgid)\b")
 
 
 def _purge_obsolete_po_entries(text: str) -> tuple[str, int]:
@@ -616,13 +775,22 @@ def _purge_obsolete_po_entries(text: str) -> tuple[str, int]:
     kept: list[str] = []
     removed = 0
     for paragraph in paragraphs:
-        lines = paragraph.splitlines()
-        if any(
-            line.startswith("#~")
-            and (line.startswith(("#~ msgctxt", "#~ msgid")) or bool(re.match(r"^#~\s*(?:msgctxt|msgid)\b", line)))
-            for line in lines
-        ):
-            removed += 1
+        lines = paragraph.split("\n")
+        obs_start_indices = [
+            idx for idx, line in enumerate(lines) if line.startswith("#~") and _OBSOLETE_START_RE.match(line)
+        ]
+        if obs_start_indices:
+            has_active_entry = any(
+                not line.startswith("#") and line.strip() != "" for line in lines[: obs_start_indices[0]]
+            )
+            if has_active_entry:
+                cut_idx = obs_start_indices[0]
+                while cut_idx > 0 and lines[cut_idx - 1].startswith(("#~", "#,", "#.")):
+                    cut_idx -= 1
+                kept.append("\n".join(lines[:cut_idx]))
+                removed += len(obs_start_indices)
+            else:
+                removed += max(1, len(obs_start_indices))
             continue
         kept.append(paragraph)
     if not kept:
@@ -650,6 +818,7 @@ def _run_msgmerge(
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_gettext_c_env(),
         check=False,
     )
     if result.returncode != 0:
@@ -689,6 +858,15 @@ def _verify_merged_po(
     return preserved, len(new_msgids)
 
 
+_CONTROL_WS_RE = re.compile(r"[\s\x00-\x1f]+")
+_UNSAFE_HREF_SCHEMES = ("javascript:", "data:", "vbscript:")
+
+
+def _is_unsafe_href(url: str, *, unescape_first: bool = False) -> bool:
+    candidate = html.unescape(url) if unescape_first else url
+    return _CONTROL_WS_RE.sub("", candidate).lower().startswith(_UNSAFE_HREF_SCHEMES)
+
+
 def _update_po_from_template(
     language_dir: Path,
     msgmerge_path: Path | None,
@@ -697,49 +875,95 @@ def _update_po_from_template(
     if language_dir.name == "en":
         raise ValueError("en: English is the source language; cannot update PO file.")
     po_path = language_dir / "LC_MESSAGES" / "nvda.po"
-    if not po_path.is_file():
-        (language_dir / "LC_MESSAGES").mkdir(parents=True, exist_ok=True)
-        if not POT_PATH.is_file():
-            _write_pot(required_messages)
-        pot_text = POT_PATH.read_text(encoding="utf-8-sig")
-        po_text = pot_text.replace('"Language: \\n"', f'"Language: {language_dir.name}\\n"')
-        _atomic_write_text(po_path, po_text, prefix=".nvda-po-init-")
 
-    old_catalog = _parse_po(po_path, include_untranslated=True, include_fuzzy=True)
-    if not POT_PATH.is_file():
-        _write_pot(required_messages)
-    old_msgids = set(old_catalog) - {""}
-    required_msgids = set(required_messages)
+    def _build_ui_entries() -> list[tuple[str, list[str]]]:
+        return [
+            (msgid, [f"#: {loc}" for loc in sorted(locations)])
+            for msgid, locations in sorted(required_messages.items(), key=lambda item: item[0].lower())
+            if msgid
+        ]
+
+    return _merge_po_from_template(
+        po_path=po_path,
+        pot_path=POT_PATH,
+        language=language_dir.name,
+        msgmerge_path=msgmerge_path,
+        ensure_pot=lambda: _write_pot(required_messages),
+        build_entries=_build_ui_entries,
+        default_comments=_default_po_comments("translation"),
+        init_prefix=".nvda-po-init-",
+        update_prefix=".nvda-po-update-",
+        category="catalog",
+        string_type="source",
+    )
+
+
+def _merge_po_from_template(
+    *,
+    po_path: Path,
+    pot_path: Path,
+    language: str,
+    msgmerge_path: Path | None,
+    ensure_pot: Callable[[], Path],
+    build_entries: Callable[[], list[tuple[str, list[str]]]],
+    default_comments: list[str],
+    init_prefix: str,
+    update_prefix: str,
+    category: str,
+    string_type: str,
+    pre_seed_cb: Callable[[], None] | None = None,
+) -> tuple[int, int, int]:
+    seeded_blank_po = False
+    if not po_path.is_file():
+        if pre_seed_cb is not None:
+            pre_seed_cb()
+        if not po_path.is_file():
+            po_path.parent.mkdir(parents=True, exist_ok=True)
+            if not pot_path.is_file():
+                ensure_pot()
+            pot_text = pot_path.read_text(encoding="utf-8-sig")
+            po_text = pot_text.replace('"Language: \\n"', f'"Language: {_po_escape(language)}\\n"')
+            _atomic_write_text(po_path, po_text, prefix=init_prefix)
+            seeded_blank_po = True
+
     temporary_path: Path | None = None
     try:
+        old_catalog = _parse_po(po_path, include_untranslated=True, include_fuzzy=True)
+        if not pot_path.is_file():
+            ensure_pot()
+        entry_specs = build_entries()
+        required_msgids = {msgid for msgid, _ in entry_specs if msgid}
+        old_msgids = set() if seeded_blank_po else (set(old_catalog) - {""})
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
             dir=po_path.parent,
-            prefix=".nvda-po-update-",
+            prefix=update_prefix,
             suffix=".tmp",
             delete=False,
         ) as temporary_stream:
             temporary_path = Path(temporary_stream.name)
 
-        removed_count = 0
         if msgmerge_path is not None:
-            removed_count = _run_msgmerge(msgmerge_path, po_path, POT_PATH, temporary_path, language_dir.name)
+            removed_count = _run_msgmerge(msgmerge_path, po_path, pot_path, temporary_path, language)
         else:
             old_comments = _extract_po_header_comments(po_path)
-            lines = _merge_po_header(old_catalog.get("", ""), language=language_dir.name, comments=old_comments)
+            lines = _merge_po_header(
+                old_catalog.get("", ""),
+                language=language,
+                comments=old_comments,
+                default_comments=default_comments,
+            )
             old_fuzzy_msgids = _po_fuzzy_msgids(po_path)
-            for msgid, locations in sorted(required_messages.items(), key=lambda item: item[0].lower()):
+            for msgid, comment_lines in entry_specs:
                 if not msgid:
                     continue
                 lines.append("")
                 if msgid in old_fuzzy_msgids:
                     lines.append("#, fuzzy")
-                for loc in sorted(locations):
-                    lines.append(f"#: {loc}")
+                lines.extend(comment_lines)
                 _append_po_string(lines, "msgid", msgid)
-                msgstr = old_catalog.get(msgid, "")
-                _append_po_string(lines, "msgstr", msgstr)
+                _append_po_string(lines, "msgstr", old_catalog.get(msgid, ""))
             temporary_path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
             removed_count = len(old_msgids - required_msgids)
 
@@ -747,16 +971,24 @@ def _update_po_from_template(
             temporary_path,
             required_msgids,
             old_msgids,
-            language_dir.name,
-            category="catalog",
-            string_type="source",
+            language,
+            category=category,
+            string_type=string_type,
         )
         temporary_path.replace(po_path)
         temporary_path = None
         return preserved_count, new_count, removed_count
+    except Exception:
+        if seeded_blank_po:
+            po_path.unlink(missing_ok=True)
+        raise
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def _root_brace_field(field_name: str) -> str:
+    return field_name.split(".", 1)[0].split("[", 1)[0]
 
 
 def _format_set(message: str) -> set[str]:
@@ -764,26 +996,48 @@ def _format_set(message: str) -> set[str]:
     try:
         for _literal, field_name, _format_spec, _conversion in string.Formatter().parse(message):
             if field_name:
-                fields.add("{" + field_name.split(".", 1)[0].split("[", 1)[0] + "}")
+                fields.add("{" + _root_brace_field(field_name) + "}")
     except ValueError:
         return set(PLACEHOLDER_RE.findall(message))
     return fields
 
 
+def _collect_brace_fields(text: str, brace_formats: set[str], unnumbered: list[int]) -> None:
+    for _literal, field_name, format_spec, _conversion in string.Formatter().parse(text):
+        if field_name is None:
+            continue
+        root_name = _root_brace_field(field_name)
+        if root_name:
+            brace_formats.add("{" + root_name + "}")
+        else:
+            unnumbered[0] += 1
+        if format_spec:
+            _collect_brace_fields(format_spec, brace_formats, unnumbered)
+
+
 def _get_interpolations(text: str) -> tuple[list[str], set[str], set[str], int]:
-    cleaned_percent = text.replace("%%", "")
+    cleaned_percent = re.sub(
+        r"(?:https?|ftps?)://(?:[^\s<>\"'()]|\([^()\s]*\))+|mailto:[^\s<>\"')]+",
+        lambda m: re.sub(r"%[0-9A-Fa-f]{2}", "", m.group(0)),
+        text.replace("%%", ""),
+    )
     unnamed_percent = RE_UNNAMED_PERCENT.findall(cleaned_percent)
     named_percent = set(RE_NAMED_PERCENT.findall(cleaned_percent))
     brace_formats: set[str] = set()
-    unnumbered_braces = 0
-    cleaned_braces = text.replace("{{", "").replace("}}", "")
-    for m in RE_FORMAT.finditer(cleaned_braces):
-        field_name = m.group(1).split(".", 1)[0].split("[", 1)[0]
-        if field_name:
-            brace_formats.add("{" + field_name + "}")
-        else:
-            unnumbered_braces += 1
-    return unnamed_percent, named_percent, brace_formats, unnumbered_braces
+    unnumbered_count = [0]
+    try:
+        _collect_brace_fields(text, brace_formats, unnumbered_count)
+    except ValueError:
+        brace_formats.clear()
+        unnumbered_count[0] = 0
+        cleaned_braces = text.replace("{{", "").replace("}}", "")
+        for m in RE_FORMAT.finditer(cleaned_braces):
+            field_name = _root_brace_field(m.group(1))
+            if field_name:
+                brace_formats.add("{" + field_name + "}")
+            else:
+                unnumbered_count[0] += 1
+    return unnamed_percent, named_percent, brace_formats, unnumbered_count[0]
 
 
 def _check_format_interpolations(msgid: str, msgstr: str) -> list[str]:
@@ -827,27 +1081,38 @@ def _check_html_tag_interpolations(msgid: str, msgstr: str) -> list[str]:
         return []
     alerts: list[str] = []
 
-    open_tags = OPEN_HTML_TAG_RE.findall(msgstr)
-    close_tags = CLOSE_HTML_TAG_RE.findall(msgstr)
+    open_comments = len(re.findall(r"<!--", msgstr))
+    close_comments = len(re.findall(r"-->", msgstr))
+    if open_comments != close_comments:
+        alerts.append(f"unbalanced HTML comment: {open_comments} open vs {close_comments} close")
+
+    msgid_clean = HTML_COMMENT_RE.sub("", msgid)
+    msgstr_clean = HTML_COMMENT_RE.sub("", msgstr)
+
+    open_tags = OPEN_HTML_TAG_RE.findall(msgstr_clean)
+    close_tags = CLOSE_HTML_TAG_RE.findall(msgstr_clean)
 
     # 1. Disallowed dangerous tags and event handlers check
     for tag in open_tags + close_tags:
         if tag.lower() in DANGEROUS_HTML_TAGS:
             alerts.append(f"disallowed HTML tag: <{tag.lower()}>")
 
-    if EVENT_HANDLER_ATTR_RE.search(msgstr) or EVENT_HANDLER_ATTR_RE.search(html.unescape(msgstr)):
+    found_event_handler = False
+    found_inline_style = False
+    for match in _FULL_OPEN_TAG_RE.finditer(msgstr_clean):
+        for attr_name, _attr_val in _iter_tag_attributes(match.group(2)):
+            cleaned_attr = _CONTROL_WS_RE.sub("", attr_name)
+            if _EVENT_HANDLER_NAME_RE.match(cleaned_attr):
+                found_event_handler = True
+            elif cleaned_attr == "style":
+                found_inline_style = True
+    if found_event_handler:
         alerts.append("disallowed inline event handler in HTML tag")
-
-    if STYLE_ATTR_RE.search(msgstr) or STYLE_ATTR_RE.search(html.unescape(msgstr)):
+    if found_inline_style:
         alerts.append("disallowed inline style attribute in HTML tag")
 
-    open_comments = len(re.findall(r"<!--", msgstr))
-    close_comments = len(re.findall(r"-->", msgstr))
-    if open_comments != close_comments:
-        alerts.append(f"unbalanced HTML comment: {open_comments} open vs {close_comments} close")
-
     # 2. Balanced count check for each tag
-    all_tag_names = set(t.lower() for t in open_tags + close_tags) - VOID_HTML_TAGS
+    all_tag_names = set(t.lower() for t in open_tags + close_tags) - ALL_VOID_HTML_TAGS
     for tag in sorted(all_tag_names):
         o = sum(1 for t in open_tags if t.lower() == tag)
         c = sum(1 for t in close_tags if t.lower() == tag)
@@ -856,10 +1121,10 @@ def _check_html_tag_interpolations(msgid: str, msgstr: str) -> list[str]:
 
     # 3. Stack-based nesting order check
     stack: list[str] = []
-    for m in HTML_TAG_TOKEN_RE.finditer(msgstr):
+    for m in HTML_TAG_TOKEN_RE.finditer(msgstr_clean):
         is_close = bool(m.group(1))
         tag_name = m.group(2).lower()
-        if tag_name in VOID_HTML_TAGS:
+        if tag_name in ALL_VOID_HTML_TAGS:
             if is_close:
                 alerts.append(f"unexpected closing tag for void element </{tag_name}>")
             continue
@@ -873,8 +1138,8 @@ def _check_html_tag_interpolations(msgid: str, msgstr: str) -> list[str]:
                 if top != tag_name:
                     alerts.append(f"mismatched closing tag: expected </{top}>, got </{tag_name}>")
 
-    id_open = [t.lower() for t in OPEN_HTML_TAG_RE.findall(msgid) if t.lower() not in VOID_HTML_TAGS]
-    str_open = [t.lower() for t in open_tags if t.lower() not in VOID_HTML_TAGS]
+    id_open = [t.lower() for t in OPEN_HTML_TAG_RE.findall(msgid_clean)]
+    str_open = [t.lower() for t in open_tags]
 
     # 4. Missing tags and unexpected extra tags
     missing_tags = set(id_open) - set(str_open)
@@ -899,15 +1164,13 @@ def _check_html_tag_interpolations(msgid: str, msgstr: str) -> list[str]:
             alerts.append(f"missing <{other_tag}> tag: expected at least {id_cnt}, got {str_cnt}")
 
     # 6. Href check and scheme safety check
-    id_hrefs = sorted(html.unescape(h).strip() for h in _extract_hrefs(msgid))
-    str_hrefs = sorted(html.unescape(h).strip() for h in _extract_hrefs(msgstr))
+    id_hrefs = sorted(html.unescape(h).strip() for h in _extract_hrefs(msgid_clean))
+    str_hrefs = sorted(html.unescape(h).strip() for h in _extract_hrefs(msgstr_clean))
     if id_hrefs != str_hrefs:
         alerts.append(f"<a> href mismatch: expected {id_hrefs}, got {str_hrefs}")
 
     for href in str_hrefs:
-        unescaped_href = html.unescape(href)
-        cleaned_href = re.sub(r"[\s\x00-\x1f]", "", unescaped_href).lower()
-        if any(cleaned_href.startswith(prefix) for prefix in ("javascript:", "data:", "vbscript:")):
+        if _is_unsafe_href(href):
             alerts.append(f"unsafe <a> href scheme: {href!r}")
 
     return alerts
@@ -925,13 +1188,17 @@ def _check_string_interpolations(
     msgstr: str,
     target_label: str,
     lang_name: str,
+    *,
+    context_phrase: str | None = None,
+    always_check_html: bool = False,
 ) -> list[str]:
     alerts: list[str] = []
+    scope = f"in {context_phrase} " if context_phrase else ""
     for err in _check_format_interpolations(msgid, msgstr):
-        alerts.append(f"{lang_name}: placeholder mismatch for {target_label}: {err}")
-    if "<" in msgid or "<" in msgstr:
+        alerts.append(f"{lang_name}: placeholder mismatch {scope}for {target_label}: {err}")
+    if always_check_html or "<" in msgid or "<" in msgstr:
         for err in _check_html_tag_interpolations(msgid, msgstr):
-            alerts.append(f"{lang_name}: HTML tag issue for {target_label}: {err}")
+            alerts.append(f"{lang_name}: HTML tag issue {scope}for {target_label}: {err}")
     return alerts
 
 
@@ -944,9 +1211,9 @@ def _check_catalog(
 ) -> list[str]:
     active_checks = DEFAULT_UI_CHECKS if checks is None else checks
     errors: list[str] = []
-    manifest_values = _manifest_values()
     checked_msgids: set[str] = set()
     if CHECK_MANIFEST in active_checks:
+        manifest_values = _manifest_values()
         for key in MANIFEST_KEYS:
             msgid = manifest_values.get(key)
             if not msgid:
@@ -987,13 +1254,20 @@ def _check_catalog(
 
 
 def _compile_mo(catalog: dict[str, str], output_path: Path) -> None:
-    keys = sorted(catalog)
-    ids = [key.encode("utf-8") for key in keys]
-    strs = [catalog[key].encode("utf-8") for key in keys]
+    mo_catalog = dict(catalog)
+    header = mo_catalog.get("", "")
+    if "charset=" not in header.lower():
+        if header and not header.endswith("\n"):
+            header += "\n"
+        mo_catalog[""] = header + "Content-Type: text/plain; charset=UTF-8\n"
+
+    encoded_entries = sorted((key.encode("utf-8"), mo_catalog[key].encode("utf-8")) for key in mo_catalog)
+    ids = [k for k, _ in encoded_entries]
+    strs = [v for _, v in encoded_entries]
 
     key_table_offset = 7 * 4
-    value_table_offset = key_table_offset + len(keys) * 8
-    string_offset = value_table_offset + len(keys) * 8
+    value_table_offset = key_table_offset + len(encoded_entries) * 8
+    string_offset = value_table_offset + len(encoded_entries) * 8
 
     key_offsets: list[tuple[int, int]] = []
     current_offset = string_offset
@@ -1009,10 +1283,10 @@ def _compile_mo(catalog: dict[str, str], output_path: Path) -> None:
     data = bytearray()
     data.extend(
         struct.pack(
-            "<Iiiiiii",
+            "<IIIIIII",
             0x950412DE,
             0,
-            len(keys),
+            len(encoded_entries),
             key_table_offset,
             value_table_offset,
             0,
@@ -1020,9 +1294,9 @@ def _compile_mo(catalog: dict[str, str], output_path: Path) -> None:
         )
     )
     for length, offset in key_offsets:
-        data.extend(struct.pack("<ii", length, offset))
+        data.extend(struct.pack("<II", length, offset))
     for length, offset in value_offsets:
-        data.extend(struct.pack("<ii", length, offset))
+        data.extend(struct.pack("<II", length, offset))
     for value in ids:
         data.extend(value + b"\0")
     for value in strs:
@@ -1044,15 +1318,7 @@ def _compile_mo_file(
         try:
             output_mo_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_mo = output_mo_path.with_name(f".tmp-{output_mo_path.name}")
-            res = subprocess.run(
-                [str(actual_msgfmt), "-o", str(tmp_mo), str(po_path)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-            )
+            res = _run_msgfmt_command(actual_msgfmt, tmp_mo, po_path)
             if res.returncode == 0 and tmp_mo.is_file():
                 tmp_mo.replace(output_mo_path)
                 tmp_mo = None
@@ -1065,23 +1331,40 @@ def _compile_mo_file(
     _compile_mo(catalog, output_mo_path)
 
 
+def _unescape_manifest_value(value: str, *, multiline: bool = False) -> str:
+    escapes = {
+        '"': '"',
+        "'": "'",
+        "\\": "\\",
+    }
+    if not multiline:
+        escapes.update({"n": "\n", "r": "\r", "t": "\t"})
+    return re.sub(r"\\(.)", lambda m: escapes.get(m.group(1), m.group(0)), value)
+
+
 def _manifest_values() -> dict[str, str]:
     text = MANIFEST_SOURCE.read_text(encoding="utf-8-sig")
     values: dict[str, str] = {}
     for key in MANIFEST_KEYS:
         match = re.search(
-            rf'^{re.escape(key)}\s*=\s*(?:"""(.*?)"""|\'\'\'(.*?)\'\'\')',
+            rf'^{re.escape(key)}[ \t]*=[ \t]*(?:"""((?:\\.|(?!"\"\").)*?)"""|\'\'\'((?:\\.|(?!\'\'\').)*?)\'\'\')',
             text,
             re.MULTILINE | re.DOTALL,
         )
         if match:
-            values[key] = match.group(1) if match.group(1) is not None else match.group(2)
+            raw = match.group(1) if match.group(1) is not None else match.group(2)
+            values[key] = _unescape_manifest_value(raw, multiline=True)
         else:
-            match_single = re.search(rf'^{re.escape(key)}\s*=\s*(?:"(.*?)"|\'(.*?)\')', text, re.MULTILINE)
+            match_single = re.search(
+                rf'^{re.escape(key)}[ \t]*=[ \t]*(?:"((?:\\.|[^"\r\n\\])*)"|\'((?:\\.|[^\'\r\n\\])*)\')',
+                text,
+                re.MULTILINE,
+            )
             if match_single:
-                values[key] = match_single.group(1) if match_single.group(1) is not None else match_single.group(2)
+                raw = match_single.group(1) if match_single.group(1) is not None else match_single.group(2)
+                values[key] = _unescape_manifest_value(raw, multiline=False)
             else:
-                match_unquoted = re.search(rf"^{re.escape(key)}\s*=\s*([^\r\n#]+)", text, re.MULTILINE)
+                match_unquoted = re.search(rf"^{re.escape(key)}[ \t]*=[ \t]*([^\s\r\n#][^\r\n#]*)", text, re.MULTILINE)
                 if match_unquoted:
                     values[key] = match_unquoted.group(1).strip()
     return values
@@ -1092,6 +1375,14 @@ def _quote_manifest_value(value: str) -> str:
     return '"' + cleaned.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _format_multiline_manifest_value(value: str) -> str:
+    formatted = value.replace("\r\n", "\n").replace("\r", "\n")
+    formatted = formatted.replace("\\", "\\\\").replace('"""', r"\"\"\"")
+    if formatted.endswith('"'):
+        formatted += "\n"
+    return f'"""{formatted}"""'
+
+
 def _write_translated_manifest(language_dir: Path, catalog: dict[str, str]) -> None:
     values = _manifest_values()
     lines: list[str] = []
@@ -1100,24 +1391,12 @@ def _write_translated_manifest(language_dir: Path, catalog: dict[str, str]) -> N
         if not summary or not summary.strip():
             summary = values["summary"]
         lines.append(f"summary = {_quote_manifest_value(summary)}\n")
-    if "description" in values:
-        description = catalog.get(values["description"])
-        if not description or not description.strip():
-            description = values["description"]
-        description = description.replace("\r\n", "\n").replace("\r", "\n")
-        description = description.replace('"""', r"\"\"\"")
-        if description.endswith('"'):
-            description += "\n"
-        lines.append(f'description = """{description}"""\n')
-    if "changelog" in values:
-        changelog = catalog.get(values["changelog"])
-        if not changelog or not changelog.strip():
-            changelog = values["changelog"]
-        changelog = changelog.replace("\r\n", "\n").replace("\r", "\n")
-        changelog = changelog.replace('"""', r"\"\"\"")
-        if changelog.endswith('"'):
-            changelog += "\n"
-        lines.append(f'changelog = """{changelog}"""\n')
+    for key in ("description", "changelog"):
+        if key in values:
+            translated = catalog.get(values[key])
+            if not translated or not translated.strip():
+                translated = values[key]
+            lines.append(f"{key} = {_format_multiline_manifest_value(translated)}\n")
     _atomic_write_text(language_dir / "manifest.ini", "".join(lines), prefix=".manifest-")
 
 
@@ -1149,6 +1428,12 @@ def _normalize_language_code(language: str) -> str:
     return f"{parts[0].lower()}_{parts[1].upper()}"
 
 
+_WINDOWS_RESERVED_DIR_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
+_INVALID_LOCALE_DIR_CHARS_RE = re.compile(r'[\s\x00-\x1f<>:"/\\|?*]')
+
+
 def _resolve_target_directories(
     requested_languages: list[str] | None,
     base_dir: Path,
@@ -1160,12 +1445,20 @@ def _resolve_target_directories(
     errors: list[str] = []
     if requested_languages:
         target: list[str] = []
+        dirs_to_create: list[tuple[str, Path]] = []
         for raw in requested_languages:
             codes = [c.strip() for c in raw.split(",")] if "," in raw else [raw]
             for language in codes:
                 norm = _normalize_language_code(language)
                 if not norm:
                     errors.append("empty language code.")
+                    continue
+                if (
+                    norm in (".", "..")
+                    or _INVALID_LOCALE_DIR_CHARS_RE.search(norm)
+                    or norm.rstrip(".").upper() in _WINDOWS_RESERVED_DIR_NAMES
+                ):
+                    errors.append(f"{norm}: invalid language code.")
                     continue
                 if norm == "en":
                     if include_en:
@@ -1175,18 +1468,33 @@ def _resolve_target_directories(
                         errors.append(f"en: {en_source_msg}")
                     continue
                 target_dir = base_dir / norm
+                try:
+                    resolved_parent = target_dir.resolve().parent
+                    resolved_base = base_dir.resolve()
+                except OSError:
+                    errors.append(f"{norm}: invalid language code.")
+                    continue
+                if resolved_parent != resolved_base:
+                    errors.append(f"{norm}: invalid language code.")
+                    continue
                 if not target_dir.is_dir():
                     if allow_create:
-                        try:
-                            target_dir.mkdir(parents=True, exist_ok=True)
-                        except OSError as exc:
-                            errors.append(f"{norm}: could not create {folder_type_name} folder: {exc}")
-                            continue
+                        dirs_to_create.append((norm, target_dir))
                     else:
                         errors.append(f"{norm}: {folder_type_name} folder is missing: {_relative_to_addon(target_dir)}")
                         continue
                 if norm not in target:
                     target.append(norm)
+        # Validate every requested code before creating missing directories on disk.
+        if allow_create and not errors:
+            for norm, target_dir in dirs_to_create:
+                if target_dir.is_dir():
+                    continue
+                try:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    errors.append(f"{norm}: could not create {folder_type_name} folder: {exc}")
+                    target = [lang for lang in target if lang != norm]
         return target, errors
 
     all_langs = _child_directories(base_dir)
@@ -1224,10 +1532,6 @@ def _addon_doc_languages() -> list[str]:
     return _child_directories(DOC_DIR)
 
 
-def _all_doc_languages() -> list[str]:
-    return _addon_doc_languages()
-
-
 def _doc_target_languages(
     requested_languages: list[str] | None,
     allow_create: bool = False,
@@ -1260,85 +1564,174 @@ def _format_html_attrs(attrs: list[tuple[str, str | None]] | dict[str, str | Non
     return "".join(parts)
 
 
-class _DocHtmlExtractor(HTMLParser):
+_OPTIONAL_DOC_CLOSE_TRIGGERS: dict[str, frozenset[str]] = {
+    "p": frozenset(
+        {
+            "p",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "ul",
+            "ol",
+            "dl",
+            "table",
+            "blockquote",
+            "pre",
+            "hr",
+            "div",
+            "section",
+            "article",
+            "aside",
+            "details",
+            "figure",
+            "header",
+            "footer",
+            "nav",
+            "main",
+        }
+    ),
+    "li": frozenset({"li"}),
+    "dt": frozenset({"dt", "dd"}),
+    "dd": frozenset({"dt", "dd"}),
+    "th": frozenset({"th", "td", "tr", "thead", "tbody", "tfoot"}),
+    "td": frozenset({"th", "td", "tr", "thead", "tbody", "tfoot"}),
+    "tr": frozenset({"tr", "thead", "tbody", "tfoot"}),
+}
+
+
+def _close_optional_doc_tags(stack: list[str], tag_lower: str, flush_cb: Callable[[], None]) -> None:
+    while stack:
+        top = stack[-1]
+        triggers = _OPTIONAL_DOC_CLOSE_TRIGGERS.get(top)
+        if triggers is None or tag_lower not in triggers:
+            break
+        if top in TRANSLATABLE_DOC_TAGS:
+            flush_cb()
+        stack.pop()
+
+
+class _BaseDocHtmlParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
-        self.segments: list[tuple[int, str]] = []
         self.stack: list[str] = []
         self.current_data: list[str] = []
-        self.current_start_line = 0
+
+    def _in_translatable(self) -> bool:
+        return bool(self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS)
+
+    def _emit_raw(self, text: str) -> None:
+        pass
+
+    def _flush_segment(self) -> None:
+        pass
+
+    def _on_enter_translatable(self) -> None:
+        pass
+
+    def _on_return_to_translatable(self) -> None:
+        pass
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag_lower = tag.lower()
+        _close_optional_doc_tags(self.stack, tag_lower, self._flush_segment)
         if tag_lower in DOC_STRUCTURAL_CONTAINER_TAGS:
-            if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-                text = "".join(self.current_data).strip()
-                if text:
-                    self.segments.append((self.current_start_line, text))
-                self.current_data = []
+            if self._in_translatable():
+                self._flush_segment()
             self.stack.append(tag_lower)
+            self._emit_raw(f"<{tag}{_format_html_attrs(attrs)}>")
         elif tag_lower in TRANSLATABLE_DOC_TAGS:
-            if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-                text = "".join(self.current_data).strip()
-                if text:
-                    self.segments.append((self.current_start_line, text))
-                self.current_data = []
+            if self._in_translatable():
+                self._flush_segment()
             self.stack.append(tag_lower)
-            self.current_start_line = self.getpos()[0]
-        elif self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            attr_str = _format_html_attrs(attrs)
-            self.current_data.append(f"<{tag}{attr_str}>")
+            self._on_enter_translatable()
+            self._emit_raw(f"<{tag}{_format_html_attrs(attrs)}>")
+        else:
+            rendered = f"<{tag}{_format_html_attrs(attrs)}>"
+            if self._in_translatable():
+                self.current_data.append(rendered)
+            else:
+                self._emit_raw(rendered)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_lower = tag.lower()
         attr_str = _format_html_attrs(attrs)
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            if tag.lower() in VOID_HTML_TAGS:
-                self.current_data.append(f"<{tag}{attr_str}>")
-            else:
-                self.current_data.append(f"<{tag}{attr_str}></{tag}>")
+        rendered = f"<{tag}{attr_str}>" if tag_lower in ALL_VOID_HTML_TAGS else f"<{tag}{attr_str}></{tag}>"
+        if self._in_translatable():
+            self.current_data.append(rendered)
         else:
-            self.handle_starttag(tag, attrs)
-            if tag.lower() not in VOID_HTML_TAGS:
-                self.handle_endtag(tag)
+            self._emit_raw(rendered)
 
     def handle_endtag(self, tag: str) -> None:
         tag_lower = tag.lower()
-        if tag_lower in VOID_HTML_TAGS:
+        if tag_lower in ALL_VOID_HTML_TAGS:
             return
-        if self.stack and self.stack[-1] == tag_lower:
-            if tag_lower in TRANSLATABLE_DOC_TAGS:
-                text = "".join(self.current_data).strip()
-                if text:
-                    self.segments.append((self.current_start_line, text))
-                self.current_data = []
-            self.stack.pop()
-            if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-                self.current_start_line = self.getpos()[0]
-        elif self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
+        if tag_lower in self.stack:
+            while self.stack:
+                top = self.stack.pop()
+                if top in TRANSLATABLE_DOC_TAGS:
+                    self._flush_segment()
+                if top == tag_lower:
+                    self._emit_raw(f"</{tag}>")
+                    break
+            if self._in_translatable():
+                self._on_return_to_translatable()
+        elif self._in_translatable():
             self.current_data.append(f"</{tag}>")
+        else:
+            self._emit_raw(f"</{tag}>")
 
     def handle_data(self, data: str) -> None:
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
+        if self._in_translatable():
             self.current_data.append(data)
+        else:
+            self._emit_raw(data)
 
     def handle_entityref(self, name: str) -> None:
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            self.current_data.append(f"&{name};")
+        entity = f"&{name};"
+        if self._in_translatable():
+            self.current_data.append(entity)
+        else:
+            self._emit_raw(entity)
 
     def handle_charref(self, name: str) -> None:
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            self.current_data.append(f"&#{name};")
+        charref = f"&#{name};"
+        if self._in_translatable():
+            self.current_data.append(charref)
+        else:
+            self._emit_raw(charref)
 
     def handle_comment(self, data: str) -> None:
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            self.current_data.append(f"<!--{data}-->")
+        comment = f"<!--{data}-->"
+        if self._in_translatable():
+            self.current_data.append(comment)
+        else:
+            self._emit_raw(comment)
+
+
+class _DocHtmlExtractor(_BaseDocHtmlParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.segments: list[tuple[int, str]] = []
+        self.current_start_line = 0
+
+    def _flush_segment(self) -> None:
+        text = "".join(self.current_data).strip()
+        if text:
+            self.segments.append((self.current_start_line, text))
+        self.current_data = []
+
+    def _on_enter_translatable(self) -> None:
+        self.current_start_line = self.getpos()[0]
+
+    def _on_return_to_translatable(self) -> None:
+        self.current_start_line = self.getpos()[0]
 
     def close(self) -> None:
-        if self.current_data and self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            text = "".join(self.current_data).strip()
-            if text:
-                self.segments.append((self.current_start_line, text))
-            self.current_data = []
+        if self.current_data and self._in_translatable():
+            self._flush_segment()
         super().close()
 
 
@@ -1349,17 +1742,18 @@ def _extract_doc_segments(html_text: str) -> list[tuple[int, str]]:
     return extractor.segments
 
 
-class _DocHtmlRebuilder(HTMLParser):
+class _DocHtmlRebuilder(_BaseDocHtmlParser):
     def __init__(self, catalog: dict[str, str], target_lang: str, is_rtl: bool) -> None:
-        super().__init__(convert_charrefs=False)
+        super().__init__()
         self.catalog = catalog
         self.target_lang = target_lang
         self.is_rtl = is_rtl
         self.output: list[str] = []
-        self.stack: list[str] = []
-        self.current_data: list[str] = []
 
-    def _flush_translatable(self) -> None:
+    def _emit_raw(self, text: str) -> None:
+        self.output.append(text)
+
+    def _flush_segment(self) -> None:
         raw = "".join(self.current_data)
         self.current_data = []
         stripped = raw.strip()
@@ -1381,94 +1775,35 @@ class _DocHtmlRebuilder(HTMLParser):
         self.output.append(f"<?{data}>")
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        tag_lower = tag.lower()
-        if tag_lower == "html":
+        if tag.lower() == "html":
             attr_dict = dict(attrs)
             attr_dict["lang"] = self.target_lang.replace("_", "-")
             if self.is_rtl:
                 attr_dict["dir"] = "rtl"
             elif "dir" in attr_dict:
                 del attr_dict["dir"]
-            attr_str = _format_html_attrs(attr_dict)
-            self.output.append(f"<{tag}{attr_str}>")
+            self.output.append(f"<{tag}{_format_html_attrs(attr_dict)}>")
             return
-
-        if tag_lower in DOC_STRUCTURAL_CONTAINER_TAGS:
-            if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-                self._flush_translatable()
-            self.stack.append(tag_lower)
-            attr_str = _format_html_attrs(attrs)
-            self.output.append(f"<{tag}{attr_str}>")
-            return
-
-        if tag_lower in TRANSLATABLE_DOC_TAGS:
-            if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-                self._flush_translatable()
-            self.stack.append(tag_lower)
-            attr_str = _format_html_attrs(attrs)
-            self.output.append(f"<{tag}{attr_str}>")
-        elif self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            attr_str = _format_html_attrs(attrs)
-            self.current_data.append(f"<{tag}{attr_str}>")
-        else:
-            attr_str = _format_html_attrs(attrs)
-            self.output.append(f"<{tag}{attr_str}>")
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attr_str = _format_html_attrs(attrs)
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            if tag.lower() in VOID_HTML_TAGS:
-                self.current_data.append(f"<{tag}{attr_str}>")
-            else:
-                self.current_data.append(f"<{tag}{attr_str}></{tag}>")
-        else:
-            if tag.lower() in VOID_HTML_TAGS:
-                self.output.append(f"<{tag}{attr_str}>")
-            else:
-                self.output.append(f"<{tag}{attr_str}></{tag}>")
-
-    def handle_endtag(self, tag: str) -> None:
-        tag_lower = tag.lower()
-        if tag_lower in VOID_HTML_TAGS:
-            return
-        if self.stack and self.stack[-1] == tag_lower:
-            if tag_lower in TRANSLATABLE_DOC_TAGS:
-                self._flush_translatable()
-            self.stack.pop()
-            self.output.append(f"</{tag}>")
-        elif self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            self.current_data.append(f"</{tag}>")
-        else:
-            self.output.append(f"</{tag}>")
-
-    def handle_data(self, data: str) -> None:
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            self.current_data.append(data)
-        else:
-            self.output.append(data)
-
-    def handle_entityref(self, name: str) -> None:
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            self.current_data.append(f"&{name};")
-        else:
-            self.output.append(f"&{name};")
-
-    def handle_charref(self, name: str) -> None:
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            self.current_data.append(f"&#{name};")
-        else:
-            self.output.append(f"&#{name};")
-
-    def handle_comment(self, data: str) -> None:
-        if self.stack and self.stack[-1] in TRANSLATABLE_DOC_TAGS:
-            self.current_data.append(f"<!--{data}-->")
-        else:
-            self.output.append(f"<!--{data}-->")
+        super().handle_starttag(tag, attrs)
 
     def close(self) -> None:
         if self.current_data:
-            self._flush_translatable()
+            self._flush_segment()
         super().close()
+
+
+def _doc_segment_locations(segments: list[tuple[int, str]], html_path: Path) -> tuple[str, dict[str, list[int]]]:
+    en_rel = _relative_to_addon(html_path).as_posix()
+    aggregated: dict[str, list[int]] = {}
+    for line_no, segment in segments:
+        aggregated.setdefault(segment, []).append(line_no)
+    return en_rel, aggregated
+
+
+def _format_doc_location(en_rel: str, line_numbers: list[int] | None) -> str:
+    if not line_numbers:
+        return en_rel
+    return " ".join(f"{en_rel}:{ln}" for ln in line_numbers)
 
 
 def _write_doc_pot(pot_path: Path | None = None) -> Path:
@@ -1481,24 +1816,12 @@ def _write_doc_pot(pot_path: Path | None = None) -> Path:
     except Exception as exc:
         raise RuntimeError(f"Could not parse {_relative_to_addon(DOC_EN_PATH)}: {exc}") from exc
 
-    aggregated: dict[str, list[int]] = {}
-    for line_no, segment in segments:
-        aggregated.setdefault(segment, []).append(line_no)
+    en_rel, aggregated = _doc_segment_locations(segments, DOC_EN_PATH)
+    lines = _build_po_header(comments=_default_po_comments("documentation translation template"))
 
-    lines = _build_po_header(
-        comments=[
-            "# Google TTS For NVDA documentation translation template.",
-            "# Copyright (C) 2026 Google TTS For NVDA contributors",
-            "# This file is distributed under the same license as the add-on.",
-            "#",
-        ]
-    )
-
-    en_rel = _relative_to_addon(DOC_EN_PATH).as_posix()
     for msgid, line_numbers in aggregated.items():
         lines.append("")
-        loc_str = " ".join(f"{en_rel}:{ln}" for ln in line_numbers)
-        lines.append(f"#: {loc_str}")
+        lines.append(f"#: {_format_doc_location(en_rel, line_numbers)}")
         _append_po_string(lines, "msgid", msgid)
         lines.append('msgstr ""')
 
@@ -1540,12 +1863,16 @@ def _check_doc_segments(
         )
     if CHECK_PLACEHOLDERS in active_checks:
         for en_seg, lang_seg in _match_doc_segments(en_segs, lang_segs):
-            for tag_err in _check_html_tag_interpolations(en_seg, lang_seg):
-                errors.append(f"{language}: HTML tag issue in {doc_name} for {_message_preview(en_seg)!r}: {tag_err}")
-            for interp_err in _check_format_interpolations(en_seg, lang_seg):
-                errors.append(
-                    f"{language}: placeholder mismatch in {doc_name} for {_message_preview(en_seg)!r}: {interp_err}"
+            errors.extend(
+                _check_string_interpolations(
+                    en_seg,
+                    lang_seg,
+                    repr(_message_preview(en_seg)),
+                    language,
+                    context_phrase=doc_name,
+                    always_check_html=True,
                 )
+            )
     return errors
 
 
@@ -1569,25 +1896,12 @@ def _extract_po_from_doc_html(en_html_path: Path, lang_html_path: Path, language
             if not catalog[en] and lang.strip():
                 catalog[en] = lang
 
-        lines = _build_po_header(
-            comments=[
-                "# Google TTS For NVDA documentation translation.",
-                "# Copyright (C) 2026 Google TTS For NVDA contributors",
-                "# This file is distributed under the same license as the add-on.",
-                "#",
-            ],
-            language=language,
-        )
-
-        en_rel = _relative_to_addon(en_html_path).as_posix()
-        aggregated: dict[str, list[int]] = {}
-        for line_no, segment in en_ext_segments:
-            aggregated.setdefault(segment, []).append(line_no)
+        lines = _build_po_header(comments=_default_po_comments("documentation translation"), language=language)
+        en_rel, aggregated = _doc_segment_locations(en_ext_segments, en_html_path)
 
         for msgid, line_numbers in aggregated.items():
             lines.append("")
-            loc_str = " ".join(f"{en_rel}:{ln}" for ln in line_numbers)
-            lines.append(f"#: {loc_str}")
+            lines.append(f"#: {_format_doc_location(en_rel, line_numbers)}")
             _append_po_string(lines, "msgid", msgid)
             msgstr = catalog.get(msgid, "")
             _append_po_string(lines, "msgstr", msgstr)
@@ -1633,6 +1947,12 @@ def _build_doc_from_po(language: str, po_path: Path, output_html_path: Path) -> 
     )
 
 
+def _remove_stale_doc_mo_files(doc_dir: Path) -> None:
+    if doc_dir.is_dir():
+        for stale_mo in doc_dir.glob("*.mo"):
+            stale_mo.unlink(missing_ok=True)
+
+
 def _update_doc_po_from_template(
     language: str,
     msgmerge_path: Path | None,
@@ -1640,103 +1960,43 @@ def _update_doc_po_from_template(
     if language == "en":
         raise ValueError("en: English is the documentation source; cannot update PO file.")
     doc_dir = DOC_DIR / language
-    if doc_dir.is_dir():
-        for stale_mo in doc_dir.glob("*.mo"):
-            stale_mo.unlink(missing_ok=True)
+    _remove_stale_doc_mo_files(doc_dir)
     po_path = doc_dir / "readme.po"
     html_path = doc_dir / "readme.html"
+    md_path = doc_dir / "readme.md"
 
-    if not po_path.is_file():
-        extracted = False
-        if (doc_dir / "readme.md").is_file() and language != "en":
-            _convert_md_file_to_html(doc_dir / "readme.md", html_path, language)
-        if html_path.is_file() and language != "en":
-            extracted = _extract_po_from_doc_html(DOC_EN_PATH, html_path, language, po_path)
-        if not extracted or not po_path.is_file():
-            doc_dir.mkdir(parents=True, exist_ok=True)
-            if not DOC_POT_PATH.is_file():
-                _write_doc_pot()
-            pot_text = DOC_POT_PATH.read_text(encoding="utf-8-sig")
-            po_text = pot_text.replace('"Language: \\n"', f'"Language: {language}\\n"')
-            _atomic_write_text(po_path, po_text, prefix=".readme-po-init-")
+    def _pre_seed_doc_po() -> None:
+        md_ok = True
+        if md_path.is_file() and language != "en":
+            md_ok, _ = _convert_md_file_to_html(md_path, html_path, language)
+        if md_ok and html_path.is_file() and language != "en":
+            _extract_po_from_doc_html(DOC_EN_PATH, html_path, language, po_path)
 
-    old_catalog = _parse_po(po_path, include_untranslated=True, include_fuzzy=True)
+    def _build_doc_entries() -> list[tuple[str, list[str]]]:
+        pot_catalog = _parse_po(DOC_POT_PATH, include_untranslated=True)
+        doc_segments: list[tuple[int, str]] = []
+        if DOC_EN_PATH.is_file():
+            with contextlib.suppress(Exception):
+                doc_segments = _extract_doc_segments(DOC_EN_PATH.read_text(encoding="utf-8-sig"))
+        en_rel, doc_locations = _doc_segment_locations(doc_segments, DOC_EN_PATH)
+        return [
+            (msgid, [f"#: {_format_doc_location(en_rel, doc_locations.get(msgid))}"]) for msgid in pot_catalog if msgid
+        ]
 
-    if not DOC_POT_PATH.is_file():
-        _write_doc_pot()
-    pot_catalog = _parse_po(DOC_POT_PATH, include_untranslated=True)
-    required_msgids = set(pot_catalog.keys()) - {""}
-    old_msgids = set(old_catalog.keys()) - {""}
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=po_path.parent,
-            prefix=".readme-po-update-",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary_stream:
-            temporary_path = Path(temporary_stream.name)
-
-        removed_obsolete = 0
-        if msgmerge_path is not None:
-            removed_obsolete = _run_msgmerge(msgmerge_path, po_path, DOC_POT_PATH, temporary_path, language)
-        else:
-            old_comments = _extract_po_header_comments(po_path)
-            lines = _merge_po_header(
-                old_catalog.get("", ""),
-                language=language,
-                comments=old_comments,
-                default_comments=[
-                    "# Google TTS For NVDA documentation translation.",
-                    "# Copyright (C) 2026 Google TTS For NVDA contributors",
-                    "# This file is distributed under the same license as the add-on.",
-                    "#",
-                ],
-            )
-            en_rel = _relative_to_addon(DOC_EN_PATH).as_posix()
-            old_fuzzy_msgids = _po_fuzzy_msgids(po_path)
-            doc_segments: list[tuple[int, str]] = []
-            if DOC_EN_PATH.is_file():
-                with contextlib.suppress(Exception):
-                    doc_segments = _extract_doc_segments(DOC_EN_PATH.read_text(encoding="utf-8-sig"))
-            doc_locations: dict[str, list[int]] = {}
-            for line_no, segment in doc_segments:
-                doc_locations.setdefault(segment, []).append(line_no)
-
-            for msgid in pot_catalog:
-                if not msgid:
-                    continue
-                lines.append("")
-                if msgid in old_fuzzy_msgids:
-                    lines.append("#, fuzzy")
-                lns = doc_locations.get(msgid)
-                if lns:
-                    loc_str = " ".join(f"{en_rel}:{ln}" for ln in lns)
-                    lines.append(f"#: {loc_str}")
-                else:
-                    lines.append(f"#: {en_rel}")
-                _append_po_string(lines, "msgid", msgid)
-                msgstr = old_catalog.get(msgid, "")
-                _append_po_string(lines, "msgstr", msgstr)
-            temporary_path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
-            removed_obsolete = len(old_msgids - required_msgids)
-
-        preserved, added = _verify_merged_po(
-            temporary_path,
-            required_msgids,
-            old_msgids,
-            language,
-            category="doc catalog",
-            string_type="documentation",
-        )
-        temporary_path.replace(po_path)
-        temporary_path = None
-        return preserved, added, removed_obsolete
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    return _merge_po_from_template(
+        po_path=po_path,
+        pot_path=DOC_POT_PATH,
+        language=language,
+        msgmerge_path=msgmerge_path,
+        ensure_pot=_write_doc_pot,
+        build_entries=_build_doc_entries,
+        default_comments=_default_po_comments("documentation translation"),
+        init_prefix=".readme-po-init-",
+        update_prefix=".readme-po-update-",
+        category="doc catalog",
+        string_type="documentation",
+        pre_seed_cb=_pre_seed_doc_po,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1769,7 +2029,7 @@ def _create_doc_attribute_filter() -> dict[str, set[str]]:
     allowed_attributes: dict[str, set[str]] = copy.deepcopy(nh3.ALLOWED_ATTRIBUTES)
 
     attributes_with_anchors = {"h1", "h2", "h3", "h4", "h5", "h6", "td"}
-    attributes_with_class = {"div", "span", "a", "th", "td"}
+    attributes_with_class = {"div", "span", "a", "th", "td", "code", "pre"}
 
     # Allow IDs for anchors
     for attr in attributes_with_anchors:
@@ -1805,6 +2065,19 @@ def _create_doc_tag_filter() -> set[str]:
         "mn",
         "mo",
         "msub",
+        "msup",
+        "msqrt",
+        "mroot",
+        "msubsup",
+        "mover",
+        "munder",
+        "munderover",
+        "mtext",
+        "mspace",
+        "mtable",
+        "mtr",
+        "mtd",
+        "mfenced",
         "kbd",
         "html",
         "head",
@@ -1843,11 +2116,34 @@ def _preprocess_markdown_text(md_text: str) -> str:
     return "\n".join(cleaned_lines)
 
 
+_FENCE_LINE_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+
+
+def _update_code_fence(stripped: str, fence_char: str, fence_len: int) -> tuple[str, str, int, str]:
+    """Track fenced code block transitions ('open', 'close', or 'none')."""
+    fence_match = _FENCE_LINE_RE.match(stripped)
+    if not fence_match:
+        return "none", fence_char, fence_len, ""
+    marker, info_rest = fence_match.groups()
+    if not fence_char:
+        if marker[0] == "`" and "`" in info_rest:
+            return "none", "", 0, ""
+        return "open", marker[0], len(marker), info_rest.strip()
+    if marker[0] == fence_char and len(marker) >= fence_len and not info_rest.strip():
+        return "close", "", 0, ""
+    return "none", fence_char, fence_len, ""
+
+
 def _get_title_from_markdown(md_text: str) -> str:
     """Extract document title from markdown heading or title comment."""
     kc_re = re.compile(r"^<!--\s*(?:KC:)?title:\s*(.+?)\s*-->$", re.IGNORECASE)
+    fence_char = ""
+    fence_len = 0
     for line in md_text.splitlines():
         stripped = line.strip()
+        event, fence_char, fence_len, _ = _update_code_fence(stripped, fence_char, fence_len)
+        if event in ("open", "close") or fence_char:
+            continue
         if not stripped:
             continue
         m = kc_re.match(stripped)
@@ -1885,9 +2181,37 @@ def _get_active_doc_markdown_extensions() -> list[object]:
     return active_extensions
 
 
+_TABLE_CELL_STYLE_ALIGN_RE = re.compile(
+    r'<(th|td)\b([^>]*?)\s+style=(["\'])\s*text-align:\s*(left|center|right)\s*;?\s*\3([^>]*)>',
+    re.IGNORECASE,
+)
+
+
+def _rewrite_table_cell_align_styles(html_text: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        tag, before, _quote, align, after = match.groups()
+        attrs = before + after
+        if re.search(r"\balign\s*=", attrs, re.IGNORECASE):
+            return f"<{tag}{attrs}>"
+        return f'<{tag}{attrs} align="{align.lower()}">'
+
+    return _TABLE_CELL_STYLE_ALIGN_RE.sub(_replace, html_text)
+
+
+def _sanitize_doc_html(html_text: str) -> str:
+    return nh3.clean(
+        html_text,
+        tags=_create_doc_tag_filter(),
+        attributes=_create_doc_attribute_filter(),
+        attribute_filter=_doc_attribute_filter,
+        link_rel=None,
+        strip_comments=False,
+    )
+
+
 def _generate_doc_html_body(md: str) -> str:
     """Convert markdown text to sanitized HTML using markdown + nh3 pipeline."""
-    if not _MARKDOWN_AVAILABLE or markdown is None:
+    if not (_MARKDOWN_AVAILABLE and markdown is not None and _NH3_AVAILABLE and nh3 is not None):
         return _fallback_markdown_to_html_body(md)
 
     active_extensions = _get_active_doc_markdown_extensions()
@@ -1897,113 +2221,416 @@ def _generate_doc_html_body(md: str) -> str:
         extensions=active_extensions,
         extension_configs=_DOC_MARKDOWN_EXTENSIONS_CONFIG,
     )
+    html_output = _rewrite_table_cell_align_styles(html_output)
+    return _sanitize_doc_html(html_output)
 
-    if _NH3_AVAILABLE and nh3 is not None:
-        allowed_attrs = _create_doc_attribute_filter()
-        allowed_tags = _create_doc_tag_filter()
-        html_output = nh3.clean(
-            html_output,
-            tags=allowed_tags,
-            attributes=allowed_attrs,
-            attribute_filter=_doc_attribute_filter,
-            link_rel=None,
-            strip_comments=False,
-        )
 
-    return html_output
+def _scan_backtick_span(text: str, start: int) -> tuple[int, int]:
+    """Scan a backtick span starting at `start`; return (tick_end, close_start or -1)."""
+    length = len(text)
+    tick_end = start
+    while tick_end < length and text[tick_end] == "`":
+        tick_end += 1
+    fence_len = tick_end - start
+    search = tick_end
+    while search < length:
+        if text[search] == "`":
+            run_end = search
+            while run_end < length and text[run_end] == "`":
+                run_end += 1
+            if run_end - search == fence_len:
+                return tick_end, search
+            search = run_end
+        else:
+            search += 1
+    return tick_end, -1
+
+
+def _format_inline_code_span(code_text: str) -> str:
+    max_ticks = max((len(m.group(0)) for m in re.finditer(r"`+", code_text)), default=0)
+    fence = "`" * (max_ticks + 1)
+    if code_text and (code_text.startswith("`") or code_text.endswith("`")):
+        code_text = f" {code_text} "
+    return f"{fence}{code_text}{fence}"
+
+
+def _escape_table_cell_pipes(text: str) -> str:
+    parts: list[str] = []
+    pos = 0
+    length = len(text)
+    while pos < length:
+        if text[pos] == "`":
+            tick_end, close_start = _scan_backtick_span(text, pos)
+            if close_start != -1:
+                close_end = close_start + (tick_end - pos)
+                parts.append(text[pos:close_end])
+                pos = close_end
+                continue
+            parts.append(text[pos:tick_end])
+            pos = tick_end
+            continue
+        parts.append(r"\|" if text[pos] == "|" else text[pos])
+        pos += 1
+    return "".join(parts)
 
 
 class _DocHtmlToMarkdown(HTMLParser):
+    _BLOCK_CONTAINER_START_TAGS = frozenset(
+        {"p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "dt", "dd", "ul", "ol", "dl", "table", "pre", "hr"}
+    )
+    _END_TAG_IMPLICIT_CHILDREN: dict[str, tuple[str, ...]] = {
+        **{container: ("p",) for container in DOC_STRUCTURAL_CONTAINER_TAGS},
+        "li": ("p",),
+        "dd": ("p",),
+        "dt": ("p",),
+        "blockquote": ("p",),
+        "ul": ("p", "li"),
+        "ol": ("p", "li"),
+        "dl": ("p", "dt", "dd"),
+        "tr": ("p", "td", "th"),
+        "thead": ("p", "td", "th", "tr"),
+        "tbody": ("p", "td", "th", "tr"),
+        "tfoot": ("p", "td", "th", "tr"),
+        "table": ("p", "td", "th", "tr"),
+    }
+    _PRESERVED_PROSE_ENTITIES = frozenset(
+        {"rarr", "larr", "uarr", "darr", "copy", "nbsp", "trade", "lt", "gt", "amp", "quot"}
+    )
+    _CHARREF_PROSE_ESCAPES = {"<": "&lt;", ">": "&gt;", "&": "&amp;"}
+
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
         self.output: list[str] = []
         self.stack: list[str] = []
         self.list_stack: list[dict[str, Any]] = []
         self.current_buf: list[str] = []
-        self.link_stack: list[str] = []
+        self.link_stack: list[str | None] = []
         self.title: str = ""
         self.in_pre: bool = False
         self.pre_lang: str = ""
+        self.pre_buf: list[str] = []
+        self.in_inline_code: bool = False
+        self.inline_code_buf: list[str] = []
         self.in_table: bool = False
+        self.table_depth: int = 0
         self.table_rows: list[list[str]] = []
         self.table_alignments: list[str | None] = []
         self.current_table_row: list[str] = []
+        self.in_caption: bool = False
+
+    def _in_cell(self) -> bool:
+        return "td" in self.stack or "th" in self.stack
+
+    def _quote_prefix(self) -> str:
+        return "> " if "blockquote" in self.stack else ""
 
     def _flush_buf(self) -> str:
         text = "".join(self.current_buf)
         self.current_buf = []
         return text
 
+    def _ensure_buf_space(self) -> None:
+        if (
+            self.current_buf
+            and "".join(self.current_buf).strip()
+            and not self.current_buf[-1].endswith((" ", "\t", "\n"))
+        ):
+            self.current_buf.append(" ")
+
+    def _close_inline_code(self) -> None:
+        if not self.in_inline_code:
+            return
+        self.in_inline_code = False
+        code_text = "".join(self.inline_code_buf)
+        self.inline_code_buf = []
+        self.current_buf.append(_format_inline_code_span(code_text))
+
+    def _consume_li_bullet(self, info: dict[str, Any], q_prefix: str, indent: str) -> str:
+        if info.get("type") == "ol":
+            bullet = f"{q_prefix}{indent}{info['index']}. "
+            info["index"] = int(str(info["index"])) + 1
+        else:
+            bullet = f"{q_prefix}{indent}* "
+        info["li_bullet_emitted"] = True
+        return bullet
+
+    def _emit_li_line(self, text: str, *, leading_newline: bool = False) -> None:
+        if not text:
+            return
+        q_prefix = self._quote_prefix()
+        if self.list_stack:
+            info = self.list_stack[-1]
+            indent = "  " * (len(self.list_stack) - 1)
+            if not info.get("li_bullet_emitted", False):
+                prefix = self._consume_li_bullet(info, q_prefix, indent)
+                self.output.append(f"{prefix}{text}\n")
+            else:
+                nl = f"{q_prefix.rstrip()}\n" if leading_newline else ""
+                self.output.append(f"{nl}{q_prefix}{indent}  {text}\n")
+        else:
+            self.output.append(f"\n\n{q_prefix}{text}\n\n")
+
+    def _flush_pending_li_text(self) -> None:
+        text = self._flush_buf().strip()
+        if text:
+            self._emit_li_line(text)
+
+    def _emit_blockquote_lines(self, text: str) -> None:
+        lines = [f"> {line}" for line in text.splitlines()]
+        if "li" in self.stack and self.list_stack:
+            for line in lines:
+                self._emit_li_line(line)
+        else:
+            self.output.append("\n\n" + "\n".join(lines) + "\n\n")
+
+    def _flush_blockquote_text(self) -> None:
+        text = self._flush_buf().strip()
+        if text:
+            self._emit_blockquote_lines(text)
+
+    def _emit_pre_block(self) -> None:
+        self.in_pre = False
+        code_text = "".join(self.pre_buf).strip("\r\n")
+        self.pre_buf = []
+        lang = self.pre_lang
+        self.pre_lang = ""
+        if self._in_cell():
+            inline_text = re.sub(r"[\r\n]+", " ", code_text).strip()
+            if inline_text:
+                self._ensure_buf_space()
+                self.current_buf.append(_format_inline_code_span(inline_text))
+            return
+
+        max_ticks = max((len(m.group(0)) for m in re.finditer(r"`+", code_text)), default=0)
+        fence = "`" * max(3, max_ticks + 1)
+        q_prefix = self._quote_prefix()
+        if self.list_stack:
+            info = self.list_stack[-1]
+            indent = "  " * (len(self.list_stack) - 1)
+            if not info.get("li_bullet_emitted", False):
+                bullet = self._consume_li_bullet(info, q_prefix, indent)
+                self.output.append(f"{bullet}\n")
+            block_indent = f"{q_prefix}{indent}  "
+            lines = [
+                f"{block_indent}{line}" if line else q_prefix.rstrip()
+                for line in f"{fence}{lang}\n{code_text}\n{fence}".split("\n")
+            ]
+            self.output.append("\n" + "\n".join(lines) + "\n\n")
+            return
+        if q_prefix:
+            lines = [
+                f"{q_prefix}{line}" if line else ">" for line in f"{fence}{lang}\n{code_text}\n{fence}".split("\n")
+            ]
+            self.output.append("\n\n" + "\n".join(lines) + "\n\n")
+            return
+        self.output.append(f"\n\n{fence}{lang}\n{code_text}\n{fence}\n\n")
+
+    def _emit_markdown_table(self) -> None:
+        if self._in_cell() or "td" in self.stack or "th" in self.stack:
+            for open_cell in ("td", "th"):
+                if open_cell in self.stack:
+                    self.handle_endtag(open_cell)
+        if self.current_table_row:
+            self.table_rows.append(self.current_table_row)
+            self.current_table_row = []
+        self.in_table = False
+        if self.table_rows:
+            max_cols = max(len(row) for row in self.table_rows)
+            if max_cols > 0:
+                lines = []
+                header = self.table_rows[0]
+                padded_header = header + [""] * (max_cols - len(header))
+                lines.append("| " + " | ".join(padded_header) + " |")
+                sep_cells: list[str] = []
+                for c_idx in range(max_cols):
+                    c_align = self.table_alignments[c_idx] if c_idx < len(self.table_alignments) else None
+                    if c_align == "center":
+                        sep_cells.append(":---:")
+                    elif c_align == "right":
+                        sep_cells.append("---:")
+                    elif c_align == "left":
+                        sep_cells.append(":---")
+                    else:
+                        sep_cells.append("---")
+                lines.append("| " + " | ".join(sep_cells) + " |")
+                for row in self.table_rows[1:]:
+                    padded_row = row + [""] * (max_cols - len(row))
+                    lines.append("| " + " | ".join(padded_row) + " |")
+                self.output.append("\n\n" + "\n".join(lines) + "\n\n")
+        self.table_rows = []
+        self.table_alignments = []
+
+    def _close_optional_tags_md(self, tag_lower: str) -> None:
+        while self.stack:
+            top = self.stack[-1]
+            triggers = _OPTIONAL_DOC_CLOSE_TRIGGERS.get(top)
+            if triggers is None or tag_lower not in triggers:
+                break
+            self.handle_endtag(top)
+
+    def _close_open_children_before(self, parent_tag: str, child_tags: tuple[str, ...]) -> None:
+        while parent_tag in self.stack:
+            parent_idx = len(self.stack) - 1 - self.stack[::-1].index(parent_tag)
+            top = self.stack[-1]
+            if top not in child_tags or (len(self.stack) - 1) <= parent_idx:
+                break
+            self.handle_endtag(top)
+
+    def _pop_stack_to(self, tag_lower: str) -> bool:
+        if tag_lower not in self.stack:
+            return False
+        idx = len(self.stack) - 1 - self.stack[::-1].index(tag_lower)
+        popped = self.stack[idx:]
+        del self.stack[idx:]
+        for popped_tag in popped:
+            if popped_tag == "a" and self.link_stack:
+                self.link_stack.pop()
+        return True
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag_lower = tag.lower()
-        self.stack.append(tag_lower)
         attr_dict = dict(attrs)
+        if self.in_pre:
+            if tag_lower == "code":
+                cls = attr_dict.get("class") or ""
+                m = re.search(r"(?:^|\s)(?:language-|lang-)([A-Za-z0-9_+#.-]+)(?=\s|$)", cls)
+                if m:
+                    self.pre_lang = m.group(1)
+            elif tag_lower == "br":
+                self.pre_buf.append("\n")
+            return
 
-        if tag_lower in ("h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote", "dt", "dd", "title"):
-            self.current_buf = []
-        elif tag_lower in ("ul", "ol"):
-            if self.stack and len(self.stack) >= 2 and self.stack[-2] == "li":
-                text = self._flush_buf().strip()
-                if text and self.list_stack:
-                    info = self.list_stack[-1]
-                    indent = "  " * (len(self.list_stack) - 1)
-                    if not info.get("li_bullet_emitted", False):
-                        if info.get("type") == "ol":
-                            prefix = f"{indent}{info['index']}. "
-                            info["index"] = int(str(info["index"])) + 1
-                        else:
-                            prefix = f"{indent}* "
-                        self.output.append(f"{prefix}{text}\n")
-                        info["li_bullet_emitted"] = True
-                    else:
-                        self.output.append(f"{indent}  {text}\n")
-            self.list_stack.append({"type": tag_lower, "index": 1, "li_bullet_emitted": False})
-        elif tag_lower == "li":
-            self.current_buf = []
-            if self.list_stack:
-                self.list_stack[-1]["li_bullet_emitted"] = False
-        elif tag_lower == "table":
-            self.in_table = True
-            self.table_rows = []
-            self.table_alignments = []
-        elif tag_lower == "tr":
-            self.current_table_row = []
-        elif tag_lower in ("th", "td"):
-            self.current_buf = []
-            if len(self.table_rows) == 0:
-                align = (attr_dict.get("align") or "").lower()
-                if not align:
-                    style = attr_dict.get("style") or ""
-                    m = re.search(r"text-align:\s*(left|center|right)", style, re.IGNORECASE)
-                    if m:
-                        align = m.group(1).lower()
-                self.table_alignments.append(align if align in ("left", "center", "right") else None)
-        elif tag_lower in ("strong", "b"):
+        if not self._in_cell() and tag_lower in self._BLOCK_CONTAINER_START_TAGS:
+            self._close_optional_tags_md(tag_lower)
+
+        parent_tag = self.stack[-1] if self.stack else None
+        in_cell = self._in_cell()
+        if in_cell and tag_lower in ("th", "td", "tr"):
+            self._close_optional_tags_md(tag_lower)
+            parent_tag = self.stack[-1] if self.stack else None
+            in_cell = self._in_cell()
+
+        if self.in_inline_code and tag_lower in self._BLOCK_CONTAINER_START_TAGS:
+            self._close_inline_code()
+
+        if tag_lower in ("h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote", "dt", "dd", "title", "caption"):
+            if in_cell:
+                self._ensure_buf_space()
+            elif parent_tag == "blockquote" and tag_lower in ("h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote"):
+                self._flush_blockquote_text()
+            elif "li" in self.stack and tag_lower in ("h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote"):
+                self._flush_pending_li_text()
+            elif parent_tag == "dd" and tag_lower in ("h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote"):
+                lead = self._flush_buf().strip()
+                if lead:
+                    self.output.append(f":   {lead}\n\n")
+            else:
+                pending = self._flush_buf().strip()
+                if pending:
+                    self.output.append(f"\n\n{pending}\n\n")
+            if tag_lower == "caption":
+                self.in_caption = True
+            if tag_lower not in ALL_VOID_HTML_TAGS:
+                self.stack.append(tag_lower)
+            return
+
+        if tag_lower in ("ul", "ol"):
+            if not in_cell:
+                if parent_tag == "blockquote":
+                    self._flush_blockquote_text()
+                elif "li" in self.stack:
+                    self._flush_pending_li_text()
+                self.list_stack.append({"type": tag_lower, "index": 1, "li_bullet_emitted": False})
+            self.stack.append(tag_lower)
+            return
+
+        if tag_lower == "li":
+            if in_cell:
+                self._ensure_buf_space()
+            else:
+                self.current_buf = []
+                if self.list_stack:
+                    self.list_stack[-1]["li_bullet_emitted"] = False
+            self.stack.append(tag_lower)
+            return
+
+        if tag_lower == "table":
+            if self.in_table:
+                self.table_depth += 1
+            else:
+                self.in_table = True
+                self.table_depth = 1
+                self.table_rows = []
+                self.table_alignments = []
+                self.current_table_row = []
+            self.stack.append(tag_lower)
+            return
+
+        if tag_lower == "tr":
+            if not in_cell and self.table_depth <= 1:
+                self.current_table_row = []
+            self.stack.append(tag_lower)
+            return
+
+        if tag_lower in ("th", "td"):
+            if self.table_depth <= 1:
+                self.current_buf = []
+                if len(self.table_rows) == 0:
+                    align = (attr_dict.get("align") or "").lower()
+                    if not align:
+                        style = attr_dict.get("style") or ""
+                        m = re.search(r"text-align:\s*(left|center|right)", style, re.IGNORECASE)
+                        if m:
+                            align = m.group(1).lower()
+                    self.table_alignments.append(align if align in ("left", "center", "right") else None)
+            else:
+                self._ensure_buf_space()
+            self.stack.append(tag_lower)
+            return
+
+        if tag_lower == "pre":
+            if not in_cell:
+                if parent_tag == "blockquote":
+                    self._flush_blockquote_text()
+                elif "li" in self.stack:
+                    self._flush_pending_li_text()
+            self.in_pre = True
+            self.pre_lang = ""
+            self.pre_buf = []
+            self.stack.append(tag_lower)
+            return
+
+        if tag_lower not in ALL_VOID_HTML_TAGS:
+            self.stack.append(tag_lower)
+
+        if self.in_inline_code:
+            return
+
+        if tag_lower in ("strong", "b"):
             self.current_buf.append("**")
         elif tag_lower in ("em", "i"):
             self.current_buf.append("*")
         elif tag_lower == "code":
-            if not self.in_pre:
-                self.current_buf.append("`")
-            else:
-                cls = attr_dict.get("class") or ""
-                m = re.search(r"\b(?:language-|lang-)(\w+)\b", cls)
-                if m:
-                    self.pre_lang = m.group(1)
-        elif tag_lower == "pre":
-            self.in_pre = True
-            self.pre_lang = ""
-            self.current_buf = []
+            self.in_inline_code = True
+            self.inline_code_buf = []
         elif tag_lower == "kbd":
             self.current_buf.append("<kbd>")
         elif tag_lower == "a":
-            href = attr_dict.get("href") or ""
+            href = attr_dict.get("href")
             self.link_stack.append(href)
-            self.current_buf.append("[")
+            if href is not None:
+                self.current_buf.append("[")
         elif tag_lower == "hr":
-            self.output.append("\n\n---\n\n")
+            if not in_cell:
+                if "li" in self.stack and self.list_stack:
+                    self._flush_pending_li_text()
+                else:
+                    pending = self._flush_buf().strip()
+                    if pending:
+                        self.output.append(f"\n\n{pending}\n\n")
+                self.output.append("\n\n---\n\n")
         elif tag_lower == "br":
-            self.current_buf.append("  \n")
+            self.current_buf.append(" " if in_cell else "  \n")
         elif tag_lower == "img":
             alt = attr_dict.get("alt") or ""
             src = attr_dict.get("src") or ""
@@ -2011,289 +2638,414 @@ class _DocHtmlToMarkdown(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         tag_lower = tag.lower()
-        if self.stack and self.stack[-1] == tag_lower:
-            self.stack.pop()
+        if tag_lower in ALL_VOID_HTML_TAGS:
+            return
+
+        if self.in_pre:
+            if tag_lower == "pre":
+                self._pop_stack_to("pre")
+                self._emit_pre_block()
+            return
+
+        if tag_lower != "code" and self.in_inline_code and tag_lower in self._BLOCK_CONTAINER_START_TAGS:
+            self._close_inline_code()
+
+        if tag_lower == "a":
+            href = self.link_stack.pop() if self.link_stack else None
+            self._pop_stack_to("a")
+            if href is not None and not self.in_inline_code:
+                self.current_buf.append(f"]({href})")
+            return
+
+        implicit_children = self._END_TAG_IMPLICIT_CHILDREN.get(tag_lower)
+        if implicit_children:
+            self._close_open_children_before(tag_lower, implicit_children)
+
+        self._pop_stack_to(tag_lower)
+        in_cell = self._in_cell()
 
         if tag_lower in ("h1", "h2", "h3", "h4", "h5", "h6"):
+            if in_cell:
+                return
             level = int(tag_lower[1])
             text = self._flush_buf().strip()
             if text:
-                self.output.append(f"\n\n{'#' * level} {text}\n\n")
+                q_prefix = self._quote_prefix()
+                heading = f"{'#' * level} {text}"
+                if "li" in self.stack and self.list_stack:
+                    self._emit_li_line(heading, leading_newline=True)
+                else:
+                    self.output.append(f"\n\n{q_prefix}{heading}\n\n")
         elif tag_lower == "p":
+            if in_cell:
+                return
             text = self._flush_buf().strip()
             if text:
                 if "blockquote" in self.stack:
-                    lines = [f"> {line}" for line in text.splitlines()]
-                    self.output.append("\n\n" + "\n".join(lines) + "\n\n")
+                    self._emit_blockquote_lines(text)
                 elif "dd" in self.stack:
                     self.output.append(f":   {text}\n\n")
                 elif "dt" in self.stack:
                     self.output.append(f"\n\n{text}\n")
                 elif "li" in self.stack and self.list_stack:
-                    info = self.list_stack[-1]
-                    indent = "  " * (len(self.list_stack) - 1)
-                    if not info.get("li_bullet_emitted", False):
-                        if info.get("type") == "ol":
-                            prefix = f"{indent}{info['index']}. "
-                            info["index"] = int(str(info["index"])) + 1
-                        else:
-                            prefix = f"{indent}* "
-                        self.output.append(f"{prefix}{text}\n")
-                        info["li_bullet_emitted"] = True
-                    else:
-                        self.output.append(f"\n{indent}  {text}\n")
+                    self._emit_li_line(text, leading_newline=True)
                 else:
                     self.output.append(f"\n\n{text}\n\n")
         elif tag_lower == "dt":
+            if in_cell:
+                return
             text = self._flush_buf().strip()
             if text:
                 self.output.append(f"\n\n{text}\n")
         elif tag_lower == "dd":
+            if in_cell:
+                return
             text = self._flush_buf().strip()
             if text:
                 self.output.append(f":   {text}\n\n")
         elif tag_lower == "li":
-            text = self._flush_buf().strip()
-            if text and self.list_stack:
-                info = self.list_stack[-1]
-                indent = "  " * (len(self.list_stack) - 1)
-                if not info.get("li_bullet_emitted", False):
-                    if info.get("type") == "ol":
-                        prefix = f"{indent}{info['index']}. "
-                        info["index"] = int(str(info["index"])) + 1
-                    else:
-                        prefix = f"{indent}* "
-                    self.output.append(f"{prefix}{text}\n")
-                    info["li_bullet_emitted"] = True
-                else:
-                    self.output.append(f"{indent}  {text}\n")
+            if in_cell:
+                return
+            self._flush_pending_li_text()
         elif tag_lower in ("ul", "ol"):
+            if in_cell:
+                return
             if self.list_stack:
                 self.list_stack.pop()
             if not self.list_stack:
                 self.output.append("\n")
-        elif tag_lower in ("th", "td"):
-            cell_text = self._flush_buf().strip().replace("\r", "").replace("\n", " ").replace("|", r"\|")
-            self.current_table_row.append(cell_text)
-        elif tag_lower == "tr":
-            if self.current_table_row:
-                self.table_rows.append(self.current_table_row)
-            self.current_table_row = []
-        elif tag_lower == "table":
-            self.in_table = False
-            if self.table_rows:
-                max_cols = max(len(row) for row in self.table_rows)
-                if max_cols > 0:
-                    lines = []
-                    header = self.table_rows[0]
-                    padded_header = header + [""] * (max_cols - len(header))
-                    lines.append("| " + " | ".join(padded_header) + " |")
-                    sep_cells: list[str] = []
-                    for c_idx in range(max_cols):
-                        c_align = self.table_alignments[c_idx] if c_idx < len(self.table_alignments) else None
-                        if c_align == "center":
-                            sep_cells.append(":---:")
-                        elif c_align == "right":
-                            sep_cells.append("---:")
-                        elif c_align == "left":
-                            sep_cells.append(":---")
-                        else:
-                            sep_cells.append("---")
-                    lines.append("| " + " | ".join(sep_cells) + " |")
-                    for row in self.table_rows[1:]:
-                        padded_row = row + [""] * (max_cols - len(row))
-                        lines.append("| " + " | ".join(padded_row) + " |")
-                    self.output.append("\n\n" + "\n".join(lines) + "\n\n")
-            self.table_rows = []
-            self.table_alignments = []
-        elif tag_lower == "blockquote":
+        elif tag_lower == "caption":
+            self.in_caption = False
+            if in_cell:
+                return
             text = self._flush_buf().strip()
             if text:
-                lines = [f"> {line}" for line in text.splitlines()]
-                self.output.append("\n\n" + "\n".join(lines) + "\n\n")
-        elif tag_lower in ("strong", "b"):
-            self.current_buf.append("**")
-        elif tag_lower in ("em", "i"):
-            self.current_buf.append("*")
+                self.output.append(f"\n\n{text}\n\n")
+        elif tag_lower in ("th", "td"):
+            if self.table_depth <= 1:
+                if self.in_inline_code:
+                    self._close_inline_code()
+                raw_cell = self._flush_buf().strip().replace("\r", "").replace("\n", " ")
+                self.current_table_row.append(_escape_table_cell_pipes(raw_cell))
+        elif tag_lower == "tr":
+            if not in_cell and self.table_depth <= 1:
+                if self.current_table_row:
+                    self.table_rows.append(self.current_table_row)
+                self.current_table_row = []
+        elif tag_lower == "table":
+            if self.table_depth > 1:
+                self.table_depth -= 1
+            else:
+                self.table_depth = 0
+                self._emit_markdown_table()
+        elif tag_lower == "blockquote":
+            if in_cell:
+                return
+            self._flush_blockquote_text()
         elif tag_lower == "code":
-            if not self.in_pre:
-                self.current_buf.append("`")
+            self._close_inline_code()
         elif tag_lower == "pre":
-            self.in_pre = False
-            code_text = self._flush_buf().strip("\r\n")
-            lang = self.pre_lang
-            self.output.append(f"\n\n```{lang}\n{code_text}\n```\n\n")
-            self.pre_lang = ""
-        elif tag_lower == "kbd":
-            self.current_buf.append("</kbd>")
-        elif tag_lower == "a":
-            href = self.link_stack.pop() if self.link_stack else ""
-            self.current_buf.append(f"]({href})")
+            self._emit_pre_block()
         elif tag_lower == "title":
             self.title = self._flush_buf().strip()
+        elif not self.in_inline_code:
+            if tag_lower in ("strong", "b"):
+                self.current_buf.append("**")
+            elif tag_lower in ("em", "i"):
+                self.current_buf.append("*")
+            elif tag_lower == "kbd":
+                self.current_buf.append("</kbd>")
 
     def handle_data(self, data: str) -> None:
-        self.current_buf.append(data)
+        if self.in_pre:
+            self.pre_buf.append(data)
+        elif self.in_inline_code:
+            self.inline_code_buf.append(data)
+        else:
+            self.current_buf.append(data)
 
     def handle_entityref(self, name: str) -> None:
-        if name in ("rarr", "larr", "uarr", "darr", "copy", "nbsp", "trade"):
+        if self.in_pre:
+            self.pre_buf.append(html.unescape(f"&{name};"))
+        elif self.in_inline_code or "code" in self.stack:
+            self.inline_code_buf.append(html.unescape(f"&{name};"))
+        elif name in self._PRESERVED_PROSE_ENTITIES:
             self.current_buf.append(f"&{name};")
         else:
             self.current_buf.append(html.unescape(f"&{name};"))
 
     def handle_charref(self, name: str) -> None:
-        self.current_buf.append(html.unescape(f"&#{name};"))
+        ch = html.unescape(f"&#{name};")
+        if self.in_pre:
+            self.pre_buf.append(ch)
+        elif self.in_inline_code or "code" in self.stack:
+            self.inline_code_buf.append(ch)
+        else:
+            self.current_buf.append(self._CHARREF_PROSE_ESCAPES.get(ch, ch))
 
     def close(self) -> None:
+        if self.in_inline_code:
+            self._close_inline_code()
         if self.in_pre:
-            self.in_pre = False
-            code_text = self._flush_buf().strip("\r\n")
-            lang = self.pre_lang
-            self.output.append(f"\n\n```{lang}\n{code_text}\n```\n\n")
-            self.pre_lang = ""
-        elif self.in_table:
-            self.in_table = False
-            if self.current_table_row:
-                self.table_rows.append(self.current_table_row)
-                self.current_table_row = []
-            if self.table_rows:
-                max_cols = max(len(row) for row in self.table_rows)
-                if max_cols > 0:
-                    lines = []
-                    header = self.table_rows[0]
-                    padded_header = header + [""] * (max_cols - len(header))
-                    lines.append("| " + " | ".join(padded_header) + " |")
-                    lines.append("| " + " | ".join(["---"] * max_cols) + " |")
-                    for row in self.table_rows[1:]:
-                        padded_row = row + [""] * (max_cols - len(row))
-                        lines.append("| " + " | ".join(padded_row) + " |")
-                    self.output.append("\n\n" + "\n".join(lines) + "\n\n")
-            self.table_rows = []
-        elif self.current_buf:
+            self._emit_pre_block()
+        if self.in_table:
+            self._emit_markdown_table()
+        if self.current_buf:
             text = self._flush_buf().strip()
             if text:
                 if self.list_stack:
-                    info = self.list_stack[-1]
-                    indent = "  " * (len(self.list_stack) - 1)
-                    if not info.get("li_bullet_emitted", False):
-                        prefix = f"{indent}{info['index']}. " if info.get("type") == "ol" else f"{indent}* "
-                        self.output.append(f"{prefix}{text}\n")
-                    else:
-                        self.output.append(f"{indent}  {text}\n")
+                    self._emit_li_line(text)
                 else:
-                    self.output.append(f"\n\n{text}\n\n")
+                    q_prefix = self._quote_prefix()
+                    self.output.append(f"\n\n{q_prefix}{text}\n\n")
         super().close()
 
     def get_markdown(self) -> str:
-        text = "".join(self.output)
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        result = text.strip() + "\n"
-        if self.title:
-            first_h = ""
-            for line in result.splitlines():
-                s = line.strip()
-                if s.startswith("#"):
-                    first_h = s.lstrip("#").strip()
-                    break
-            if not first_h or first_h != self.title:
-                result = f"<!-- title: {self.title} -->\n\n" + result
+        text = "".join(self.output).replace("\r\n", "\n").replace("\r", "\n")
+        out_lines: list[str] = []
+        blank_run = 0
+        fence_len = 0
+        first_h = ""
+        for line in text.split("\n"):
+            if not fence_len:
+                m = re.match(r"^(`{3,})(.*)$", line)
+                if m and "`" not in m.group(2):
+                    blank_run = 0
+                    fence_len = len(m.group(1))
+                    out_lines.append(line)
+                    continue
+                if not line:
+                    blank_run += 1
+                    if blank_run <= 1:
+                        out_lines.append(line)
+                else:
+                    blank_run = 0
+                    out_lines.append(line)
+                    stripped = line.strip()
+                    if not first_h and stripped.startswith("#"):
+                        first_h = stripped.lstrip("#").strip()
+            else:
+                out_lines.append(line)
+                if re.match(rf"^`{{{fence_len},}}[ \t]*$", line):
+                    fence_len = 0
+        result = "\n".join(out_lines).strip() + "\n"
+        if self.title and first_h != self.title:
+            safe_title = re.sub(r"\s+", " ", self.title).strip().replace("-->", "--&gt;")
+            result = f"<!-- title: {safe_title} -->\n\n" + result
         return result
 
 
+_EXPLICIT_HTML_ENTITY_RE = re.compile(r"&(?:#\d+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]+);")
+_INLINE_LINK_TARGET_PAT = r'(?:<([^<>\r\n]+)>|((?:[^()\s]|\([^()\s]*\))*))(?:\s+(?:"([^"]*)"|\'([^\']*)\'))?'
+_INLINE_IMAGE_RE = re.compile(rf"!\[([^\[\]]*)\]\({_INLINE_LINK_TARGET_PAT}\)")
+_INLINE_LINK_RE = re.compile(rf"\[([^\[\]]+)\]\({_INLINE_LINK_TARGET_PAT}\)")
+
+
+def _unescape_explicit_html_entities(text: str) -> str:
+    return _EXPLICIT_HTML_ENTITY_RE.sub(lambda m: html.unescape(m.group(0)), text)
+
+
+def _mask_html_entities(text: str, token_prefix: str) -> tuple[str, list[str]]:
+    entity_tokens: list[str] = []
+
+    def _save_entity(m: re.Match[str]) -> str:
+        raw = m.group(0)
+        if html.unescape(raw) == raw:
+            return raw
+        entity_tokens.append(raw)
+        return f"\x00{token_prefix}{len(entity_tokens) - 1}\x00"
+
+    return _EXPLICIT_HTML_ENTITY_RE.sub(_save_entity, text), entity_tokens
+
+
+def _unmask_tokens(text: str, token_prefix: str, tokens: list[str]) -> str:
+    for idx, tok in enumerate(tokens):
+        text = text.replace(f"\x00{token_prefix}{idx}\x00", tok)
+    return text
+
+
+def _escape_html_preserving_entities(text: str, *, quote: bool = False) -> str:
+    protected, entity_tokens = _mask_html_entities(text, "TITLEENT")
+    return _unmask_tokens(html.escape(protected, quote=quote), "TITLEENT", entity_tokens)
+
+
 def _sanitize_href(url: str) -> str:
-    cleaned = re.sub(r"[\s\x00-\x1f]", "", html.unescape(url)).lower()
-    if any(cleaned.startswith(p) for p in ("javascript:", "data:", "vbscript:")):
+    if _is_unsafe_href(url, unescape_first=True):
         return "#"
-    return html.escape(url, quote=True)
+    return html.escape(_unescape_explicit_html_entities(url), quote=True)
+
+
+def _protect_code_and_kbd(text: str) -> tuple[str, list[str], list[str]]:
+    code_tokens: list[str] = []
+    kbd_tokens: list[str] = []
+    out: list[str] = []
+    pos = 0
+    length = len(text)
+    while pos < length:
+        if text[pos] == "`":
+            tick_end, close_start = _scan_backtick_span(text, pos)
+            if close_start != -1:
+                inner = text[tick_end:close_start]
+                if len(inner) >= 2 and inner[0] == " " and inner[-1] == " " and inner.strip(" "):
+                    inner = inner[1:-1]
+                code_tokens.append(f"<code>{html.escape(inner, quote=False)}</code>")
+                out.append(f"\x00CODE{len(code_tokens) - 1}\x00")
+                pos = close_start + (tick_end - pos)
+                continue
+            out.append(text[pos:tick_end])
+            pos = tick_end
+            continue
+
+        if text[pos : pos + 5].lower() == "<kbd>":
+            close_match = re.search(r"</kbd>", text[pos + 5 :], re.IGNORECASE)
+            if close_match is not None:
+                kbd_raw = text[pos + 5 : pos + 5 + close_match.start()]
+                kbd_tokens.append(f"<kbd>{_escape_html_preserving_entities(kbd_raw)}</kbd>")
+                out.append(f"\x00KBD{len(kbd_tokens) - 1}\x00")
+                pos = pos + 5 + close_match.end()
+                continue
+
+        out.append(text[pos])
+        pos += 1
+    return "".join(out), code_tokens, kbd_tokens
+
+
+def _apply_balanced_em(pattern: str, text: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        if inner.count("<strong>") != inner.count("</strong>"):
+            return match.group(0)
+        return f"<em>{inner}</em>"
+
+    return re.sub(pattern, _replace, text)
+
+
+def _format_plain_inline(text: str) -> str:
+    protected, entity_tokens = _mask_html_entities(text, "ENT")
+    text = html.escape(protected, quote=False)
+
+    text = re.sub(
+        r"(?<!\*)\*\*\*(?!\s)((?:[^*]|\*(?!\*\*))+?)(?<!\s)\*\*\*(?!\*)",
+        r"<strong><em>\1</em></strong>",
+        text,
+    )
+    text = re.sub(
+        r"(?<![\w_])___(?!\s)((?:[^_]|_(?!__))+?)(?<!\s)___(?![\w_])",
+        r"<strong><em>\1</em></strong>",
+        text,
+    )
+    text = re.sub(
+        r"(?<!\*)\*\*(?!\s|\*)((?:[^*]|\*(?!\*))+?)(?<!\s|\*)\*\*(?!\*)",
+        r"<strong>\1</strong>",
+        text,
+    )
+    text = re.sub(
+        r"(?<![\w_])__(?!\s|_)((?:[^_]|_(?!_))+?)(?<!\s|_)__(?![\w_])",
+        r"<strong>\1</strong>",
+        text,
+    )
+    text = _apply_balanced_em(r"(?<!\*)\*(?!\s)([^*]+?)(?<!\s)\*(?!\*)", text)
+    text = _apply_balanced_em(r"(?<![\w_])_(?!\s)([^_]+?)(?<!\s)_(?![\w_])", text)
+
+    return _unmask_tokens(text, "ENT", entity_tokens)
+
+
+def _extract_markdown_target_and_title(match: re.Match[str]) -> tuple[str, str]:
+    raw_url = match.group(2) if match.group(2) is not None else (match.group(3) or "")
+    safe_url = _sanitize_href(raw_url)
+    raw_title = match.group(4) if match.group(4) is not None else match.group(5)
+    title_attr = f' title="{_escape_html_preserving_entities(raw_title, quote=True)}"' if raw_title else ""
+    return safe_url, title_attr
 
 
 def _format_inline_markdown(text: str) -> str:
-    code_tokens: list[str] = []
-
-    def save_code(m: re.Match[str]) -> str:
-        code_content = html.escape(m.group(1), quote=False)
-        code_tokens.append(f"<code>{code_content}</code>")
-        return f"\x00CODE{len(code_tokens) - 1}\x00"
-
-    text = re.sub(r"`([^`]+)`", save_code, text)
-
-    entity_tokens: list[str] = []
-
-    def save_entity(m: re.Match[str]) -> str:
-        entity_tokens.append(m.group(0))
-        return f"\x00ENT{len(entity_tokens) - 1}\x00"
-
-    text = re.sub(r"&[a-zA-Z0-9#]+;", save_entity, text)
-
-    kbd_tokens: list[str] = []
-
-    def save_kbd(m: re.Match[str]) -> str:
-        kbd_content = html.escape(m.group(1), quote=False)
-        kbd_tokens.append(f"<kbd>{kbd_content}</kbd>")
-        return f"\x00KBD{len(kbd_tokens) - 1}\x00"
-
-    text = re.sub(r"<kbd>(.*?)</kbd>", save_kbd, text, flags=re.IGNORECASE | re.DOTALL)
-
-    text = html.escape(text, quote=False)
+    text, code_tokens, kbd_tokens = _protect_code_and_kbd(text)
 
     img_tokens: list[str] = []
 
     def replace_image(m: re.Match[str]) -> str:
-        alt_text = m.group(1).replace('"', "&quot;")
-        img_url = _sanitize_href(m.group(2))
-        img_tokens.append(f'<img src="{img_url}" alt="{alt_text}">')
+        alt_text = _escape_html_preserving_entities(m.group(1), quote=True)
+        img_url, title_attr = _extract_markdown_target_and_title(m)
+        img_tokens.append(f'<img src="{img_url}" alt="{alt_text}"{title_attr}>')
         return f"\x00IMG{len(img_tokens) - 1}\x00"
 
-    text = re.sub(r"!\[([^\[\]]*)\]\(((?:[^()\s]|\([^()\s]*\))*)\)", replace_image, text)
+    text = _INLINE_IMAGE_RE.sub(replace_image, text)
 
     link_tokens: list[str] = []
 
     def replace_link(m: re.Match[str]) -> str:
-        link_text = m.group(1)
-        link_url = _sanitize_href(m.group(2))
-        link_tokens.append(link_url)
-        return f'<a href="\x00URL{len(link_tokens) - 1}\x00">{link_text}</a>'
+        link_text = _format_plain_inline(m.group(1))
+        link_url, title_attr = _extract_markdown_target_and_title(m)
+        link_tokens.append(f'<a href="{link_url}"{title_attr}>{link_text}</a>')
+        return f"\x00LINK{len(link_tokens) - 1}\x00"
 
-    text = re.sub(r"\[([^\[\]]+)\]\(((?:[^()\s]|\([^()\s]*\))*)\)", replace_link, text)
+    text = _INLINE_LINK_RE.sub(replace_link, text)
+    text = _format_plain_inline(text)
 
-    text = re.sub(r"\*\*\*([^*]+)\*\*\*", r"<strong><em>\1</em></strong>", text)
-    text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"__([^_]+)__", r"<strong>\1</strong>", text)
-    text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", text)
-    text = re.sub(r"(?<!\w)_([^_]+)_(?!\w)", r"<em>\1</em>", text)
+    text = _unmask_tokens(text, "LINK", link_tokens)
+    text = _unmask_tokens(text, "IMG", img_tokens)
+    text = _unmask_tokens(text, "KBD", kbd_tokens)
+    return _unmask_tokens(text, "CODE", code_tokens)
 
-    for i, tok in enumerate(img_tokens):
-        text = text.replace(f"\x00IMG{i}\x00", tok)
-    for i, url in enumerate(link_tokens):
-        text = text.replace(f"\x00URL{i}\x00", url)
-    for i, tok in enumerate(kbd_tokens):
-        text = text.replace(f"\x00KBD{i}\x00", tok)
-    for i, tok in enumerate(code_tokens):
-        text = text.replace(f"\x00CODE{i}\x00", tok)
-    for i, tok in enumerate(entity_tokens):
-        text = text.replace(f"\x00ENT{i}\x00", tok)
 
-    return text
+def _strip_outer_table_pipes(line: str) -> str:
+    cleaned = line.strip()
+    if cleaned.startswith("|"):
+        cleaned = cleaned[1:]
+    if cleaned.endswith("|"):
+        backslashes = 0
+        idx = len(cleaned) - 2
+        while idx >= 0 and cleaned[idx] == "\\":
+            backslashes += 1
+            idx -= 1
+        if backslashes % 2 == 0:
+            cleaned = cleaned[:-1]
+    return cleaned
 
 
 def _split_table_row(line: str) -> list[str]:
-    cleaned = line.strip()
-    if cleaned.startswith("|"):
-        cleaned = cleaned[1:]
-    if cleaned.endswith("|") and not cleaned.endswith(r"\|"):
-        cleaned = cleaned[:-1]
-    protected = cleaned.replace(r"\|", "\x00PIPE\x00")
-    return [cell.replace("\x00PIPE\x00", "|").strip() for cell in protected.split("|")]
+    cleaned = _strip_outer_table_pipes(line)
+    cells: list[str] = []
+    buf: list[str] = []
+    idx = 0
+    length = len(cleaned)
+    while idx < length:
+        ch = cleaned[idx]
+        if ch == "`":
+            tick_end, close_start = _scan_backtick_span(cleaned, idx)
+            if close_start != -1:
+                close_end = close_start + (tick_end - idx)
+                buf.append(cleaned[idx:close_end])
+                idx = close_end
+                continue
+            buf.append(cleaned[idx:tick_end])
+            idx = tick_end
+            continue
+        if ch == "\\" and idx + 1 < length:
+            nxt = cleaned[idx + 1]
+            if nxt == "|":
+                buf.append("|")
+                idx += 2
+                continue
+            if nxt == "\\":
+                buf.append("\\\\")
+                idx += 2
+                continue
+        if ch == "|":
+            cells.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+        idx += 1
+    cells.append("".join(buf).strip())
+    return cells
 
 
 def _parse_table_separator(line: str) -> list[str | None] | None:
-    cleaned = line.strip()
-    if not cleaned or "|" not in cleaned:
+    stripped = line.strip()
+    if not stripped or "|" not in stripped:
         return None
-    if cleaned.startswith("|"):
-        cleaned = cleaned[1:]
-    if cleaned.endswith("|") and not cleaned.endswith(r"\|"):
-        cleaned = cleaned[:-1]
+    cleaned = _strip_outer_table_pipes(stripped)
     cells = [c.strip() for c in cleaned.split("|")]
     if not cells:
         return None
@@ -2346,13 +3098,34 @@ def _render_table_html(
     return "".join(parts)
 
 
+_HR_LINE_RE = re.compile(r"^(?:-\s*){3,}$|^(?:\*\s*){3,}$|^(?:_\s*){3,}$")
+
+
+def _next_nonblank_line(lines: list[str], start_idx: int) -> str | None:
+    for probe in range(start_idx, len(lines)):
+        if lines[probe].strip():
+            return lines[probe]
+    return None
+
+
+_MD_LIST_LINE_RE = re.compile(r"^(?:\s*[*+-]\s+|\s*\d+\.\s+)")
+_MD_UL_RE = re.compile(r"^(\s*)[*+-]\s+(.*)$")
+_MD_OL_RE = re.compile(r"^(\s*)\d+\.\s+(.*)$")
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+_MD_DL_DEF_RE = re.compile(r"^:\s+(.*)$")
+_MD_TABLE_STOP_PREFIX_RE = re.compile(r"^(?:`{3,}|~{3,}|#{1,6}\s+)")
+
+
 def _fallback_markdown_to_html_body(md_text: str) -> str:
     """Fallback pure-Python markdown body generator used when markdown library is absent."""
     lines = md_text.splitlines()
     body_parts: list[str] = []
     in_code_block = False
+    code_fence_char = ""
+    code_fence_len = 0
     code_block_lines: list[str] = []
     code_block_lang = ""
+    in_html_comment = False
     in_quote = False
     quote_lines: list[str] = []
     in_list = False
@@ -2360,6 +3133,19 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
     in_dl = False
     dl_items: list[tuple[str, list[str]]] = []
     paragraph_lines: list[str] = []
+
+    def emit_code_block() -> None:
+        nonlocal in_code_block, code_fence_char, code_fence_len, code_block_lines, code_block_lang
+        if in_code_block:
+            escaped_code = html.escape("\n".join(code_block_lines))
+            escaped_lang = html.escape(code_block_lang, quote=True)
+            class_attr = f' class="language-{escaped_lang}"' if code_block_lang else ""
+            body_parts.append(f"\t<pre><code{class_attr}>{escaped_code}</code></pre>\n")
+            code_block_lines = []
+            code_block_lang = ""
+            code_fence_char = ""
+            code_fence_len = 0
+            in_code_block = False
 
     def flush_paragraph() -> None:
         nonlocal paragraph_lines
@@ -2372,10 +3158,24 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
 
     def flush_quote() -> None:
         nonlocal in_quote, quote_lines
-        if in_quote and quote_lines:
-            content = " ".join(line.strip() for line in quote_lines)
-            formatted = _format_inline_markdown(content)
-            body_parts.append(f"\t<blockquote>\n\t\t<p>{formatted}</p>\n\t</blockquote>\n")
+        if in_quote:
+            quote_paras: list[list[str]] = []
+            current_para: list[str] = []
+            for q_line in quote_lines:
+                if not q_line:
+                    if current_para:
+                        quote_paras.append(current_para)
+                        current_para = []
+                else:
+                    current_para.append(q_line)
+            if current_para:
+                quote_paras.append(current_para)
+            if quote_paras:
+                body_parts.append("\t<blockquote>\n")
+                for q_para in quote_paras:
+                    formatted = _format_inline_markdown(" ".join(q_para))
+                    body_parts.append(f"\t\t<p>{formatted}</p>\n")
+                body_parts.append("\t</blockquote>\n")
             quote_lines = []
             in_quote = False
 
@@ -2383,34 +3183,39 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
         nonlocal in_list, list_items
         if in_list and list_items:
             stack: list[tuple[int, str]] = []
+
+            def _open_list(tag: str, formatted: str, indent: int, *, nested: bool) -> None:
+                tabs = "\t" * (len(stack) + 1)
+                prefix = "\n" if nested else ""
+                body_parts.append(f"{prefix}{tabs}<{tag}>\n{tabs}\t<li>{formatted}")
+                stack.append((indent, tag))
+
+            def _close_list() -> None:
+                _top_indent, top_tag = stack.pop()
+                tabs = "\t" * (len(stack) + 1)
+                body_parts.append(f"</li>\n{tabs}</{top_tag}>\n")
+
             for indent, tag, item_text in list_items:
                 formatted = _format_inline_markdown(item_text)
                 if not stack:
-                    body_parts.append(f"\t<{tag}>\n\t\t<li>{formatted}")
-                    stack.append((indent, tag))
+                    _open_list(tag, formatted, indent, nested=False)
                 elif indent > stack[-1][0]:
-                    tabs = "\t" * (len(stack) + 1)
-                    body_parts.append(f"\n{tabs}<{tag}>\n{tabs}\t<li>{formatted}")
-                    stack.append((indent, tag))
+                    _open_list(tag, formatted, indent, nested=True)
                 else:
                     while len(stack) > 1 and indent < stack[-1][0]:
-                        _top_indent, top_tag = stack.pop()
-                        tabs = "\t" * (len(stack) + 1)
-                        body_parts.append(f"</li>\n{tabs}</{top_tag}>\n")
-                    if stack and stack[-1][1] != tag and indent == stack[-1][0]:
-                        _top_indent, top_tag = stack.pop()
-                        tabs = "\t" * (len(stack) + 1)
-                        body_parts.append(f"</li>\n{tabs}</{top_tag}>\n")
-                        tabs = "\t" * (len(stack) + 1)
-                        body_parts.append(f"{tabs}<{tag}>\n{tabs}\t<li>{formatted}")
-                        stack.append((indent, tag))
+                        _close_list()
+                    if indent > stack[-1][0]:
+                        _open_list(tag, formatted, indent, nested=True)
+                    elif stack[-1][1] != tag and (
+                        indent == stack[-1][0] or (len(stack) == 1 and indent < stack[-1][0])
+                    ):
+                        _close_list()
+                        _open_list(tag, formatted, indent, nested=False)
                     else:
                         tabs = "\t" * (len(stack) + 1)
                         body_parts.append(f"</li>\n{tabs}<li>{formatted}")
             while stack:
-                _top_indent, top_tag = stack.pop()
-                tabs = "\t" * (len(stack) + 1)
-                body_parts.append(f"</li>\n{tabs}</{top_tag}>\n")
+                _close_list()
             list_items = []
             in_list = False
 
@@ -2429,24 +3234,23 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
             in_dl = False
 
     def flush_all() -> None:
-        nonlocal in_code_block, code_block_lines, code_block_lang
-        if in_code_block:
-            escaped_code = html.escape("\n".join(code_block_lines))
-            class_attr = f' class="language-{code_block_lang}"' if code_block_lang else ""
-            body_parts.append(f"\t<pre><code{class_attr}>{escaped_code}</code></pre>\n")
-            code_block_lines = []
-            code_block_lang = ""
-            in_code_block = False
-        flush_paragraph()
+        emit_code_block()
         flush_quote()
         flush_list()
         flush_dl()
+        flush_paragraph()
 
     idx = 0
     num_lines = len(lines)
     while idx < num_lines:
         line = lines[idx]
         stripped = line.strip()
+
+        if in_html_comment:
+            idx += 1
+            if "-->" in stripped:
+                in_html_comment = False
+            continue
 
         if not in_code_block and idx + 1 < num_lines and "|" in line:
             alignments = _parse_table_separator(lines[idx + 1])
@@ -2460,7 +3264,11 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
                     r_stripped = r_line.strip()
                     if not r_stripped or "|" not in r_line:
                         break
-                    if r_stripped.startswith("```") or re.match(r"^#{1,6}\s+", r_stripped):
+                    if (
+                        _MD_TABLE_STOP_PREFIX_RE.match(r_stripped)
+                        or r_stripped.startswith(">")
+                        or _MD_LIST_LINE_RE.match(r_line)
+                    ):
                         break
                     table_rows.append(_split_table_row(r_line))
                     idx += 1
@@ -2469,35 +3277,59 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
 
         idx += 1
 
-        if stripped.startswith("```"):
-            if not in_code_block:
-                flush_all()
-                in_code_block = True
-                code_block_lines = []
-                code_block_lang = stripped[3:].strip()
-            else:
-                in_code_block = False
-                escaped_code = html.escape("\n".join(code_block_lines))
-                class_attr = f' class="language-{code_block_lang}"' if code_block_lang else ""
-                body_parts.append(f"\t<pre><code{class_attr}>{escaped_code}</code></pre>\n")
-                code_block_lines = []
-                code_block_lang = ""
+        fence_event, new_char, new_len, fence_info = _update_code_fence(stripped, code_fence_char, code_fence_len)
+        if fence_event == "open":
+            flush_all()
+            in_code_block = True
+            code_fence_char = new_char
+            code_fence_len = new_len
+            code_block_lines = []
+            code_block_lang = fence_info
+            continue
+        if fence_event == "close":
+            emit_code_block()
             continue
 
         if in_code_block:
             code_block_lines.append(line)
             continue
 
+        if (
+            stripped.startswith("<!--")
+            and (not paragraph_lines)
+            and (stripped.endswith("-->") or "-->" not in stripped)
+        ):
+            flush_all()
+            if "-->" not in stripped:
+                in_html_comment = True
+            continue
+
         if not stripped:
+            nxt = _next_nonblank_line(lines, idx)
+            if in_quote and nxt is not None and nxt.lstrip().startswith(">"):
+                quote_lines.append("")
+                continue
+            if in_list and nxt is not None:
+                nxt_stripped = nxt.strip()
+                is_next_list_item = bool(_MD_LIST_LINE_RE.match(nxt))
+                is_indented_cont = (
+                    nxt.startswith(("  ", "\t"))
+                    and not re.match(r"^(?:`{3,}|~{3,}|#{1,6}\s+|:\s+|>\s?)", nxt_stripped)
+                    and not _HR_LINE_RE.match(nxt_stripped)
+                )
+                if is_next_list_item or is_indented_cont:
+                    continue
+            if in_dl and nxt is not None and _MD_DL_DEF_RE.match(nxt.strip()):
+                continue
             flush_all()
             continue
 
-        if re.match(r"^(?:---|\*\*\*|___)$", stripped):
+        if _HR_LINE_RE.match(stripped):
             flush_all()
             body_parts.append("\t<hr>\n")
             continue
 
-        h_match = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        h_match = _MD_HEADING_RE.match(stripped)
         if h_match:
             flush_all()
             level = len(h_match.group(1))
@@ -2514,7 +3346,7 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
             quote_lines.append(stripped.lstrip(">").strip())
             continue
 
-        ul_match = re.match(r"^(\s*)[*+-]\s+(.*)$", line)
+        ul_match = _MD_UL_RE.match(line)
         if ul_match:
             flush_paragraph()
             flush_quote()
@@ -2524,7 +3356,7 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
             list_items.append((indent, "ul", ul_match.group(2).strip()))
             continue
 
-        ol_match = re.match(r"^(\s*)\d+\.\s+(.*)$", line)
+        ol_match = _MD_OL_RE.match(line)
         if ol_match:
             flush_paragraph()
             flush_quote()
@@ -2534,13 +3366,15 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
             list_items.append((indent, "ol", ol_match.group(2).strip()))
             continue
 
-        dl_match = re.match(r"^:\s+(.*)$", stripped)
+        dl_match = _MD_DL_DEF_RE.match(stripped)
         if dl_match:
             if paragraph_lines:
                 flush_quote()
                 flush_list()
                 term = paragraph_lines.pop()
-                flush_paragraph()
+                if paragraph_lines:
+                    flush_dl()
+                    flush_paragraph()
                 in_dl = True
                 dl_items.append((term.strip(), [dl_match.group(1).strip()]))
                 continue
@@ -2552,15 +3386,18 @@ def _fallback_markdown_to_html_body(md_text: str) -> str:
             dl_items[-1][1][-1] = f"{dl_items[-1][1][-1]} {stripped}"
             continue
 
-        if in_list and (line.startswith("   ") or line.startswith("\t")):
+        if in_list and (line.startswith("  ") or line.startswith("\t")):
             if list_items:
                 prev_lvl, prev_type, prev_txt = list_items[-1]
                 list_items[-1] = (prev_lvl, prev_type, f"{prev_txt} {stripped}")
             continue
 
         if in_quote:
-            quote_lines.append(stripped)
-            continue
+            if idx < num_lines and _MD_DL_DEF_RE.match(lines[idx].strip()):
+                flush_quote()
+            else:
+                quote_lines.append(stripped)
+                continue
 
         paragraph_lines.append(line)
 
@@ -2581,14 +3418,14 @@ def _markdown_to_doc_html(
     md_cleaned = _preprocess_markdown_text(md_text)
     doc_title = title or _get_title_from_markdown(md_cleaned) or "Google TTS For NVDA"
 
-    if _MARKDOWN_AVAILABLE and markdown is not None:
+    if _MARKDOWN_AVAILABLE and markdown is not None and _NH3_AVAILABLE and nh3 is not None:
         html_body = _generate_doc_html_body(md_cleaned)
     else:
         html_body = _fallback_markdown_to_html_body(md_cleaned)
 
-    lang_attr = language.replace("_", "-")
+    lang_attr = html.escape(language.replace("_", "-"), quote=True)
     dir_attr = ' dir="rtl"' if is_rtl else ""
-    title_escaped = html.escape(doc_title)
+    title_escaped = _escape_html_preserving_entities(doc_title)
 
     html_lines = [
         "<!DOCTYPE html>",
@@ -2615,14 +3452,7 @@ def _convert_html_file_to_md(html_path: Path, md_path: Path) -> tuple[bool, str]
         if lxml_errors:
             return False, f"HTML file has syntax errors: {'; '.join(lxml_errors)}"
         if _NH3_AVAILABLE and nh3 is not None:
-            raw_html = nh3.clean(
-                raw_html,
-                tags=_create_doc_tag_filter(),
-                attributes=_create_doc_attribute_filter(),
-                attribute_filter=_doc_attribute_filter,
-                link_rel=None,
-                strip_comments=False,
-            )
+            raw_html = _sanitize_doc_html(raw_html)
         converter = _DocHtmlToMarkdown()
         converter.feed(raw_html)
         converter.close()
@@ -2658,9 +3488,7 @@ def _build_doc_for_language(language: str) -> tuple[bool, str]:
     if language == "en":
         return False, f"{language}: readme.html is the English source document"
     doc_dir = DOC_DIR / language
-    if doc_dir.is_dir():
-        for stale_mo in doc_dir.glob("*.mo"):
-            stale_mo.unlink(missing_ok=True)
+    _remove_stale_doc_mo_files(doc_dir)
     po_path = doc_dir / "readme.po"
     md_path = doc_dir / "readme.md"
     html_path = doc_dir / "readme.html"
@@ -2685,7 +3513,12 @@ def _check_doc_folder_health(language: str, check_only: bool) -> list[str]:
     doc_dir = DOC_DIR / language
     if doc_dir.is_dir():
         for stale_mo in sorted(doc_dir.glob("*.mo")):
-            errors.append(f"{language}: unexpected .mo file in documentation folder: {_relative_to_addon(stale_mo)}")
+            if check_only:
+                errors.append(
+                    f"{language}: unexpected .mo file in documentation folder: {_relative_to_addon(stale_mo)}"
+                )
+            else:
+                stale_mo.unlink(missing_ok=True)
     html_path = doc_dir / "readme.html"
     po_path = doc_dir / "readme.po"
     md_path = doc_dir / "readme.md"
@@ -2702,6 +3535,25 @@ def _check_doc_folder_health(language: str, check_only: bool) -> list[str]:
             except OSError as exc:
                 errors.append(f"{language}: could not read {_relative_to_addon(html_path)}: {exc}")
     return errors
+
+
+def _validate_doc_html_against_en(
+    language: str,
+    source_path: Path,
+    doc_name: str,
+    active_checks: set[str],
+    render_html: Callable[[str], str] | None = None,
+) -> list[str]:
+    try:
+        raw_text = source_path.read_text(encoding="utf-8-sig")
+        html_text = render_html(raw_text) if render_html is not None else raw_text
+        errors = _check_html_content_with_lxml(html_text, str(_relative_to_addon(source_path)))
+        en_segs = [s for _, s in _extract_doc_segments(DOC_EN_PATH.read_text(encoding="utf-8-sig"))]
+        lang_segs = [s for _, s in _extract_doc_segments(html_text)]
+        errors.extend(_check_doc_segments(language, en_segs, lang_segs, doc_name, active_checks))
+        return errors
+    except Exception as exc:
+        return [f"{language}: could not validate {_relative_to_addon(source_path)}: {exc}"]
 
 
 def _check_doc_language(
@@ -2763,12 +3615,10 @@ def _check_doc_language(
         return errors
 
     if po_path.is_file():
-        actual_msgfmt = msgfmt_path if msgfmt_path is not None else _find_msgfmt()
-        msgfmt_errors = _check_po_syntax_with_msgfmt(po_path, actual_msgfmt)
-        if msgfmt_errors:
-            errors.extend(msgfmt_errors)
-        elif actual_msgfmt is None:
-            errors.extend(_check_po_syntax_fallback(po_path))
+        syntax_errors = _check_po_syntax(po_path, msgfmt_path)
+        if syntax_errors:
+            errors.extend(syntax_errors)
+            return errors
         fuzzy_msgids: set[str] = set()
         try:
             catalog = _parse_po(po_path, include_untranslated=True, include_fuzzy=True)
@@ -2801,42 +3651,39 @@ def _check_doc_language(
             if (CHECK_DOCS in active_checks) and not msgstr.strip():
                 errors.append(f"{language}: untranslated documentation string in readme.po: {_message_preview(m)!r}")
             if msgstr and (CHECK_PLACEHOLDERS in active_checks):
-                for tag_err in _check_html_tag_interpolations(m, msgstr):
-                    errors.append(f"{language}: HTML tag issue in readme.po for {_message_preview(m)!r}: {tag_err}")
-                for interp_err in _check_format_interpolations(m, msgstr):
-                    errors.append(
-                        f"{language}: placeholder mismatch in readme.po for {_message_preview(m)!r}: {interp_err}"
+                errors.extend(
+                    _check_string_interpolations(
+                        m,
+                        msgstr,
+                        repr(_message_preview(m)),
+                        language,
+                        context_phrase="readme.po",
+                        always_check_html=True,
                     )
+                )
 
         if CHECK_OBSOLETE in active_checks:
             for m in sorted(po_msgids - expected_msgids):
                 errors.append(f"{language}: obsolete documentation string in readme.po: {_message_preview(m)!r}")
 
     elif md_path.is_file() and language != "en":
-        try:
-            is_rtl = _is_rtl_language(language)
-            md_html = _markdown_to_doc_html(md_path.read_text(encoding="utf-8-sig"), language=language, is_rtl=is_rtl)
-            errors.extend(_check_html_content_with_lxml(md_html, str(_relative_to_addon(md_path))))
-            en_segs = [s for _, s in _extract_doc_segments(DOC_EN_PATH.read_text(encoding="utf-8-sig"))]
-            lang_segs = [s for _, s in _extract_doc_segments(md_html)]
-            errors.extend(_check_doc_segments(language, en_segs, lang_segs, "readme.md", active_checks))
-        except Exception as exc:
-            errors.append(f"{language}: could not validate {_relative_to_addon(md_path)}: {exc}")
+        errors.extend(
+            _validate_doc_html_against_en(
+                language,
+                md_path,
+                "readme.md",
+                active_checks,
+                render_html=lambda text: _markdown_to_doc_html(
+                    text, language=language, is_rtl=_is_rtl_language(language)
+                ),
+            )
+        )
 
     elif html_path.is_file() and language != "en":
-        try:
-            lang_html_text = html_path.read_text(encoding="utf-8-sig")
-            errors.extend(
-                _check_html_content_with_lxml(
-                    lang_html_text,
-                    str(_relative_to_addon(html_path)),
-                )
-            )
-            en_segs = [s for _, s in _extract_doc_segments(DOC_EN_PATH.read_text(encoding="utf-8-sig"))]
-            lang_segs = [s for _, s in _extract_doc_segments(lang_html_text)]
-            errors.extend(_check_doc_segments(language, en_segs, lang_segs, "readme.html", active_checks))
-        except Exception as exc:
-            errors.append(f"{language}: could not validate {_relative_to_addon(html_path)}: {exc}")
+        errors.extend(_validate_doc_html_against_en(language, html_path, "readme.html", active_checks))
+
+    elif CHECK_DOCS not in active_checks and (active_checks & {CHECK_OBSOLETE, CHECK_FUZZY, CHECK_PLACEHOLDERS}):
+        errors.append(f"{language}: missing documentation file: {_relative_to_addon(html_path)}")
 
     return errors
 
@@ -2861,12 +3708,7 @@ def _check_language_files(
     if not po_path.is_file():
         errors.append(f"{language}: missing translation file: {_relative_to_addon(po_path)}")
     else:
-        actual_msgfmt = msgfmt_path if msgfmt_path is not None else _find_msgfmt()
-        msgfmt_errors = _check_po_syntax_with_msgfmt(po_path, actual_msgfmt)
-        if msgfmt_errors:
-            errors.extend(msgfmt_errors)
-        elif actual_msgfmt is None:
-            errors.extend(_check_po_syntax_fallback(po_path))
+        errors.extend(_check_po_syntax(po_path, msgfmt_path))
     if CHECK_DOCS in active_checks:
         errors.extend(_check_doc_folder_health(language, check_only))
     if CHECK_SORT in active_checks:
@@ -2881,7 +3723,13 @@ def _check_language_sort_file(language_dir: Path) -> list[str]:
     language = language_dir.name
     errors: list[str] = []
     try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        raw_bytes = path.read_bytes()
+    except OSError as exc:
+        return [f"{language}: languageSort.json could not be parsed: {exc}"]
+    if raw_bytes.startswith(b"\xef\xbb\xbf"):
+        return [f"{language}: languageSort.json must be UTF-8 without BOM."]
+    try:
+        data = json.loads(raw_bytes.decode("utf-8"))
     except Exception as exc:
         return [f"{language}: languageSort.json could not be parsed: {exc}"]
     if not isinstance(data, dict):
@@ -3004,25 +3852,29 @@ def _parse_checks(
     values: list[str] | None,
     strict: bool,
     default_checks: set[str] | None = None,
+    valid_checks: set[str] | frozenset[str] | None = None,
 ) -> set[str]:
     checks = set(default_checks if default_checks is not None else DEFAULT_CHECKS)
-    if strict:
+    if strict and (valid_checks is None or CHECK_UI in valid_checks):
         checks.add(CHECK_UI)
     if not values:
         return checks
     checks = set()
-    valid_checks = ALL_CHECKS | {"all"}
+    allowed_pool = ALL_CHECKS if valid_checks is None else valid_checks
+    allowed_names = set(allowed_pool) | {"all"}
     for raw_value in values:
         for item in raw_value.split(","):
             name = item.strip().lower()
             if not name:
                 continue
-            if name not in valid_checks:
-                raise ValueError(f"unknown check {name!r}; choose from {', '.join(sorted(valid_checks))}")
+            if name not in allowed_names:
+                raise ValueError(f"unknown check {name!r}; choose from {', '.join(sorted(allowed_names))}")
             if name == "all":
-                checks.update(ALL_CHECKS)
+                checks.update(allowed_pool)
             else:
                 checks.add(name)
+    if not checks:
+        raise ValueError(f"at least one check must be specified; choose from {', '.join(sorted(allowed_names))}")
     return checks
 
 
@@ -3090,6 +3942,7 @@ def _prompt_checks_generic(
     numbered_checks: list[tuple[str, str]],
     available_checks_str: str,
     allow_back: bool = True,
+    valid_checks: set[str] | frozenset[str] | None = None,
 ) -> set[str] | _MenuBack:
     print("")
     print("Check mode:")
@@ -3117,7 +3970,12 @@ def _prompt_checks_generic(
             if allow_back and raw_checks == "0":
                 return _MENU_BACK
             try:
-                return _parse_checks([raw_checks], strict=False, default_checks=default_checks)
+                return _parse_checks(
+                    [raw_checks],
+                    strict=False,
+                    default_checks=default_checks,
+                    valid_checks=valid_checks,
+                )
             except ValueError as exc:
                 print(f"Error: {exc}")
                 print(f"Enter valid checks ({available_checks_str}) or 0 to go back.")
@@ -3157,7 +4015,24 @@ def _prompt_doc_checks(default_checks: set[str] | None = None, allow_back: bool 
         ],
         available_checks_str="language, docs, placeholders, obsolete, fuzzy, all",
         allow_back=allow_back,
+        valid_checks=DEFAULT_DOC_CHECKS,
     )
+
+
+def _prompt_locale_choice(pool: list[str]) -> list[str] | None | _MenuBack:
+    if pool:
+        return _prompt_languages(pool, allow_back=True)
+    code = _prompt_language_code(allow_back=True)
+    return [code] if code else _MENU_BACK
+
+
+def _prompt_build_or_check_action() -> int:
+    print("")
+    print("Action:")
+    print("  1. Check only")
+    print("  2. Build generated files")
+    print("  0. Go back")
+    return _prompt_number("Choose 0-2: ", 0, 2)
 
 
 def _interactive_options(
@@ -3185,85 +4060,54 @@ def _interactive_options(
         if task == 2:
             return None, set(default_checks), False, True, False, False, False, False, False, False, False
         if task == 3:
-            selected_languages = (
-                _prompt_languages(languages, allow_back=True)
-                if languages
-                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
-            )
+            selected_languages = _prompt_locale_choice(languages)
             if isinstance(selected_languages, _MenuBack):
                 continue
             return selected_languages, set(default_checks), False, False, True, False, False, False, False, False, False
         if task == 4:
-            selected_languages = (
-                _prompt_languages(doc_languages, allow_back=True)
-                if doc_languages
-                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
-            )
+            selected_languages = _prompt_locale_choice(doc_languages)
             if isinstance(selected_languages, _MenuBack):
                 continue
             checks = _prompt_doc_checks(DEFAULT_DOC_CHECKS, allow_back=True)
             if isinstance(checks, _MenuBack):
                 continue
-            print("")
-            print("Action:")
-            print("  1. Check only")
-            print("  2. Build generated files")
-            print("  0. Go back")
-            action = _prompt_number("Choose 0-2: ", 0, 2)
+            action = _prompt_build_or_check_action()
             if action == 0:
                 continue
-            if action == 1:
-                return selected_languages, checks, False, False, False, False, False, False, True, False, False
-            return selected_languages, checks, False, False, False, True, False, False, False, False, False
+            return selected_languages, checks, False, False, False, action != 1, False, False, action == 1, False, False
         if task == 5:
             return None, set(default_checks), False, False, False, False, True, False, False, False, False
         if task == 6:
-            selected_languages = (
-                _prompt_languages(doc_languages, allow_back=True)
-                if doc_languages
-                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
-            )
+            selected_languages = _prompt_locale_choice(doc_languages)
             if isinstance(selected_languages, _MenuBack):
                 continue
             return selected_languages, set(default_checks), False, False, False, False, False, True, False, False, False
-        if task == 7:
+        if task in (7, 8):
             conv_languages = (["en"] if (DOC_DIR / "en").is_dir() else []) + doc_languages
-            selected_languages = (
-                _prompt_languages(conv_languages, allow_back=True)
-                if conv_languages
-                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
-            )
+            selected_languages = _prompt_locale_choice(conv_languages)
             if isinstance(selected_languages, _MenuBack):
                 continue
-            return selected_languages, set(default_checks), False, False, False, False, False, False, False, True, False
-        if task == 8:
-            conv_languages = (["en"] if (DOC_DIR / "en").is_dir() else []) + doc_languages
-            selected_languages = (
-                _prompt_languages(conv_languages, allow_back=True)
-                if conv_languages
-                else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
+            return (
+                selected_languages,
+                set(default_checks),
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                False,
+                task == 7,
+                task == 8,
             )
-            if isinstance(selected_languages, _MenuBack):
-                continue
-            return selected_languages, set(default_checks), False, False, False, False, False, False, False, False, True
 
-        selected_languages = (
-            _prompt_languages(languages, allow_back=True)
-            if languages
-            else ([code] if (code := _prompt_language_code(allow_back=True)) else _MENU_BACK)
-        )
+        selected_languages = _prompt_locale_choice(languages)
         if isinstance(selected_languages, _MenuBack):
             continue
         checks = _prompt_checks(default_checks, allow_back=True)
         if isinstance(checks, _MenuBack):
             continue
-
-        print("")
-        print("Action:")
-        print("  1. Check only")
-        print("  2. Build generated files")
-        print("  0. Go back")
-        action = _prompt_number("Choose 0-2: ", 0, 2)
+        action = _prompt_build_or_check_action()
         if action == 0:
             continue
         return selected_languages, checks, action == 1, False, False, False, False, False, False, False, False
@@ -3273,6 +4117,60 @@ def _print_errors(errors: list[str]) -> int:
     for error in errors:
         print(f"[ERROR] {error}")
     return 1 if errors else 0
+
+
+def _resolve_nvda_locale_support(
+    nvda_locale_dirs: list[Path] | None,
+    checks: set[str],
+) -> tuple[set[str] | None, list[Path]]:
+    locale_dirs = nvda_locale_dirs or list(DEFAULT_NVDA_LOCALE_DIRS)
+    supported_languages, found_locale_dirs = _supported_nvda_languages_from_dirs(locale_dirs)
+    if CHECK_LANGUAGE in checks and supported_languages is None:
+        print("[WARN] NVDA locale folder was not found; language-code support check is skipped.")
+    return supported_languages, found_locale_dirs
+
+
+def _print_msgmerge_discovery(configured_msgmerge: Path | None) -> Path | None:
+    msgmerge_path = _find_msgmerge(configured_msgmerge)
+    if msgmerge_path:
+        print(f"msgmerge: {msgmerge_path}")
+    else:
+        print("[INFO] msgmerge was not found; using internal PO merger.")
+    print("")
+    return msgmerge_path
+
+
+def _run_doc_conversion(selected_languages: list[str] | None, *, to_markdown: bool) -> int:
+    target_languages, selection_errors = _doc_target_languages(selected_languages, allow_create=False, include_en=True)
+    if selection_errors:
+        return _print_errors(selection_errors)
+    all_errors: list[str] = []
+    converted_count = 0
+    for lang in target_languages:
+        doc_dir = DOC_DIR / lang
+        html_file = doc_dir / "readme.html"
+        md_file = doc_dir / "readme.md"
+        src_file, dst_file = (html_file, md_file) if to_markdown else (md_file, html_file)
+        if not src_file.is_file():
+            if selected_languages is not None:
+                kind = "HTML" if to_markdown else "Markdown"
+                all_errors.append(f"{lang}: documentation {kind} not found: {_relative_to_addon(src_file)}")
+            continue
+        success, msg = (
+            _convert_html_file_to_md(html_file, md_file)
+            if to_markdown
+            else _convert_md_file_to_html(md_file, html_file, lang)
+        )
+        if success:
+            print(f"Converted {_relative_to_addon(src_file)} -> {_relative_to_addon(dst_file)}")
+            converted_count += 1
+        else:
+            all_errors.append(msg)
+    if selected_languages is None and converted_count == 0 and not all_errors:
+        src_kind = "HTML" if to_markdown else "Markdown"
+        dst_kind = "Markdown" if to_markdown else "HTML"
+        print(f"[INFO] No documentation {src_kind} files found to convert to {dst_kind}.")
+    return _print_errors(all_errors)
 
 
 def main() -> int:
@@ -3396,10 +4294,13 @@ def main() -> int:
     args = parser.parse_args()
     if args.language and args.all_languages:
         parser.error("--language and --all-languages cannot be used together.")
-    try:
-        checks = _parse_checks(args.checks, args.strict)
-    except ValueError as exc:
-        parser.error(str(exc))
+    msgfmt_path = _find_msgfmt(args.msgfmt)
+    if args.msgfmt is not None and msgfmt_path is None:
+        parser.error(f"--msgfmt path does not exist or is not a valid file: {args.msgfmt}")
+
+    if args.msgmerge is not None and _find_msgmerge(args.msgmerge) is None:
+        parser.error(f"--msgmerge path does not exist or is not a valid file: {args.msgmerge}")
+
     selected_languages = None if args.all_languages else args.language
     check_only = args.check
     extract_template = args.extract_template
@@ -3413,6 +4314,11 @@ def main() -> int:
     md_to_html = args.md_to_html
     using_menu = args.menu or len(sys.argv) == 1
     if using_menu:
+        try:
+            checks = _parse_checks(args.checks, args.strict)
+        except ValueError as exc:
+            parser.error(str(exc))
+        build_ui = False
         menu_options = _interactive_options(checks)
         if menu_options is None:
             return 0
@@ -3442,57 +4348,68 @@ def main() -> int:
             )
         ):
             build_ui = True
-    elif not args.checks:
-        checks = set(DEFAULT_DOC_CHECKS) if check_docs or build_docs else set(DEFAULT_UI_CHECKS)
-
-    action_flags = [
-        ("--check", check_only),
-        ("--extract-template", extract_template),
-        ("--update-po", update_po),
-        ("--build-ui", build_ui),
-        ("--check-docs", check_docs),
-        ("--extract-doc-template", extract_doc_template),
-        ("--update-doc-po", update_doc_po),
-        ("--build-docs", build_docs),
-        ("--html-to-md", html_to_md),
-        ("--md-to-html", md_to_html),
-    ]
-    chosen_actions = [flag for flag, enabled in action_flags if enabled]
-    if len(chosen_actions) > 1:
-        parser.error(f"{chosen_actions[0]} cannot be combined with {chosen_actions[1]}.")
+    else:
+        action_flags = [
+            ("--check", check_only),
+            ("--extract-template", extract_template),
+            ("--update-po", update_po),
+            ("--build-ui", build_ui),
+            ("--check-docs", check_docs),
+            ("--extract-doc-template", extract_doc_template),
+            ("--update-doc-po", update_doc_po),
+            ("--build-docs", build_docs),
+            ("--html-to-md", html_to_md),
+            ("--md-to-html", md_to_html),
+        ]
+        chosen_actions = [flag for flag, enabled in action_flags if enabled]
+        if len(chosen_actions) > 1:
+            parser.error(f"{chosen_actions[0]} cannot be combined with {chosen_actions[1]}.")
+        is_doc_check_mode = check_docs or build_docs
+        try:
+            checks = _parse_checks(
+                args.checks,
+                args.strict,
+                default_checks=DEFAULT_DOC_CHECKS if is_doc_check_mode else DEFAULT_UI_CHECKS,
+                valid_checks=DEFAULT_DOC_CHECKS if is_doc_check_mode else None,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
 
     if args.msgmerge is not None and not update_po and not update_doc_po:
         parser.error("--msgmerge can only be used with --update-po or --update-doc-po.")
 
-    msgfmt_path = _find_msgfmt(args.msgfmt)
-    if args.msgfmt is not None and msgfmt_path is None:
-        parser.error(f"--msgfmt path does not exist or is not a valid file: {args.msgfmt}")
+    msgfmt_kwargs: dict[str, Path] = (
+        {"msgfmt_path": msgfmt_path} if args.msgfmt is not None and msgfmt_path is not None else {}
+    )
 
-    if args.msgmerge is not None and _find_msgmerge(args.msgmerge) is None:
-        parser.error(f"--msgmerge path does not exist or is not a valid file: {args.msgmerge}")
-
-    if check_docs:
+    if check_docs or build_docs:
+        doc_check_only = bool(check_docs)
         target_languages, selection_errors = _doc_target_languages(
             selected_languages, allow_create=False, include_en=True
         )
+        if not doc_check_only and selection_errors:
+            return _print_errors(selection_errors)
         if not DOC_EN_PATH.is_file():
             print(f"[ERROR] English source document missing: {_relative_to_addon(DOC_EN_PATH)}")
             return 1
-        locale_dirs = args.nvda_locale_dir or list(DEFAULT_NVDA_LOCALE_DIRS)
-        supported_languages, found_locale_dirs = _supported_nvda_languages_from_dirs(locale_dirs)
-        if CHECK_LANGUAGE in checks and supported_languages is None:
-            print("[WARN] NVDA locale folder was not found; language-code support check is skipped.")
-        _print_doc_run_summary(target_languages, checks, check_only=True, found_locale_dirs=found_locale_dirs)
-        all_errors: list[str] = list(selection_errors)
+        supported_languages, found_locale_dirs = _resolve_nvda_locale_support(args.nvda_locale_dir, checks)
+        if not doc_check_only:
+            try:
+                pot_path = _write_doc_pot()
+                print(f"Updated documentation string template: {_relative_to_addon(pot_path)}")
+            except (RuntimeError, ValueError, OSError) as exc:
+                return _print_errors([str(exc)])
+        _print_doc_run_summary(target_languages, checks, check_only=doc_check_only, found_locale_dirs=found_locale_dirs)
+        all_errors = list(selection_errors) if doc_check_only else []
         for lang in target_languages:
             doc_dir = DOC_DIR / lang
-            kwargs = {"msgfmt_path": msgfmt_path} if args.msgfmt is not None else {}
+            html_path = doc_dir / "readme.html"
             errors = _check_doc_language(
                 lang,
                 supported_languages=supported_languages,
                 checks=checks,
-                check_only=True,
-                **kwargs,
+                check_only=doc_check_only,
+                **msgfmt_kwargs,
             )
             if errors:
                 all_errors.extend(errors)
@@ -3501,8 +4418,26 @@ def main() -> int:
                 print(f"Checked {_relative_to_addon(doc_dir)}")
                 print("  Passed: English source document")
                 continue
-            print(f"Checked {_relative_to_addon(doc_dir)}")
-            print(f"  Passed: {_describe_doc_checks(checks)}")
+            if doc_check_only:
+                print(f"Checked {_relative_to_addon(doc_dir)}")
+                print(f"  Passed: {_describe_doc_checks(checks)}")
+                continue
+            try:
+                built, msg = _build_doc_for_language(lang)
+            except (OSError, RuntimeError, ValueError) as exc:
+                all_errors.append(f"{lang}: failed to build documentation: {exc}")
+                continue
+            if built:
+                print(f"Updated {_relative_to_addon(doc_dir)}")
+                print(f"  Passed: {_describe_doc_checks(checks)}")
+                print("  Generated: readme.html")
+            elif (
+                html_path.is_file() and not (doc_dir / "readme.po").is_file() and not (doc_dir / "readme.md").is_file()
+            ):
+                print(f"Checked {_relative_to_addon(doc_dir)}")
+                print(f"  Passed: {_describe_doc_checks(checks)}")
+            else:
+                all_errors.append(msg)
         return _print_errors(all_errors)
 
     if extract_doc_template:
@@ -3516,22 +4451,17 @@ def main() -> int:
     if update_doc_po:
         if not using_menu and not args.all_languages and selected_languages is None:
             parser.error("--update-doc-po requires --language or --all-languages.")
-        try:
-            pot_path = _write_doc_pot()
-        except (RuntimeError, ValueError, OSError) as exc:
-            return _print_errors([str(exc)])
-        print(f"Updated documentation string template: {_relative_to_addon(pot_path)}")
         target_languages, selection_errors = _doc_target_languages(
             selected_languages, allow_create=True, include_en=False
         )
         if selection_errors:
             return _print_errors(selection_errors)
-        msgmerge_path = _find_msgmerge(args.msgmerge)
-        if msgmerge_path:
-            print(f"msgmerge: {msgmerge_path}")
-        else:
-            print("[INFO] msgmerge was not found; using internal PO merger.")
-        print("")
+        try:
+            pot_path = _write_doc_pot()
+        except (RuntimeError, ValueError, OSError) as exc:
+            return _print_errors([str(exc)])
+        print(f"Updated documentation string template: {_relative_to_addon(pot_path)}")
+        msgmerge_path = _print_msgmerge_discovery(args.msgmerge)
         all_errors = []
         for lang in target_languages:
             try:
@@ -3546,115 +4476,11 @@ def main() -> int:
             print(f"  Removed obsolete entries: {removed}")
         return _print_errors(all_errors)
 
-    if build_docs:
-        target_languages, selection_errors = _doc_target_languages(
-            selected_languages, allow_create=False, include_en=True
-        )
-        if not DOC_EN_PATH.is_file():
-            print(f"[ERROR] English source document missing: {_relative_to_addon(DOC_EN_PATH)}")
-            return 1
-        locale_dirs = args.nvda_locale_dir or list(DEFAULT_NVDA_LOCALE_DIRS)
-        supported_languages, found_locale_dirs = _supported_nvda_languages_from_dirs(locale_dirs)
-        if CHECK_LANGUAGE in checks and supported_languages is None:
-            print("[WARN] NVDA locale folder was not found; language-code support check is skipped.")
-        try:
-            pot_path = _write_doc_pot()
-            print(f"Updated documentation string template: {_relative_to_addon(pot_path)}")
-        except (RuntimeError, ValueError, OSError) as exc:
-            return _print_errors([str(exc)])
-        _print_doc_run_summary(target_languages, checks, check_only=False, found_locale_dirs=found_locale_dirs)
-
-        all_errors = list(selection_errors)
-        for lang in target_languages:
-            doc_dir = DOC_DIR / lang
-            html_path = doc_dir / "readme.html"
-            kwargs = {"msgfmt_path": msgfmt_path} if args.msgfmt is not None else {}
-            errors = _check_doc_language(
-                lang,
-                supported_languages=supported_languages,
-                checks=checks,
-                check_only=False,
-                **kwargs,
-            )
-            if errors:
-                all_errors.extend(errors)
-                continue
-            if lang == "en":
-                print(f"Checked {_relative_to_addon(doc_dir)}")
-                print("  Passed: English source document")
-                continue
-
-            try:
-                built, msg = _build_doc_for_language(lang)
-            except (OSError, RuntimeError, ValueError) as exc:
-                all_errors.append(f"{lang}: failed to build documentation: {exc}")
-                continue
-            if built:
-                print(f"Updated {_relative_to_addon(doc_dir)}")
-                print(f"  Passed: {_describe_doc_checks(checks)}")
-                print("  Generated: readme.html")
-            elif html_path.is_file():
-                print(f"Checked {_relative_to_addon(doc_dir)}")
-                print(f"  Passed: {_describe_doc_checks(checks)}")
-            else:
-                all_errors.append(msg)
-        return _print_errors(all_errors)
-
-    if html_to_md:
+    if html_to_md or md_to_html:
         if not using_menu and not args.all_languages and selected_languages is None:
-            parser.error("--html-to-md requires --language or --all-languages.")
-        target_languages, selection_errors = _doc_target_languages(
-            selected_languages, allow_create=False, include_en=True
-        )
-        if selection_errors:
-            return _print_errors(selection_errors)
-        all_errors = []
-        converted_count = 0
-        for lang in target_languages:
-            doc_dir = DOC_DIR / lang
-            html_file = doc_dir / "readme.html"
-            md_file = doc_dir / "readme.md"
-            if not html_file.is_file():
-                if selected_languages is not None:
-                    all_errors.append(f"{lang}: documentation HTML not found: {_relative_to_addon(html_file)}")
-                continue
-            success, msg = _convert_html_file_to_md(html_file, md_file)
-            if success:
-                print(f"Converted {_relative_to_addon(html_file)} -> {_relative_to_addon(md_file)}")
-                converted_count += 1
-            else:
-                all_errors.append(msg)
-        if selected_languages is None and converted_count == 0 and not all_errors:
-            print("[INFO] No documentation HTML files found to convert to Markdown.")
-        return _print_errors(all_errors)
-
-    if md_to_html:
-        if not using_menu and not args.all_languages and selected_languages is None:
-            parser.error("--md-to-html requires --language or --all-languages.")
-        target_languages, selection_errors = _doc_target_languages(
-            selected_languages, allow_create=True, include_en=True
-        )
-        if selection_errors:
-            return _print_errors(selection_errors)
-        all_errors = []
-        converted_count = 0
-        for lang in target_languages:
-            doc_dir = DOC_DIR / lang
-            md_file = doc_dir / "readme.md"
-            html_file = doc_dir / "readme.html"
-            if not md_file.is_file():
-                if selected_languages is not None:
-                    all_errors.append(f"{lang}: documentation Markdown not found: {_relative_to_addon(md_file)}")
-                continue
-            success, msg = _convert_md_file_to_html(md_file, html_file, lang)
-            if success:
-                print(f"Converted {_relative_to_addon(md_file)} -> {_relative_to_addon(html_file)}")
-                converted_count += 1
-            else:
-                all_errors.append(msg)
-        if selected_languages is None and converted_count == 0 and not all_errors:
-            print("[INFO] No documentation Markdown files found to convert to HTML.")
-        return _print_errors(all_errors)
+            flag_name = "--html-to-md" if html_to_md else "--md-to-html"
+            parser.error(f"{flag_name} requires --language or --all-languages.")
+        return _run_doc_conversion(selected_languages, to_markdown=bool(html_to_md))
 
     if update_po:
         if not using_menu and not args.all_languages and selected_languages is None:
@@ -3668,21 +4494,16 @@ def main() -> int:
         except (ValueError, OSError) as exc:
             return _print_errors([str(exc)])
     if update_po:
+        language_dirs, selection_errors = _language_dirs(selected_languages, allow_create=True)
+        if selection_errors:
+            return _print_errors(selection_errors)
         try:
             required_messages = _translatable_source_messages()
             template_path = _write_pot(required_messages)
         except (ValueError, OSError) as exc:
             return _print_errors([str(exc)])
         print(f"Updated source string template: {_relative_to_addon(template_path)}")
-        language_dirs, selection_errors = _language_dirs(selected_languages, allow_create=True)
-        if selection_errors:
-            return _print_errors(selection_errors)
-        msgmerge_path = _find_msgmerge(args.msgmerge)
-        if msgmerge_path:
-            print(f"msgmerge: {msgmerge_path}")
-        else:
-            print("[INFO] msgmerge was not found; using internal PO merger.")
-        print("")
+        msgmerge_path = _print_msgmerge_discovery(args.msgmerge)
         all_errors = []
         for language_dir in language_dirs:
             try:
@@ -3701,11 +4522,10 @@ def main() -> int:
             print(f"  Removed obsolete entries: {removed}")
         return _print_errors(all_errors)
 
-    locale_dirs = args.nvda_locale_dir or list(DEFAULT_NVDA_LOCALE_DIRS)
     language_dirs, selection_errors = _language_dirs(selected_languages)
-    supported_languages, found_locale_dirs = _supported_nvda_languages_from_dirs(locale_dirs)
-    if CHECK_LANGUAGE in checks and supported_languages is None:
-        print("[WARN] NVDA locale folder was not found; language-code support check is skipped.")
+    if not check_only and selection_errors:
+        return _print_errors(selection_errors)
+    supported_languages, found_locale_dirs = _resolve_nvda_locale_support(args.nvda_locale_dir, checks)
     try:
         source_messages = (
             _translatable_source_messages()
@@ -3723,13 +4543,12 @@ def main() -> int:
             return _print_errors([str(exc)])
     _print_run_summary(language_dirs, checks, check_only, found_locale_dirs)
     for language_dir in language_dirs:
-        kwargs = {"msgfmt_path": msgfmt_path} if args.msgfmt is not None else {}
         file_errors = _check_language_files(
             language_dir,
             supported_languages,
             checks,
             check_only,
-            **kwargs,
+            **msgfmt_kwargs,
         )
         if file_errors:
             all_errors.extend(file_errors)

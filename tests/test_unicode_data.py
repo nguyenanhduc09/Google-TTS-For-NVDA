@@ -12,7 +12,16 @@ from pathlib import Path
 from unittest import mock
 
 import generate_unicode_data
-from tests.test_support import UNICODE_DATA_PATH, load_driver_module
+from tests.test_support import (
+    UNICODE_DATA_PATH,
+    load_driver_module,
+)
+from tests.test_support import (
+    captured_prints as _printed,
+)
+from tests.test_support import (
+    write_test_engine as _write_engine,
+)
 
 EXPECTED_LANGUAGE_SCRIPT_GROUPS = {
     ("Arabic",): ("ar", "ur"),
@@ -105,7 +114,7 @@ class UnicodeDataTests(unittest.TestCase):
         cls.supported_roots = set()
         for package in packages:
             parts = str(package.get("id", "")).split("-")
-            if len(parts) >= 2 and re.fullmatch(r"[a-z]{2,3}", parts[0]) and re.fullmatch(r"[a-z]{2}", parts[1]):
+            if len(parts) >= 2 and re.fullmatch(r"[a-z]{2,3}", parts[0]) and re.fullmatch(r"[a-z]{2}|\d{3}", parts[1]):
                 cls.supported_roots.add(parts[0])
 
     def test_generated_versions_are_pinned(self) -> None:
@@ -316,18 +325,6 @@ class UnicodeDataTests(unittest.TestCase):
         self.assertIn("ğ", latin_exemplars["tr"])
 
 
-def _write_engine(root: Path, version: str, *, voices: bool = True) -> Path:
-    versionDir = root / version
-    versionDir.mkdir(parents=True, exist_ok=True)
-    if voices:
-        (versionDir / "voices.json").write_text("[]", encoding="utf-8")
-    return versionDir
-
-
-def _printed(printMock: mock.MagicMock) -> str:
-    return " ".join(str(call.args[0]) for call in printMock.call_args_list if call.args)
-
-
 class ParseUcdRecordsTests(unittest.TestCase):
     """Verify _parse_ucd_records parses UCD semicolon-delimited files."""
 
@@ -530,7 +527,7 @@ class RenderModuleTests(unittest.TestCase):
 
 
 class ConfiguredVoicesJsonTests(unittest.TestCase):
-    """Verify the bundled catalog gate fails closed on any unverified engine version."""
+    """Verify generate_unicode_data resolves the pinned bundled engine catalog via shared helpers."""
 
     def test_reads_the_version_pinned_by_the_catalog_module(self) -> None:
         self.assertRegex(generate_unicode_data._configured_engine_version(), r"^\d{8}\.\d+$")
@@ -541,22 +538,15 @@ class ConfiguredVoicesJsonTests(unittest.TestCase):
         self.assertTrue(voicesJson.is_file(), voicesJson)
         self.assertEqual(generate_unicode_data._configured_engine_version(), voicesJson.parent.name)
 
-    def test_returns_the_catalog_when_versions_match(self) -> None:
+    def test_delegates_version_gate_to_select_engine_voices_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             versionDir = _write_engine(Path(tmp), "20260820.1")
             with (
                 mock.patch.object(generate_unicode_data, "_configured_engine_version", return_value="20260820.1"),
-                mock.patch("builtins.print") as printMock,
+                mock.patch("builtins.print"),
             ):
                 selected = generate_unicode_data._configured_voices_json([Path(tmp)])
             self.assertEqual(versionDir / "voices.json", selected)
-            printed = _printed(printMock)
-            self.assertIn("Target engine catalog", printed)
-            self.assertNotIn("ABORT", printed)
-
-    def test_aborts_when_the_tree_is_ahead_of_the_catalog_module(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_engine(Path(tmp), "20260820.1")
             with (
                 mock.patch.object(generate_unicode_data, "_configured_engine_version", return_value="20250101.1"),
                 mock.patch("builtins.print") as printMock,
@@ -564,47 +554,6 @@ class ConfiguredVoicesJsonTests(unittest.TestCase):
             ):
                 generate_unicode_data._configured_voices_json([Path(tmp)])
             self.assertIn("Bump ENGINE_VERSION", _printed(printMock))
-
-    def test_aborts_when_the_catalog_module_points_at_an_unbundled_engine(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_engine(Path(tmp), "20260820.1")
-            with (
-                mock.patch.object(generate_unicode_data, "_configured_engine_version", return_value="20260920.1"),
-                mock.patch("builtins.print") as printMock,
-                self.assertRaises(SystemExit),
-            ):
-                generate_unicode_data._configured_voices_json([Path(tmp)])
-            self.assertIn("no bundled engine directory", _printed(printMock))
-
-    def test_aborts_when_the_engine_version_cannot_be_read(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_engine(Path(tmp), "20260820.1")
-            with (
-                mock.patch.object(generate_unicode_data, "_configured_engine_version", return_value=""),
-                mock.patch("builtins.print") as printMock,
-                self.assertRaises(SystemExit),
-            ):
-                generate_unicode_data._configured_voices_json([Path(tmp)])
-            self.assertIn("Could not read ENGINE_VERSION", _printed(printMock))
-
-    def test_aborts_when_the_newest_engine_has_no_voices_json(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_engine(Path(tmp), "20260820.1", voices=False)
-            with (
-                mock.patch.object(generate_unicode_data, "_configured_engine_version", return_value="20260820.1"),
-                mock.patch("builtins.print") as printMock,
-                self.assertRaises(SystemExit),
-            ):
-                generate_unicode_data._configured_voices_json([Path(tmp)])
-            self.assertIn("has no voices.json", _printed(printMock))
-
-    def test_aborts_when_no_version_directory_exists(self) -> None:
-        with (
-            tempfile.TemporaryDirectory() as tmp,
-            mock.patch("builtins.print"),
-            self.assertRaises(SystemExit),
-        ):
-            generate_unicode_data._configured_voices_json([Path(tmp)])
 
 
 if __name__ == "__main__":

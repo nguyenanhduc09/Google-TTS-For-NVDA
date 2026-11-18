@@ -233,11 +233,20 @@ The Chromium browser runtime, WASM TTS Engine, and selected voice package requir
 Because automatic language profiles manage separate voice, variant, rate, pitch, and spelling options for every enabled language, standard single-voice settings cannot represent all active profiles simultaneously. Presenting them separately protects both your normal voice preferences and your per-language configurations. Normal controls return immediately when automatic language profiles are disabled.
 
 ### Why do some voice package families show as "Not supported by the bundled engine"?
-In Google TTS Voice Manager, certain voice packages (such as packages containing **Locomel** or **Lemonbalm**) are marked with the status **Not supported by the bundled engine** and cannot be used:
+Out of the 180 voice packages listed in Google TTS Voice Manager, **168 are supported** (including standard multi-speaker `multi` voices, `seanet` enhanced voices, classical English `afh`/`fis` voices, and 8 standard **Lemonbalm** packages), while **12 packages**—containing **`locomel`** (6 packages) or **`darwinnrio`** (6 packages)—are marked **Not supported by the bundled engine** and cannot be used:
 
-* **Designed for Mobile Hardware:** Packages like *Lemonbalm* and *Locomel* were developed for Android devices and rely on specialized on-device neural hardware accelerators (such as Google's Edge TPU / Tensor NPU, codenamed *Darwinn Rio* in Google Pixel devices). Standard desktop computers do not have these mobile neural chips.
-* **WASM TTS Engine Capabilities:** The Chromium WebAssembly (WASM) TTS engine bundled with Google Chrome and this add-on is compiled specifically for desktop PC environments. While it fully supports Google's standard multi-speaker voices (`multi`), neural vocoder enhancement (`seanet`), and classical English packages (`afh`, `fis`), it deliberately omits the execution graphs and neural operators required by Locomel and Lemonbalm. In fact, Google's official Chrome TTS catalog only ships `multi` and `seanet` packages.
-* **Proactive Protection:** To prevent synthesizer errors, silent speech, or browser crashes, Google TTS For NVDA identifies these incompatible package families in the catalog and marks them as unsupported in advance. They are kept in the catalog so that if a future upstream WASM engine update introduces software decoding for them, they can be enabled smoothly.
+* **Standard CPU `Lemonbalm` voices are supported (8 packages):** Unlike the `darwinnrio` versions below, standard `lemonbalm` packages run on an ordinary computer processor (CPU) and work with the add-on's desktop WASM speech engine. Each one depends on its language's base `*-x-multi` package, which Voice Manager can download automatically for you:
+  * `de-de-x-news-lemonbalm`
+  * `en-in-x-news-lemonbalm`
+  * `en-us-x-blueginger-lemonbalm`
+  * `en-us-x-news-lemonbalm`
+  * `es-us-x-news-lemonbalm`
+  * `fr-fr-x-multi-lemonbalm`
+  * `hi-in-x-news-lemonbalm`
+  * `pt-br-x-news-lemonbalm`
+* **Why `darwinnrio` (`-darwinnrio-lemonbalm`, 6 packages) is not supported:** In Google's Android TTS app, `darwinnrio` packages are hardware-specific versions built for mobile AI accelerator chips (*Darwinn Rio* / Edge TPU) on devices such as Google Pixel phones. Standard Windows PCs do not have those mobile chips, and the desktop browser engine runs voices on your CPU instead. Every `darwinnrio` language already has a supported standard `lemonbalm` version in the list above you can download instead.
+* **Why `locomel` (6 packages) is not supported:** `Locomel` uses a separate Android-only voice engine design that Google did not include in the desktop Chromium WASM speech engine, so the add-on cannot play those packages.
+* **Why they remain visible in Voice Manager:** Keeping the full 180-package Google catalog intact while blocking incompatible packages in advance prevents silent speech, errors, or browser crashes—and allows those families to be enabled smoothly if a future desktop WASM engine update adds support for them.
 
 ### Does Microsoft Edge require WebView2 Runtime?
 Yes, but only when Microsoft Edge is the effective runtime. Google Chrome and Brave operate independently and do not require WebView2.

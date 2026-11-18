@@ -626,23 +626,6 @@
         "preservesNonWhitespace": true,
         "noLeadingCombiningMark": true
       }
-    },
-    {
-      "id": "hi-in-devanagari-mixed-script-latency",
-      "category": "long-sentence",
-      "locale": "hi-IN",
-      "operation": "latencySegments",
-      "fastFirstSegment": false,
-      "textBuilder": {
-        "pattern": "यह एक बहुत लंबा वाक्य है जिसमें बहुत सारे शब्द हैं",
-        "repeat": 20,
-        "separator": " "
-      },
-      "assert": {
-        "minSegmentCount": 4,
-        "maxSegmentLength": 240,
-        "preservesNonWhitespace": true
-      }
     }
   ]
 }

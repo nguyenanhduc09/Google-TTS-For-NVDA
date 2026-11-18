@@ -15,18 +15,8 @@ from pathlib import Path
 from unittest import mock
 
 import generate_voices_json
-
-
-def _write_engine(root: Path, version: str, *, voices: bool = True) -> Path:
-    versionDir = root / version
-    versionDir.mkdir(parents=True, exist_ok=True)
-    if voices:
-        (versionDir / "voices.json").write_text("[]", encoding="utf-8")
-    return versionDir
-
-
-def _printed(printMock: mock.MagicMock) -> str:
-    return " ".join(str(call.args[0]) for call in printMock.call_args_list if call.args)
+from tests.test_support import captured_prints as _printed
+from tests.test_support import write_test_engine as _write_engine
 
 
 class VersionSortKeyTests(unittest.TestCase):
@@ -92,9 +82,7 @@ class LatestEngineVoicesJsonTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for version in ("20260625.1", "20260820.1"):
-                versionDir = root / version
-                versionDir.mkdir()
-                (versionDir / "voices.json").write_text("[]", encoding="utf-8")
+                _write_engine(root, version)
             (root / "notes").mkdir()
             (root / "readme.txt").write_text("ignored", encoding="utf-8")
             self.assertEqual(
@@ -155,6 +143,24 @@ class EngineVersionAlignmentTests(unittest.TestCase):
 
 
 class SelectEngineVoicesJsonTests(unittest.TestCase):
+    def _assert_select_aborts(
+        self,
+        expected_substring: str,
+        *,
+        engine_version: str = "20260820.1",
+        catalog_version: str = "20260820.1",
+        voices: bool = True,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_engine(Path(tmp), engine_version, voices=voices)
+            with (
+                mock.patch.object(generate_voices_json, "catalog_engine_version", return_value=catalog_version),
+                mock.patch("builtins.print") as printMock,
+                self.assertRaises(SystemExit),
+            ):
+                generate_voices_json.select_engine_voices_json([Path(tmp)])
+            self.assertIn(expected_substring, _printed(printMock))
+
     def test_aborts_when_no_engine_catalog_exists(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -164,48 +170,16 @@ class SelectEngineVoicesJsonTests(unittest.TestCase):
             generate_voices_json.select_engine_voices_json([Path(tmp)])
 
     def test_aborts_when_the_newest_engine_has_no_voices_json(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_engine(Path(tmp), "20260820.1", voices=False)
-            with (
-                mock.patch.object(generate_voices_json, "catalog_engine_version", return_value="20260820.1"),
-                mock.patch("builtins.print") as printMock,
-                self.assertRaises(SystemExit),
-            ):
-                generate_voices_json.select_engine_voices_json([Path(tmp)])
-            self.assertIn("has no voices.json", _printed(printMock))
+        self._assert_select_aborts("has no voices.json", voices=False)
 
     def test_aborts_when_the_tree_is_ahead_of_the_catalog_module(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_engine(Path(tmp), "20260820.1")
-            with (
-                mock.patch.object(generate_voices_json, "catalog_engine_version", return_value="20250101.1"),
-                mock.patch("builtins.print") as printMock,
-                self.assertRaises(SystemExit),
-            ):
-                generate_voices_json.select_engine_voices_json([Path(tmp)])
-            self.assertIn("Bump ENGINE_VERSION", _printed(printMock))
+        self._assert_select_aborts("Bump ENGINE_VERSION", catalog_version="20250101.1")
 
     def test_aborts_when_the_catalog_module_points_at_an_unbundled_engine(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_engine(Path(tmp), "20260820.1")
-            with (
-                mock.patch.object(generate_voices_json, "catalog_engine_version", return_value="20260920.1"),
-                mock.patch("builtins.print") as printMock,
-                self.assertRaises(SystemExit),
-            ):
-                generate_voices_json.select_engine_voices_json([Path(tmp)])
-            self.assertIn("no bundled engine directory", _printed(printMock))
+        self._assert_select_aborts("no bundled engine directory", catalog_version="20260920.1")
 
     def test_aborts_when_the_engine_version_cannot_be_read(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_engine(Path(tmp), "20260820.1")
-            with (
-                mock.patch.object(generate_voices_json, "catalog_engine_version", return_value=""),
-                mock.patch("builtins.print") as printMock,
-                self.assertRaises(SystemExit),
-            ):
-                generate_voices_json.select_engine_voices_json([Path(tmp)])
-            self.assertIn("Could not read ENGINE_VERSION", _printed(printMock))
+        self._assert_select_aborts("Could not read ENGINE_VERSION", catalog_version="")
 
     def test_succeeds_when_versions_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,6 +229,23 @@ class ParseArgsTests(unittest.TestCase):
     def test_explicit_catalog_is_a_path(self) -> None:
         args = generate_voices_json._parse_args(["--voices-json", "engine/voices.json"])
         self.assertEqual(Path("engine") / "voices.json", args.voices_json)
+
+
+class DependentVoiceIdTests(unittest.TestCase):
+    def test_resolves_base_package_for_delta_families(self) -> None:
+        cases = (
+            ("en-us-x-multi-seanet", "en-us-x-multi"),
+            ("en-us-x-afh-seanet", "en-us-x-afh"),
+            ("en-us-x-news-lemonbalm", "en-us-x-multi"),
+            ("en-us-x-blueginger-lemonbalm", "en-us-x-multi"),
+            ("fr-fr-x-multi-lemonbalm", "fr-fr-x-multi"),
+            ("en-gb-x-multi-locomel", "en-gb-x-multi"),
+            ("en-us-x-multi", ""),
+            ("en-us-x-afh", ""),
+        )
+        for package_id, expected in cases:
+            with self.subTest(package_id=package_id):
+                self.assertEqual(expected, generate_voices_json.dependent_voice_id_for_package(package_id))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import functools
+import http.client
 import http.server
 import json
 import os
@@ -47,7 +49,7 @@ except Exception:  # pragma: no cover - used by standalone smoke tests.
         return message
 
 
-from . import voice_store
+from . import audio_math, voice_store
 from .catalog import ENGINE_DIR, VoiceCatalog, is_package_supported_by_engine
 from .websocketClientRepo import websocket
 
@@ -79,6 +81,7 @@ CONFIG_AUTO_LANGUAGE_DETECTION = "autoLanguageDetection"
 CONFIG_AUTO_LANGUAGE_PREFERRED = "autoLanguagePreferred"
 CONFIG_AUTO_LANGUAGE_CANDIDATES = "autoLanguageCandidates"
 CONFIG_AUTO_LANGUAGE_PROFILES = "autoLanguageProfiles"
+CONFIG_AUTO_UPDATE_CHECK = "autoUpdateCheckOnStartup"
 CONFIG_KEEP_BROWSER_RUNTIME_READY = "keepBrowserRuntimeReady"
 BROWSER_RUNTIME_EDGE = "edge"
 BROWSER_RUNTIME_CHROME = "chrome"
@@ -88,13 +91,68 @@ DEFAULT_AUTO_LANGUAGE_DETECTION = False
 DEFAULT_AUTO_LANGUAGE_PREFERRED = ""
 DEFAULT_AUTO_LANGUAGE_CANDIDATES = ""
 DEFAULT_AUTO_LANGUAGE_PROFILES = ""
+DEFAULT_AUTO_UPDATE_CHECK = False
 DEFAULT_KEEP_BROWSER_RUNTIME_READY = False
+CONFIG_SPEC: dict[str, str] = {
+    CONFIG_AUTO_LANGUAGE_CANDIDATES: f"string(default={DEFAULT_AUTO_LANGUAGE_CANDIDATES})",
+    CONFIG_AUTO_LANGUAGE_DETECTION: f"boolean(default={str(DEFAULT_AUTO_LANGUAGE_DETECTION).lower()})",
+    CONFIG_AUTO_LANGUAGE_PREFERRED: f"string(default={DEFAULT_AUTO_LANGUAGE_PREFERRED})",
+    CONFIG_AUTO_LANGUAGE_PROFILES: f"string(default={DEFAULT_AUTO_LANGUAGE_PROFILES})",
+    CONFIG_AUTO_UPDATE_CHECK: f"boolean(default={str(DEFAULT_AUTO_UPDATE_CHECK).lower()})",
+    CONFIG_BROWSER_RUNTIME: f"string(default={DEFAULT_BROWSER_RUNTIME})",
+    CONFIG_KEEP_BROWSER_RUNTIME_READY: f"boolean(default={str(DEFAULT_KEEP_BROWSER_RUNTIME_READY).lower()})",
+}
 BROWSER_RUNTIME_LABELS = {
     BROWSER_RUNTIME_EDGE: "Microsoft Edge",
     BROWSER_RUNTIME_CHROME: "Google Chrome",
     BROWSER_RUNTIME_BRAVE: "Brave",
 }
 BROWSER_RUNTIMES = (BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE)
+
+
+def ensure_config_spec() -> None:
+    """Register the add-on config spec and evict any stale unvalidated section cache.
+
+    NVDA initializes speech (core.py:speech.initialize) before global plugins
+    (core.py:globalPluginHandler.initialize). If SynthDriver.__init__ accesses
+    config.conf[CONFIG_SECTION] before config.conf.spec[CONFIG_SECTION] is set,
+    NVDA's AggregatedSection.__getitem__ caches KeyError (or an empty _spec) on
+    rootSection._cache[CONFIG_SECTION], causing subsequent config reads/writes
+    to raise KeyError even after the global plugin sets config.conf.spec.
+    """
+    if config is None:
+        return
+    conf = getattr(config, "conf", None)
+    if conf is None:
+        return
+    spec = getattr(conf, "spec", None)
+    if spec is None:
+        return
+    existing = spec.get(CONFIG_SECTION) if hasattr(spec, "get") else None
+    specChanged = not isinstance(existing, dict)
+    if isinstance(existing, dict):
+        for key, value in CONFIG_SPEC.items():
+            if existing.get(key) != value:
+                specChanged = True
+                break
+    try:
+        spec[CONFIG_SECTION] = dict(CONFIG_SPEC)
+    except Exception:
+        log.debug("Could not register Google TTS config spec.", exc_info=True)
+        return
+    for holder in (conf, getattr(conf, "rootSection", None)):
+        if holder is None:
+            continue
+        cache = getattr(holder, "_cache", None)
+        if not isinstance(cache, dict) or CONFIG_SECTION not in cache:
+            continue
+        cachedValue = cache.get(CONFIG_SECTION)
+        cachedSpec = getattr(cachedValue, "_spec", None)
+        if specChanged or cachedValue is KeyError or isinstance(cachedValue, type) or not cachedSpec:
+            cache.pop(CONFIG_SECTION, None)
+
+
+ensure_config_spec()
 
 
 class CdpError(Exception):
@@ -145,6 +203,8 @@ class _BridgeRequestHandler(http.server.SimpleHTTPRequestHandler):
         **http.server.SimpleHTTPRequestHandler.extensions_map,
         ".wasm": "application/wasm",
         ".js": "application/javascript",
+        ".mjs": "application/javascript",
+        ".json": "application/json",
     }
 
     def end_headers(self) -> None:
@@ -159,16 +219,20 @@ class _BridgeRequestHandler(http.server.SimpleHTTPRequestHandler):
     def translate_path(self, path: str) -> str:
         route = urllib.parse.urlparse(path).path
         if route == "/":
-            return str(WEB_DIR / "index.html")
-        if route == "/voices.json":
-            return str(voice_store.data_root() / "runtime" / "voices.json")
-        if route.startswith("/engine/"):
-            return str(_safe_join(ENGINE_DIR, route[len("/engine/") :]))
-        if route.startswith("/voices/"):
-            return str(_safe_join(voice_store.voice_dir(), route[len("/voices/") :]))
-        if route.endswith(".zvoice"):
-            return str(_safe_join(voice_store.voice_dir(), route.lstrip("/")))
-        return str(_safe_join(WEB_DIR, route.lstrip("/")))
+            target = WEB_DIR / "index.html"
+        elif route == "/voices.json":
+            target = voice_store.data_root() / "runtime" / "voices.json"
+        elif route.startswith("/engine/"):
+            target = _safe_join(ENGINE_DIR, route[len("/engine/") :])
+        elif route.startswith("/voices/"):
+            target = _safe_join(voice_store.voice_dir(), route[len("/voices/") :])
+        elif route.endswith(".zvoice"):
+            target = _safe_join(voice_store.voice_dir(), route.lstrip("/"))
+        else:
+            target = _safe_join(WEB_DIR, route.lstrip("/"))
+        if target.is_dir():
+            return str(WEB_DIR / "__invalid__")
+        return str(target)
 
 
 def _safe_join(root: Path, relative: str) -> Path:
@@ -179,10 +243,13 @@ def _safe_join(root: Path, relative: str) -> Path:
     return target
 
 
+_LOCAL_HTTP_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _read_json_endpoint(port: int, path: str, method: str = "GET", timeout: float = 5) -> Any:
     url = f"http://127.0.0.1:{port}{path}"
     request = urllib.request.Request(url, method=method)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with _LOCAL_HTTP_OPENER.open(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -195,6 +262,15 @@ def _friendly_cdp_error(message: str, technicalDetail: str | None = None) -> Cdp
     if technicalDetail:
         log.debug("Google TTS Chromium browser runtime detail: %s", technicalDetail)
     return CdpError(message, technicalDetail)
+
+
+def _no_browser_runtime_error() -> CdpError:
+    return _friendly_cdp_error(
+        _(
+            "No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
+        ),
+        "No supported Chromium browser runtime executable was found.",
+    )
 
 
 _TRANSIENT_RUNTIME_EVALUATE_ERRORS = (
@@ -217,6 +293,7 @@ _RUNTIME_RECYCLE_ERROR_MARKERS = (
     "Timed out waiting for browser speech audio",
     "Browser DevTools websocket closed",
     "Browser DevTools websocket is not connected",
+    "Could not send CDP command",
     "Runtime.evaluate",
     "WASM TTS engine was not loaded",
 )
@@ -264,31 +341,33 @@ def _process_tree_ids(rootPid: int) -> list[int]:
         ]
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
-    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-    kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
-    kernel32.Process32FirstW.restype = wintypes.BOOL
-    kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))
-    kernel32.Process32NextW.restype = wintypes.BOOL
-    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    createSnapshot = ctypes.WINFUNCTYPE(wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD)(
+        ("CreateToolhelp32Snapshot", kernel32)
+    )
+    process32First = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))(
+        ("Process32FirstW", kernel32)
+    )
+    process32Next = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W))(
+        ("Process32NextW", kernel32)
+    )
+    closeHandle = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE)(("CloseHandle", kernel32))
+    snapshot = createSnapshot(TH32CS_SNAPPROCESS, 0)
     if snapshot == INVALID_HANDLE_VALUE:
         return [rootPid]
     childrenByParent: dict[int, list[int]] = {}
     try:
         entry = PROCESSENTRY32W()
         entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
-        if not kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+        if not process32First(snapshot, ctypes.byref(entry)):
             return [rootPid]
         while True:
             parentPid = int(entry.th32ParentProcessID)
             processId = int(entry.th32ProcessID)
             childrenByParent.setdefault(parentPid, []).append(processId)
-            if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+            if not process32Next(snapshot, ctypes.byref(entry)):
                 break
     finally:
-        kernel32.CloseHandle(snapshot)
+        closeHandle(snapshot)
 
     result: list[int] = []
     pending = [rootPid]
@@ -312,6 +391,7 @@ def _process_memory_counters(processId: int) -> tuple[int, int] | None:
     except Exception:
         return None
 
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     PROCESS_QUERY_INFORMATION = 0x0400
     PROCESS_VM_READ = 0x0010
 
@@ -332,27 +412,72 @@ def _process_memory_counters(processId: int) -> tuple[int, int] | None:
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     psapi = ctypes.WinDLL("psapi", use_last_error=True)
-    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-    kernel32.OpenProcess.restype = wintypes.HANDLE
-    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    kernel32.CloseHandle.restype = wintypes.BOOL
-    psapi.GetProcessMemoryInfo.argtypes = (
+    openProcess = ctypes.WINFUNCTYPE(wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)(
+        ("OpenProcess", kernel32)
+    )
+    closeHandle = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE)(("CloseHandle", kernel32))
+    getProcessMemoryInfo = ctypes.WINFUNCTYPE(
+        wintypes.BOOL,
         wintypes.HANDLE,
         ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX),
         wintypes.DWORD,
-    )
-    psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
-    handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, processId)
+    )(("GetProcessMemoryInfo", psapi))
+    handle = openProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, processId)
+    if not handle:
+        handle = openProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, processId)
     if not handle:
         return None
     try:
         counters = PROCESS_MEMORY_COUNTERS_EX()
         counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
-        if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+        if not getProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
             return None
         return int(counters.PrivateUsage), int(counters.WorkingSetSize)
     finally:
-        kernel32.CloseHandle(handle)
+        closeHandle(handle)
+
+
+def _terminate_subprocess(process: Any) -> None:
+    if process is None:
+        return
+    popenCls = subprocess.Popen
+    isRealPopen = isinstance(popenCls, type) and isinstance(process, popenCls)
+    rootPid = getattr(process, "pid", None) if isRealPopen else None
+    descendantPids = _process_tree_ids(int(rootPid)) if rootPid and rootPid > 0 else []
+    if process.poll() is None:
+        with suppress(Exception):
+            process.terminate()
+            process.wait(timeout=2)
+        if process.poll() is None:
+            with suppress(Exception):
+                process.kill()
+                process.wait(timeout=1)
+    if os.name != "nt" or not isRealPopen or not descendantPids:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return
+    currentPid = os.getpid()
+    pids = [pid for pid in descendantPids if pid > 0 and pid != currentPid]
+    if not pids:
+        return
+    PROCESS_TERMINATE = 0x0001
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    openProcess = ctypes.WINFUNCTYPE(wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)(
+        ("OpenProcess", kernel32)
+    )
+    terminateProcess = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, wintypes.UINT)(("TerminateProcess", kernel32))
+    closeHandle = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE)(("CloseHandle", kernel32))
+    for pid in reversed(pids):
+        handle = openProcess(PROCESS_TERMINATE, False, pid)
+        if not handle:
+            continue
+        try:
+            terminateProcess(handle, 1)
+        finally:
+            closeHandle(handle)
 
 
 def _process_tree_memory_usage(rootPid: int) -> dict[str, int] | None:
@@ -398,6 +523,40 @@ def _hidden_chrome_startup_kwargs() -> dict[str, Any]:
     }
 
 
+@functools.lru_cache(maxsize=1)
+def _chrome_window_hider_apis() -> tuple[Any, Any, Any, Any, Any] | None:
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    windowProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    # Use local prototypes so this helper does not mutate ctypes function
+    # signatures shared with NVDA core in the same Python process.
+    enumWindows = ctypes.WINFUNCTYPE(
+        wintypes.BOOL,
+        windowProc,
+        wintypes.LPARAM,
+    )(("EnumWindows", user32))
+    getWindowThreadProcessId = ctypes.WINFUNCTYPE(
+        wintypes.DWORD,
+        wintypes.HWND,
+        ctypes.POINTER(wintypes.DWORD),
+    )(("GetWindowThreadProcessId", user32))
+    isWindowVisible = ctypes.WINFUNCTYPE(
+        wintypes.BOOL,
+        wintypes.HWND,
+    )(("IsWindowVisible", user32))
+    showFuncName = "ShowWindowAsync" if hasattr(user32, "ShowWindowAsync") else "ShowWindow"
+    showWindowAsync = ctypes.WINFUNCTYPE(
+        wintypes.BOOL,
+        wintypes.HWND,
+        ctypes.c_int,
+    )((showFuncName, user32))
+    return windowProc, enumWindows, getWindowThreadProcessId, isWindowVisible, showWindowAsync
+
+
 def _hide_chrome_windows(processId: int) -> None:
     if os.name != "nt":
         return
@@ -405,36 +564,19 @@ def _hide_chrome_windows(processId: int) -> None:
         import ctypes
         from ctypes import wintypes
 
-        windowProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-        user32 = ctypes.windll.user32
-        # Use local prototypes so this helper does not mutate ctypes function
-        # signatures shared with NVDA core in the same Python process.
-        enumWindows = ctypes.WINFUNCTYPE(
-            wintypes.BOOL,
-            windowProc,
-            wintypes.LPARAM,
-        )(("EnumWindows", user32))
-        getWindowThreadProcessId = ctypes.WINFUNCTYPE(
-            wintypes.DWORD,
-            wintypes.HWND,
-            ctypes.POINTER(wintypes.DWORD),
-        )(("GetWindowThreadProcessId", user32))
-        isWindowVisible = ctypes.WINFUNCTYPE(
-            wintypes.BOOL,
-            wintypes.HWND,
-        )(("IsWindowVisible", user32))
-        showWindow = ctypes.WINFUNCTYPE(
-            wintypes.BOOL,
-            wintypes.HWND,
-            ctypes.c_int,
-        )(("ShowWindow", user32))
+        apis = _chrome_window_hider_apis()
+        if apis is None:
+            return
+        windowProc, enumWindows, getWindowThreadProcessId, isWindowVisible, showWindowAsync = apis
+        targetPids = set(_process_tree_ids(processId))
+        targetPids.add(processId)
 
         @windowProc
         def enum_window(hwnd: int, _param: int) -> bool:
             ownerProcessId = wintypes.DWORD()
             getWindowThreadProcessId(hwnd, ctypes.byref(ownerProcessId))
-            if ownerProcessId.value == processId and isWindowVisible(hwnd):
-                showWindow(hwnd, 0)
+            if ownerProcessId.value in targetPids and isWindowVisible(hwnd):
+                showWindowAsync(hwnd, 0)
             return True
 
         enumWindows(enum_window, 0)
@@ -553,7 +695,8 @@ def configured_keep_browser_runtime_ready() -> bool:
     if config is None:
         return DEFAULT_KEEP_BROWSER_RUNTIME_READY
     try:
-        return bool(config.conf[CONFIG_SECTION][CONFIG_KEEP_BROWSER_RUNTIME_READY])
+        value = config.conf[CONFIG_SECTION][CONFIG_KEEP_BROWSER_RUNTIME_READY]
+        return audio_math.coerce_bool(value, DEFAULT_KEEP_BROWSER_RUNTIME_READY)
     except Exception:
         return DEFAULT_KEEP_BROWSER_RUNTIME_READY
 
@@ -569,6 +712,40 @@ def _runtime_fallback_order(runtime: str | None = None) -> tuple[str, ...]:
     return tuple(dict.fromkeys((preferred, BROWSER_RUNTIME_CHROME, BROWSER_RUNTIME_EDGE, BROWSER_RUNTIME_BRAVE)))
 
 
+def _win_program_roots() -> list[Path]:
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for envVar in ("PROGRAMFILES", "PROGRAMW6432", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        raw = os.environ.get(envVar, "")
+        if not raw:
+            continue
+        key = os.path.normcase(raw)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(Path(raw))
+    return roots
+
+
+def _winreg_open_keys(hive: Any, subKey: str) -> list[Any]:
+    if winreg is None:
+        return []
+    keyRead = getattr(winreg, "KEY_READ", 0x20019)
+    wowFlags: list[int] = [0]
+    for flagName in ("KEY_WOW64_64KEY", "KEY_WOW64_32KEY"):
+        flag = getattr(winreg, flagName, 0)
+        if flag:
+            wowFlags.append(flag)
+    opened: list[Any] = []
+    for wowFlag in wowFlags:
+        try:
+            key = winreg.OpenKey(hive, subKey, 0, keyRead | wowFlag) if wowFlag else winreg.OpenKey(hive, subKey)
+            opened.append(key)
+        except OSError:
+            pass
+    return opened
+
+
 def _edge_webview2_candidates() -> list[str]:
     executableName = "msedgewebview2.exe"
     envFolder = os.environ.get("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", "")
@@ -581,15 +758,7 @@ def _edge_webview2_candidates() -> list[str]:
                 *[str(candidate) for candidate in envPath.glob(f"*/{executableName}")],
             ]
         )
-    commonRoots = [
-        Path(root) / "Microsoft" / "EdgeWebView" / "Application"
-        for root in (
-            os.environ.get("PROGRAMFILES", ""),
-            os.environ.get("PROGRAMFILES(X86)", ""),
-            os.environ.get("LOCALAPPDATA", ""),
-        )
-        if root
-    ]
+    commonRoots = [root / "Microsoft" / "EdgeWebView" / "Application" for root in _win_program_roots()]
     commonCandidates = [str(root / executableName) for root in commonRoots]
     versionedCandidates: list[str] = []
     for root in commonRoots:
@@ -610,36 +779,44 @@ def _registry_has_edge_webview2_runtime() -> bool:
         (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
     ]
     for hive, subKey in registryRoots:
-        try:
-            with winreg.OpenKey(hive, subKey) as rootKey:
-                index = 0
-                while True:
-                    try:
-                        childName = winreg.EnumKey(rootKey, index)
-                    except OSError:
-                        break
-                    index += 1
-                    try:
-                        with winreg.OpenKey(rootKey, childName) as childKey:
-                            values = []
-                            for valueName in ("name", "DisplayName"):
-                                try:
-                                    value, _ = winreg.QueryValueEx(childKey, valueName)
-                                    values.append(str(value))
-                                except OSError:
-                                    pass
-                            name = " ".join(values).lower()
-                            if "webview2" not in name and "edge webview" not in name:
-                                continue
-                            try:
-                                version, _ = winreg.QueryValueEx(childKey, "pv")
-                            except OSError:
+        for rootKey in _winreg_open_keys(hive, subKey):
+            try:
+                with rootKey:
+                    index = 0
+                    while True:
+                        try:
+                            childName = winreg.EnumKey(rootKey, index)
+                        except OSError:
+                            break
+                        index += 1
+                        try:
+                            with winreg.OpenKey(rootKey, childName) as childKey:
+                                values = []
+                                for valueName in ("name", "DisplayName"):
+                                    try:
+                                        value, _ = winreg.QueryValueEx(childKey, valueName)
+                                        values.append(str(value))
+                                    except OSError:
+                                        pass
+                                name = " ".join(values).lower()
+                                if "webview2" not in name and "edge webview" not in name:
+                                    continue
                                 version = ""
-                            return str(version or "installed").strip() not in ("", "0.0.0.0")
-                    except OSError:
-                        pass
-        except OSError:
-            pass
+                                for versionValueName in ("pv", "DisplayVersion"):
+                                    try:
+                                        rawVersion, _ = winreg.QueryValueEx(childKey, versionValueName)
+                                        text = str(rawVersion).strip()
+                                        if text:
+                                            version = text
+                                            break
+                                    except OSError:
+                                        pass
+                                if version and version != "0.0.0.0":
+                                    return True
+                        except OSError:
+                            pass
+            except OSError:
+                pass
     return False
 
 
@@ -647,29 +824,34 @@ def _registry_app_paths(executableName: str) -> list[str]:
     if winreg is None:
         return []
     paths: list[str] = []
+    seen: set[str] = set()
     registryKeys = [
         (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{executableName}"),
         (winreg.HKEY_CURRENT_USER, rf"Software\Microsoft\Windows\CurrentVersion\App Paths\{executableName}"),
     ]
     for hive, subKey in registryKeys:
-        try:
-            with winreg.OpenKey(hive, subKey) as key:
-                path, _ = winreg.QueryValueEx(key, "")
-                paths.append(str(path))
-        except OSError:
-            pass
+        for key in _winreg_open_keys(hive, subKey):
+            try:
+                with key:
+                    path, _ = winreg.QueryValueEx(key, "")
+                    text = str(path)
+                    norm = os.path.normcase(text)
+                    if text and norm not in seen:
+                        seen.add(norm)
+                        paths.append(text)
+            except OSError:
+                pass
     return paths
 
 
 def _browser_candidates(runtime: str) -> list[str]:
     runtime = _normalize_browser_runtime(runtime)
+    roots = _win_program_roots()
     if runtime == BROWSER_RUNTIME_EDGE:
         executableName = "msedge.exe"
         envPath = os.environ.get("EDGE_PATH", "")
         commonPaths = [
-            str(Path(os.environ.get("PROGRAMFILES", "")) / "Microsoft" / "Edge" / "Application" / executableName),
-            str(Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Microsoft" / "Edge" / "Application" / executableName),
-            str(Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "Application" / executableName),
+            *[str(root / "Microsoft" / "Edge" / "Application" / executableName) for root in roots],
             shutil.which("msedge.exe") or "",
             shutil.which("msedge") or "",
         ]
@@ -677,27 +859,7 @@ def _browser_candidates(runtime: str) -> list[str]:
         executableName = "brave.exe"
         envPath = os.environ.get("BRAVE_PATH", "")
         commonPaths = [
-            str(
-                Path(os.environ.get("PROGRAMFILES", ""))
-                / "BraveSoftware"
-                / "Brave-Browser"
-                / "Application"
-                / executableName
-            ),
-            str(
-                Path(os.environ.get("PROGRAMFILES(X86)", ""))
-                / "BraveSoftware"
-                / "Brave-Browser"
-                / "Application"
-                / executableName
-            ),
-            str(
-                Path(os.environ.get("LOCALAPPDATA", ""))
-                / "BraveSoftware"
-                / "Brave-Browser"
-                / "Application"
-                / executableName
-            ),
+            *[str(root / "BraveSoftware" / "Brave-Browser" / "Application" / executableName) for root in roots],
             shutil.which("brave.exe") or "",
             shutil.which("brave") or "",
         ]
@@ -705,9 +867,7 @@ def _browser_candidates(runtime: str) -> list[str]:
         executableName = "chrome.exe"
         envPath = os.environ.get("CHROME_PATH", "")
         commonPaths = [
-            str(Path(os.environ.get("PROGRAMFILES", "")) / "Google" / "Chrome" / "Application" / executableName),
-            str(Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Google" / "Chrome" / "Application" / executableName),
-            str(Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "Application" / executableName),
+            *[str(root / "Google" / "Chrome" / "Application" / executableName) for root in roots],
             shutil.which("chrome.exe") or "",
             shutil.which("chrome") or "",
         ]
@@ -868,6 +1028,7 @@ class CdpDispatcher:
             for event in self._pendingEvents.values():
                 event.set()
             self._pendingEvents.clear()
+            self._responses.clear()
             self._eventHandlers.clear()
             self._handlerErrors.clear()
 
@@ -883,6 +1044,9 @@ class CdpDispatcher:
     ) -> threading.Event:
         event = threading.Event()
         with self._stateLock:
+            if self._stopped.is_set():
+                event.set()
+                return event
             self._pendingEvents[msgId] = event
             if eventHandler is not None:
                 self._eventHandlers[msgId] = eventHandler
@@ -931,6 +1095,7 @@ class CdpDispatcher:
                 if event is not None:
                     event.set()
         finally:
+            self._stopped.set()
             with self._stateLock:
                 for ev in self._pendingEvents.values():
                     ev.set()
@@ -981,13 +1146,43 @@ class BrowserProcessManager:
     def profile_runtime(self) -> str | None:
         return self._profileRuntime
 
+    def _write_runtime_voices_json(self) -> None:
+        runtimeDir = voice_store.data_root() / "runtime"
+        runtimeDir.mkdir(parents=True, exist_ok=True)
+        payload = self.catalog.to_runtime_json()
+        tmpPath: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=runtimeDir,
+                prefix="voices_",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                tmpPath = Path(handle.name)
+                handle.write(payload)
+                handle.flush()
+            targetPath = runtimeDir / "voices.json"
+            for attempt in range(3):
+                try:
+                    os.replace(tmpPath, targetPath)
+                    tmpPath = None
+                    break
+                except PermissionError:
+                    if attempt >= 2:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
+        finally:
+            if tmpPath is not None:
+                with suppress(OSError):
+                    tmpPath.unlink()
+
     def start_server(self) -> int:
         with self._lock:
             if self._server is not None and self._serverPort is not None:
                 return self._serverPort
-            runtimeDir = voice_store.data_root() / "runtime"
-            runtimeDir.mkdir(parents=True, exist_ok=True)
-            (runtimeDir / "voices.json").write_text(self.catalog.to_runtime_json(), encoding="utf-8")
+            self._write_runtime_voices_json()
             self._server = _ThreadingTcpServer(("127.0.0.1", 0), _BridgeRequestHandler)
             self._serverPort = int(self._server.server_address[1])
             self._serverThread = threading.Thread(
@@ -998,13 +1193,17 @@ class BrowserProcessManager:
             self._serverThread.start()
             return self._serverPort
 
+    def update_catalog(self, catalog: VoiceCatalog) -> None:
+        with self._lock:
+            self.catalog = catalog
+            if self._server is not None:
+                try:
+                    self._write_runtime_voices_json()
+                except Exception:
+                    log.debug("Could not update runtime voices.json catalog.", exc_info=True)
+
     def _stop_browser_process(self, *, removeProfile: bool) -> None:
-        if self._chromeProcess is not None and self._chromeProcess.poll() is None:
-            with suppress(Exception):
-                self._chromeProcess.terminate()
-                self._chromeProcess.wait(timeout=2)
-            with suppress(Exception):
-                self._chromeProcess.kill()
+        _terminate_subprocess(self._chromeProcess)
         self._chromeProcess = None
         self._debugPort = None
         if removeProfile:
@@ -1038,12 +1237,7 @@ class BrowserProcessManager:
                 ),
                 "Microsoft Edge executable was found, but Microsoft Edge WebView2 Runtime was not found.",
             )
-        raise _friendly_cdp_error(
-            _(
-                "No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
-            ),
-            "No supported Chromium browser runtime executable was found.",
-        )
+        raise _no_browser_runtime_error()
 
     def _log_browser_runtime_failure(self, runtime: str, error: Exception, willTryFallback: bool) -> None:
         label = BROWSER_RUNTIME_LABELS.get(runtime, runtime)
@@ -1111,12 +1305,15 @@ class BrowserProcessManager:
                 self._debugPort = None
                 if usePersistentProfile:
                     log.debug("Google TTS persistent browser profile is in use; retrying with a temporary profile.")
-                    self._release_chrome_profile()
+                    self._release_chrome_profile(cleanupLockFiles=False)
                     continue
                 self._remove_chrome_profile()
                 raise
+            except CdpCancelled:
+                self._stop_browser_process(removeProfile=False)
+                raise
             except Exception:
-                self._stop_browser_process(removeProfile=True)
+                self._stop_browser_process(removeProfile=not self._profileIsPersistent)
                 raise
             assert self._serverPort is not None and self._debugPort is not None
             return self._serverPort, self._debugPort
@@ -1139,12 +1336,7 @@ class BrowserProcessManager:
                 self._log_browser_runtime_failure(browserRuntime, exc, index < len(choices) - 1)
         if lastError is not None:
             raise lastError
-        raise _friendly_cdp_error(
-            _(
-                "No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
-            ),
-            "No supported Chromium browser runtime executable was found.",
-        )
+        raise _no_browser_runtime_error()
 
     def start_browser(self, cancelEvent: threading.Event | None = None) -> tuple[int, int]:
         with self._lock:
@@ -1176,7 +1368,20 @@ class BrowserProcessManager:
                     lastWindowHideAt = now
             try:
                 targets = _read_json_endpoint(debugPort, "/json/list", timeout=0.5)
-            except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+            except (
+                OSError,
+                TimeoutError,
+                urllib.error.URLError,
+                http.client.HTTPException,
+                json.JSONDecodeError,
+                ValueError,
+            ):
+                if chromeProcess is not None and chromeProcess.poll() is not None:
+                    exitCode = chromeProcess.poll()
+                    raise _friendly_cdp_error(
+                        _("The Chromium browser runtime closed before Google TTS For NVDA was ready."),
+                        f"The Chromium browser runtime exited unexpectedly before becoming ready (exit code {exitCode} while waiting for DevTools page target).",
+                    ) from None
                 time.sleep(STARTUP_POLL_INTERVAL)
                 continue
             if isinstance(targets, list):
@@ -1213,7 +1418,7 @@ class BrowserProcessManager:
                         exc,
                         True,
                     )
-                    self._stop_browser_process(removeProfile=True)
+                    self._stop_browser_process(removeProfile=not self._profileIsPersistent)
 
             choices = self._browser_choices_or_raise(skipRuntimes=skipRuntimes)
             lastError: Exception | None = None
@@ -1223,33 +1428,33 @@ class BrowserProcessManager:
                     self._start_browser_choice(browserRuntime, browserPath, cancelEvent)
                     return self.get_page_websocket_url(cancelEvent)
                 except CdpCancelled:
+                    self._stop_browser_process(removeProfile=False)
                     raise
                 except Exception as exc:
                     lastError = exc
-                    self._stop_browser_process(removeProfile=True)
+                    self._stop_browser_process(removeProfile=not self._profileIsPersistent)
                     self._log_browser_runtime_failure(browserRuntime, exc, index < len(choices) - 1)
             if lastError is not None:
                 raise lastError
-            raise _friendly_cdp_error(
-                _(
-                    "No supported Chromium browser runtime was found. Install Google Chrome, Microsoft Edge, or Brave, or set CHROME_PATH, EDGE_PATH, or BRAVE_PATH to a browser executable."
-                ),
-                "No supported Chromium browser runtime executable was found.",
-            )
+            raise _no_browser_runtime_error()
 
     def terminate(self) -> None:
         with self._lock:
-            if self._chromeProcess is not None and self._chromeProcess.poll() is None:
-                with suppress(Exception):
-                    self._chromeProcess.terminate()
-                    self._chromeProcess.wait(timeout=2)
-                with suppress(Exception):
-                    self._chromeProcess.kill()
+            _terminate_subprocess(self._chromeProcess)
             self._chromeProcess = None
             self._debugPort = None
             if self._server is not None:
-                self._server.shutdown()
-                self._server.server_close()
+                if (
+                    self._serverThread is not None
+                    and self._serverThread.is_alive()
+                    and threading.current_thread() is not self._serverThread
+                ):
+                    with suppress(Exception):
+                        self._server.shutdown()
+                    with suppress(Exception):
+                        self._serverThread.join(timeout=2)
+                with suppress(Exception):
+                    self._server.server_close()
             self._server = None
             self._serverThread = None
             self._serverPort = None
@@ -1278,9 +1483,10 @@ class BrowserProcessManager:
             profileDir = root / f"session-{os.getpid()}-{time.monotonic_ns()}"
         reused = profileDir.exists()
         profileDir.mkdir(parents=True, exist_ok=True)
-        for lockName in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
-            with suppress(OSError):
-                (profileDir / lockName).unlink()
+        if not usePersistentProfile:
+            for lockName in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
+                with suppress(OSError):
+                    (profileDir / lockName).unlink()
         with suppress(OSError):
             (profileDir / "DevToolsActivePort").unlink()
         self._profileDir = profileDir
@@ -1357,30 +1563,43 @@ class BrowserProcessManager:
                 totalSize = 0
                 for candidate in persistent.rglob("*"):
                     _raise_if_cancelled(cancelEvent)
-                    if not candidate.is_file():
-                        continue
-                    totalSize += candidate.stat().st_size
-                    if totalSize > PERSISTENT_PROFILE_MAX_BYTES:
-                        break
+                    with suppress(OSError):
+                        if not candidate.is_file():
+                            continue
+                        totalSize += candidate.stat().st_size
+                        if totalSize > PERSISTENT_PROFILE_MAX_BYTES:
+                            break
                 profileReset = totalSize > PERSISTENT_PROFILE_MAX_BYTES
                 if profileReset:
-                    log.debug(
-                        "Persistent %s browser profile exceeds 500 MB (%d bytes), resetting.",
-                        runtime,
-                        totalSize,
-                    )
-                    shutil.rmtree(persistent, ignore_errors=True)
-                if not profileReset:
-                    self._remember_persistent_profile_size_check(root, totalSize, False)
+                    lockHeld = False
+                    for lockName in ("lockfile", "SingletonLock"):
+                        lockPath = persistent / lockName
+                        if lockPath.exists():
+                            try:
+                                lockPath.unlink()
+                            except OSError:
+                                lockHeld = True
+                                break
+                    if not lockHeld:
+                        log.debug(
+                            "Persistent %s browser profile exceeds 500 MB (%d bytes), resetting.",
+                            runtime,
+                            totalSize,
+                        )
+                        shutil.rmtree(persistent, ignore_errors=True)
+                    else:
+                        profileReset = False
+                self._remember_persistent_profile_size_check(root, totalSize, profileReset)
             except OSError:
                 pass
 
-    def _release_chrome_profile(self) -> None:
+    def _release_chrome_profile(self, *, cleanupLockFiles: bool = True) -> None:
         """Release the profile directory reference without deleting it.
 
         Preserves the persistent profile (including the browser's compiled
         WASM code cache) so the next startup can skip WASM recompilation.  Only
-        transient files (lock files, DevToolsActivePort) are cleaned up.
+        transient files (lock files, DevToolsActivePort) are cleaned up unless
+        another browser process owns the persistent profile.
         """
         profileDir = self._profileDir
         profileIsPersistent = self._profileIsPersistent
@@ -1392,6 +1611,8 @@ class BrowserProcessManager:
         if not profileIsPersistent:
             with suppress(OSError):
                 shutil.rmtree(profileDir, ignore_errors=True)
+            return
+        if not cleanupLockFiles:
             return
         for name in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile", "DevToolsActivePort"):
             with suppress(OSError):
@@ -1502,20 +1723,35 @@ class CdpClient:
     def connect(self, wsUrl: str) -> None:
         with self._lock:
             self.close()
-            self._ws = websocket.create_connection(wsUrl, timeout=15, suppress_origin=True)
+            self._ws = websocket.create_connection(
+                wsUrl,
+                timeout=15,
+                suppress_origin=True,
+                http_no_proxy=["127.0.0.1", "localhost", "::1"],
+            )
             self._ws.settimeout(0.05)
             self._dispatcher = CdpDispatcher(self._ws)
             self._dispatcher.start()
 
     def close(self) -> None:
         with self._lock:
-            if self._dispatcher is not None:
-                self._dispatcher.stop()
-                self._dispatcher = None
-            if self._ws is not None:
-                with suppress(Exception):
-                    self._ws.close()
-                self._ws = None
+            dispatcher = self._dispatcher
+            self._dispatcher = None
+            ws = self._ws
+            self._ws = None
+        readerThread: threading.Thread | None = None
+        if dispatcher is not None:
+            readerThread = getattr(dispatcher, "_readerThread", None)
+            dispatcher.stop()
+        if ws is not None:
+            with suppress(Exception):
+                ws.close()
+        if (
+            isinstance(readerThread, threading.Thread)
+            and readerThread is not threading.current_thread()
+            and readerThread.is_alive()
+        ):
+            readerThread.join(timeout=1.0)
 
     def is_connected(self) -> bool:
         with self._lock:
@@ -1564,10 +1800,15 @@ class CdpClient:
         try:
             try:
                 dispatcher.send(command)
-            except Exception:
+            except Exception as exc:
                 if cancelEvent is not None and cancelEvent.is_set():
                     raise CdpCancelled() from None
-                raise
+                if isinstance(exc, CdpError):
+                    raise
+                raise _friendly_cdp_error(
+                    _("The Chromium browser runtime connection closed unexpectedly."),
+                    f"Could not send CDP command {method}: {exc}",
+                ) from exc
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 if cancelEvent is not None and cancelEvent.is_set():
@@ -1575,7 +1816,7 @@ class CdpClient:
                         with suppress(Exception):
                             onCancelCallback()
                     raise CdpCancelled()
-                if event.wait(timeout=0.01):
+                if event.wait(timeout=0.01) or dispatcher._stopped.is_set():
                     break
             else:
                 raise _friendly_cdp_error(
@@ -1604,7 +1845,7 @@ class CdpClient:
                 _("The Chromium browser runtime reported an error while processing speech."),
                 f"CDP error for {method}: {response['error']}",
             )
-        exceptionDetails = response.get("result", {}).get("exceptionDetails")
+        exceptionDetails = (response.get("result") or {}).get("exceptionDetails")
         if isinstance(exceptionDetails, dict):
             raise _friendly_cdp_error(
                 _("The Chromium browser runtime reported an error while preparing speech."),
@@ -1668,7 +1909,7 @@ class WasmTtsEngineBridge:
                     time.sleep(STARTUP_POLL_INTERVAL)
                     continue
                 raise
-            if response.get("result", {}).get("result", {}).get("value") is True:
+            if ((response.get("result") or {}).get("result") or {}).get("value") is True:
                 return
             time.sleep(STARTUP_POLL_INTERVAL)
         raise _friendly_cdp_error(
@@ -1695,20 +1936,26 @@ class WasmTtsEngineBridge:
             "lang": options["lang"],
             "text": str(options.get("warmupText") or " "),
         }
-        response = self._cdp.request(
-            "Runtime.evaluate",
-            {
-                "expression": f"window.googleTtsForNvdaPreload({json.dumps(payload, ensure_ascii=False)})",
-                "awaitPromise": True,
-                "returnByValue": True,
-                "userGesture": True,
-                "timeout": 60000,
-            },
-            timeout=70,
-            cancelEvent=cancelEvent,
-            onCancelCallback=self.send_fast_stop,
-        )
-        value = response.get("result", {}).get("result", {}).get("value")
+        with self._stopLock:
+            self._lastStopSentAt = 0.0
+        self._set_runtime_busy(True)
+        try:
+            response = self._cdp.request(
+                "Runtime.evaluate",
+                {
+                    "expression": f"window.googleTtsForNvdaPreload({json.dumps(payload, ensure_ascii=False)})",
+                    "awaitPromise": True,
+                    "returnByValue": True,
+                    "userGesture": True,
+                    "timeout": 60000,
+                },
+                timeout=70,
+                cancelEvent=cancelEvent,
+                onCancelCallback=self.send_fast_stop,
+            )
+        finally:
+            self._set_runtime_busy(False)
+        value = ((response.get("result") or {}).get("result") or {}).get("value")
         return value if isinstance(value, dict) else {"success": True}
 
     def speak(
@@ -1780,7 +2027,12 @@ class WasmTtsEngineBridge:
             rawPayload = params.get("payload")
             if not isinstance(rawPayload, str):
                 return
-            event = json.loads(rawPayload)
+            try:
+                event = json.loads(rawPayload)
+            except (ValueError, TypeError):
+                return
+            if not isinstance(event, dict):
+                return
             if event.get("sessionId") != sessionId:
                 return
             eventType = event.get("type")
@@ -1795,8 +2047,11 @@ class WasmTtsEngineBridge:
                     return
                 if cancelEvent is not None and cancelEvent.is_set():
                     return
+                rawRate = event.get("sampleRate")
                 try:
-                    sampleRate = int(event.get("sampleRate") or SAMPLE_RATE)
+                    if isinstance(rawRate, bool):
+                        raise ValueError("Boolean sampleRate is invalid.")
+                    sampleRate = SAMPLE_RATE if rawRate is None else int(rawRate)
                 except (TypeError, ValueError):
                     fail_speech_event("Invalid browser audio sample rate.")
                 if sampleRate != SAMPLE_RATE:
@@ -1842,6 +2097,8 @@ class WasmTtsEngineBridge:
                 fail_speech_event(detail)
 
         expression = f"window.googleTtsForNvdaSpeak({json.dumps(payload, ensure_ascii=False)})"
+        with self._stopLock:
+            self._lastStopSentAt = 0.0
         self._set_runtime_busy(True)
         try:
             response = self._cdp.request(
@@ -1862,7 +2119,7 @@ class WasmTtsEngineBridge:
             raise
         finally:
             self._set_runtime_busy(False)
-        result = response.get("result", {}).get("result", {})
+        result = (response.get("result") or {}).get("result") or {}
         if result.get("subtype") == "error":
             detail = str(result.get("description") or "Browser speech evaluation failed.")
             log.debug("Google TTS Chromium browser runtime detail: %s", detail)
@@ -1941,6 +2198,7 @@ class ChromeTtsBridge:
         self._process_manager = BrowserProcessManager(self.catalog)
         self._cdp_client = CdpClient()
         self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
+        self._engineRefLock = threading.Lock()
         self._lock = threading.RLock()
         self._connectionLock = threading.Lock()
         self._needsRecycle = False
@@ -1949,6 +2207,15 @@ class ChromeTtsBridge:
         self._lastMemoryCheckAt = 0.0
         self._runtimeReadyAt = 0.0
         self._highMemorySampleCount = 0
+        self._lifecycleEpoch = 0
+
+    def _set_engine_locked(self, engine: WasmTtsEngineBridge) -> None:
+        engineRefLock = getattr(self, "_engineRefLock", None)
+        if engineRefLock is not None:
+            with engineRefLock:
+                self._engine = engine
+        else:
+            self._engine = engine
 
     @classmethod
     def find_browser(cls) -> str | None:
@@ -2030,6 +2297,18 @@ class ChromeTtsBridge:
             return
         self._mark_runtime_for_recycle_locked(reason, urgent=False)
 
+    def _reset_runtime_locked(self) -> None:
+        self._cdp_client.close()
+        self._process_manager.terminate()
+        self._set_engine_locked(WasmTtsEngineBridge(self._cdp_client, self.catalog))
+        self._needsRecycle = False
+        self._recycleUrgent = False
+        self._recycleReason = ""
+        self._lastMemoryCheckAt = 0.0
+        self._runtimeReadyAt = 0.0
+        self._highMemorySampleCount = 0
+        self._lifecycleEpoch = getattr(self, "_lifecycleEpoch", 0) + 1
+
     def maybe_recycle_runtime(self, *, allowIdleRecycle: bool = True, checkMemory: bool = True) -> bool:
         with self._lock:
             if checkMemory:
@@ -2042,20 +2321,27 @@ class ChromeTtsBridge:
                 return False
             reason = self._recycleReason or "runtime health check"
             log.debug("Recycling Google TTS Chromium runtime: %s", reason)
-            self._cdp_client.close()
-            self._process_manager.terminate()
-            self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
-            self._needsRecycle = False
-            self._recycleUrgent = False
-            self._recycleReason = ""
-            self._lastMemoryCheckAt = 0.0
-            self._runtimeReadyAt = 0.0
-            self._highMemorySampleCount = 0
+            self._reset_runtime_locked()
             return True
 
     def is_connected(self) -> bool:
         with self._lock:
             return self._cdp_client.is_connected()
+
+    def update_catalog(self, catalog: VoiceCatalog) -> None:
+        with self._lock:
+            oldIds = tuple(pkg.id for pkg in self.catalog.packages)
+            newIds = tuple(pkg.id for pkg in catalog.packages)
+            self.catalog = catalog
+            self._process_manager.update_catalog(catalog)
+            self._engine.catalog = catalog
+            if oldIds != newIds and (
+                self._cdp_client.is_connected() or self._process_manager.chrome_process is not None
+            ):
+                self._mark_runtime_for_recycle_locked("installed voice catalog changed", urgent=True)
+        if oldIds != newIds:
+            with suppress(Exception):
+                self.maybe_recycle_runtime(allowIdleRecycle=True, checkMemory=False)
 
     def safe_for_standby_release(self) -> bool:
         """Return whether standby may safely keep and reuse this runtime."""
@@ -2077,28 +2363,40 @@ class ChromeTtsBridge:
             with self._lock:
                 if self._cdp_client.is_connected():
                     return
+                startEpoch = getattr(self, "_lifecycleEpoch", 0)
             skipRuntimes: set[str] = set()
             while True:
                 _raise_if_cancelled(cancelEvent)
+                with self._lock:
+                    if getattr(self, "_lifecycleEpoch", 0) != startEpoch:
+                        raise CdpCancelled()
+                    processManager = self._process_manager
+                    cdpClient = self._cdp_client
+                    engine = self._engine
                 runtime: str | None = None
+                chromeGetter = getattr(processManager, "chrome_process", None)
+                existingProc = chromeGetter() if callable(chromeGetter) else chromeGetter
+                hadExistingChrome = existingProc is not None and existingProc.poll() is None
                 try:
                     startedAt = time.perf_counter()
-                    wsUrl = self._process_manager.start_and_get_websocket_url(
+                    wsUrl = processManager.start_and_get_websocket_url(
                         cancelEvent=cancelEvent,
                         skipRuntimes=skipRuntimes,
                     )
                     websocketReadyAt = time.perf_counter()
-                    runtime = self._process_manager.profile_runtime
-                    with self._lock:
-                        self._cdp_client.connect(wsUrl)
+                    runtime = processManager.profile_runtime
+                    _raise_if_cancelled(cancelEvent)
+                    cdpClient.connect(wsUrl)
                     cdpConnectedAt = time.perf_counter()
-                    with self._lock:
-                        self._engine.enable_cdp_domains(cancelEvent=cancelEvent)
+                    engine.enable_cdp_domains(cancelEvent=cancelEvent)
                     cdpDomainsEnabledAt = time.perf_counter()
-                    with self._lock:
-                        self._engine.wait_until_ready(cancelEvent=cancelEvent)
+                    engine.wait_until_ready(cancelEvent=cancelEvent)
                     harnessReadyAt = time.perf_counter()
                     with self._lock:
+                        if getattr(self, "_lifecycleEpoch", 0) != startEpoch:
+                            cdpClient.close()
+                            processManager.terminate()
+                            raise CdpCancelled()
                         self._runtimeReadyAt = time.monotonic()
                         self._lastMemoryCheckAt = self._runtimeReadyAt
                         self._highMemorySampleCount = 0
@@ -2114,22 +2412,28 @@ class ChromeTtsBridge:
                     return
                 except CdpCancelled:
                     with self._lock:
-                        self._cdp_client.close()
+                        cdpClient.close()
+                        if not hadExistingChrome:
+                            currentGetter = getattr(processManager, "chrome_process", None)
+                            currentProc = currentGetter() if callable(currentGetter) else currentGetter
+                            if currentProc is not None and hasattr(processManager, "_stop_browser_process"):
+                                with suppress(Exception):
+                                    processManager._stop_browser_process(removeProfile=False)
                     raise
                 except Exception as exc:
                     with self._lock:
-                        self._cdp_client.close()
-                        runtime = runtime or self._process_manager.profile_runtime
-                        self._process_manager.terminate()
+                        cdpClient.close()
+                        runtime = runtime or processManager.profile_runtime
+                        processManager.terminate()
                     if runtime:
                         runtime = _normalize_browser_runtime(runtime)
                         skipRuntimes.add(runtime)
                         if _browser_choices(skipRuntimes=skipRuntimes):
-                            self._process_manager._log_browser_runtime_failure(runtime, exc, True)
+                            processManager._log_browser_runtime_failure(runtime, exc, True)
                             continue
                     raise
         finally:
-            self._connectionLock.release()
+            connLock.release()
 
     def preload_voice(self, options: dict[str, Any], cancelEvent: threading.Event | None = None) -> dict[str, Any]:
         try:
@@ -2178,7 +2482,13 @@ class ChromeTtsBridge:
                 raise
             except Exception as exc:
                 self._mark_runtime_error_for_recycle(exc)
-                if isinstance(exc, _BrowserSpeechError):
+                detail = str(getattr(exc, "technicalDetail", "") or "")
+                retryableConnectionLoss = isinstance(exc, _BrowserSpeechError) or (
+                    isinstance(exc, CdpError)
+                    and _runtime_error_requires_recycle(exc)
+                    and any(marker in detail for marker in ("Browser DevTools websocket", "Could not send CDP command"))
+                )
+                if retryableConnectionLoss:
                     recycled = False
                     try:
                         recycled = self.maybe_recycle_runtime(
@@ -2187,7 +2497,7 @@ class ChromeTtsBridge:
                         )
                     except Exception:
                         log.debug("Could not recycle the failed Google TTS browser runtime.", exc_info=True)
-                    if attempt == 0 and recycled and not exc.audioStarted:
+                    if attempt == 0 and recycled and not getattr(exc, "audioStarted", False):
                         attempt += 1
                         log.debug("Retrying Google TTS speech once with a fresh browser runtime.")
                         continue
@@ -2203,21 +2513,14 @@ class ChromeTtsBridge:
             log.debug("Could not stop Google TTS Chromium browser runtime.", exc_info=True)
 
     def cancel_current(self) -> None:
-        with self._lock:
+        engineRefLock = getattr(self, "_engineRefLock", None) or self._lock
+        with engineRefLock:
             engine = self._engine
         engine.cancel_current()
 
     def terminate(self) -> None:
         with self._lock:
-            self._cdp_client.close()
-            self._process_manager.terminate()
-            self._engine = WasmTtsEngineBridge(self._cdp_client, self.catalog)
-            self._needsRecycle = False
-            self._recycleUrgent = False
-            self._recycleReason = ""
-            self._lastMemoryCheckAt = 0.0
-            self._runtimeReadyAt = 0.0
-            self._highMemorySampleCount = 0
+            self._reset_runtime_locked()
 
     def _cdp_request(
         self,

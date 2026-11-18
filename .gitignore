@@ -38,6 +38,10 @@ env/
 # Never commit or package downloaded voice packages or temporary Chrome profiles
 *.zvoice
 chromeProfiles/
+edgeProfiles/
+braveProfiles/
+profileSizeCheck.json
+verified_voices.json
 session-*/
 runtime/
 google tts voices.json

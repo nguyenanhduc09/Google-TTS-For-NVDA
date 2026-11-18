@@ -8,15 +8,19 @@ can run on any platform.
 from __future__ import annotations
 
 import ctypes
+import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
-from tests.test_support import load_driver_module
+from tests.test_support import load_driver_module, load_fresh_driver_module
 
 # Use a real existing directory so _watch_path's is_dir() check passes.
 _REAL_DIR = Path(__file__).resolve().parent
+watcher_mod = load_driver_module("watcher")
 
 
 def _make_mock_kernel32(*, wait_side_effect: object = None) -> MagicMock:
@@ -75,7 +79,6 @@ class DirectoryChangeWatcherLifecycleTests(unittest.TestCase):
 
     def test_start_stop_cycle(self) -> None:
         """start() launches the thread, stop() joins it."""
-        watcher_mod = load_driver_module("watcher")
         w = watcher_mod.DirectoryChangeWatcher(
             MagicMock(return_value=()),
             MagicMock(),
@@ -87,7 +90,6 @@ class DirectoryChangeWatcherLifecycleTests(unittest.TestCase):
 
     def test_start_is_idempotent(self) -> None:
         """Calling start() twice does not spawn a second thread."""
-        watcher_mod = load_driver_module("watcher")
 
         # Block WaitForMultipleObjects on an Event so we can observe
         # the thread while it is alive.
@@ -112,10 +114,10 @@ class DirectoryChangeWatcherLifecycleTests(unittest.TestCase):
             self.assertIs(w._thread, first_thread)
             block.set()
             w.stop()
+            self.assertIsNone(w._thread)
 
     def test_stop_is_idempotent(self) -> None:
         """Calling stop() twice does not raise."""
-        watcher_mod = load_driver_module("watcher")
         with patch.object(ctypes, "WinDLL", return_value=_make_mock_kernel32()):
             w = watcher_mod.DirectoryChangeWatcher(
                 MagicMock(return_value=()),
@@ -127,19 +129,84 @@ class DirectoryChangeWatcherLifecycleTests(unittest.TestCase):
 
     def test_stop_before_start(self) -> None:
         """stop() without start() is a no-op."""
-        watcher_mod = load_driver_module("watcher")
         w = watcher_mod.DirectoryChangeWatcher(
             MagicMock(return_value=()),
             MagicMock(),
         )
         w.stop()  # should not raise
 
+    def test_rapid_restart_does_not_clobber_new_stop_handle(self) -> None:
+        """If stop(timeout=0) returns while the old thread's finally block has not run yet,
+        a subsequent start() must not have its _stopHandle cleared by the old thread."""
+        handle_seq = [0x2000]
+        wait_started_1 = threading.Event()
+        release_thread_1 = threading.Event()
+        wait_started_2 = threading.Event()
+        release_thread_2 = threading.Event()
+        first_handle_closed = threading.Event()
+        wait_calls = [0]
+
+        kernel32 = _make_mock_kernel32()
+        default_close_handle = kernel32.CloseHandle.side_effect
+
+        def _create_event(*_args, **_kwargs):
+            handle_seq[0] += 1
+            return handle_seq[0]
+
+        def _close_handle(handle, *args, **kwargs):
+            if handle == 0x2001:
+                first_handle_closed.set()
+            return default_close_handle(handle, *args, **kwargs)
+
+        def _wait(*_args, **_kwargs):
+            wait_calls[0] += 1
+            if wait_calls[0] == 1:
+                wait_started_1.set()
+                release_thread_1.wait(timeout=2)
+                return 0
+            wait_started_2.set()
+            release_thread_2.wait(timeout=2)
+            return 0
+
+        kernel32.CreateEventW.side_effect = _create_event
+        kernel32.CloseHandle.side_effect = _close_handle
+        kernel32.WaitForMultipleObjects.side_effect = _wait
+
+        with patch.object(ctypes, "WinDLL", return_value=kernel32):
+            w = watcher_mod.DirectoryChangeWatcher(
+                lambda: (_REAL_DIR,),
+                MagicMock(),
+            )
+            w.start()
+            self.assertTrue(wait_started_1.wait(timeout=2))
+            first_handle = w._stopHandle
+            self.assertEqual(0x2001, first_handle)
+
+            # Stop with timeout=0 so thread 1 is still inside WaitForMultipleObjects.
+            w.stop(timeout=0.0)
+            # Immediately start thread 2 before thread 1 exits.
+            w.start()
+            self.assertTrue(wait_started_2.wait(timeout=2))
+            second_handle = w._stopHandle
+            self.assertEqual(0x2002, second_handle)
+
+            # Now let thread 1 exit and run its finally block.
+            release_thread_1.set()
+            self.assertTrue(first_handle_closed.wait(timeout=2))
+
+            # Thread 1's finally block must NOT have cleared thread 2's _stopHandle!
+            self.assertEqual(second_handle, w._stopHandle)
+            self.assertIsNotNone(w._kernel32)
+
+            release_thread_2.set()
+            w.stop()
+            self.assertIsNone(w._stopHandle)
+
 
 class DirectoryChangeWatcherCallbackTests(unittest.TestCase):
     """Verify that the user callback is invoked with the correct reason."""
 
     def test_callback_receives_correct_reason(self) -> None:
-        watcher_mod = load_driver_module("watcher")
         cb = MagicMock()
         first_call = threading.Event()
         call_count = [0]
@@ -169,7 +236,6 @@ class DirectoryChangeWatcherCallbackTests(unittest.TestCase):
 
     def test_callback_not_invoked_on_immediate_stop(self) -> None:
         """When WaitForMultipleObjects returns stop immediately, callback is not called."""
-        watcher_mod = load_driver_module("watcher")
         cb = MagicMock()
 
         with patch.object(ctypes, "WinDLL", return_value=_make_mock_kernel32()):
@@ -184,7 +250,6 @@ class DirectoryChangeWatcherCallbackTests(unittest.TestCase):
 
     def test_multiple_signals_invoke_callback_each_time(self) -> None:
         """Each notification signal invokes the callback independently."""
-        watcher_mod = load_driver_module("watcher")
         cb = MagicMock()
         signal_events = [threading.Event() for _ in range(3)]
         call_idx = [0]
@@ -213,7 +278,6 @@ class DirectoryChangeWatcherCallbackTests(unittest.TestCase):
 
     def test_paths_called_each_iteration(self) -> None:
         """The paths callable is re-invoked on every wait cycle."""
-        watcher_mod = load_driver_module("watcher")
         paths = MagicMock(return_value=(_REAL_DIR,))
         cb = MagicMock()
         ready = threading.Event()
@@ -240,7 +304,6 @@ class DirectoryChangeWatcherEdgeCaseTests(unittest.TestCase):
 
     def test_nothing_to_watch_exits_thread(self) -> None:
         """When no paths are directories the watcher thread exits promptly."""
-        watcher_mod = load_driver_module("watcher")
         cb = MagicMock()
         kernel32 = _make_mock_kernel32()
 
@@ -260,7 +323,6 @@ class DirectoryChangeWatcherEdgeCaseTests(unittest.TestCase):
 
     def test_empty_paths_tuple_exits_thread(self) -> None:
         """An empty paths tuple causes immediate exit."""
-        watcher_mod = load_driver_module("watcher")
         cb = MagicMock()
 
         with patch.object(ctypes, "WinDLL", return_value=_make_mock_kernel32()):
@@ -273,31 +335,8 @@ class DirectoryChangeWatcherEdgeCaseTests(unittest.TestCase):
 
         cb.assert_not_called()
 
-    def test_watcher_thread_exits_after_stop(self) -> None:
-        """After stop() the watcher thread is no longer alive."""
-        watcher_mod = load_driver_module("watcher")
-
-        block = threading.Event()
-
-        def _wait(*_args, **_kwargs):
-            block.wait()
-            return 0
-
-        kernel32 = _make_mock_kernel32(wait_side_effect=_wait)
-
-        with patch.object(ctypes, "WinDLL", return_value=kernel32):
-            w = watcher_mod.DirectoryChangeWatcher(
-                lambda: (_REAL_DIR,),
-                MagicMock(),
-            )
-            w.start()
-            block.set()  # let the mock return so _run exits
-            w.stop()  # joins the thread
-            self.assertIsNone(w._thread)
-
     def test_all_notification_handles_closed(self) -> None:
         """Every FindFirstChangeNotification handle is closed in the finally block."""
-        watcher_mod = load_driver_module("watcher")
         cb = MagicMock()
         callback_fired = threading.Event()
 
@@ -323,7 +362,6 @@ class DirectoryChangeWatcherEdgeCaseTests(unittest.TestCase):
 
     def test_close_handle_called_on_exit(self) -> None:
         """CloseHandle is called for the stop event when _run exits."""
-        watcher_mod = load_driver_module("watcher")
         kernel32 = _make_mock_kernel32()
 
         with patch.object(ctypes, "WinDLL", return_value=kernel32):
@@ -345,37 +383,13 @@ class DirectoryChangeWatcherIntegrationTests(unittest.TestCase):
     """Integration tests using real Win32 kernel32 and temp directories."""
 
     def setUp(self) -> None:
-        import tempfile
-
-        self._tmpdir = Path(tempfile.mkdtemp(prefix="watcher_test_"))
-
-    def tearDown(self) -> None:
-        import shutil
-
-        shutil.rmtree(self._tmpdir, ignore_errors=True)
+        self._tmpdir = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="watcher_test_")))
 
     def _load_real_watcher(self) -> object:
         """Load the watcher module fresh (not cached) to bypass mocks."""
-        import importlib
+        return load_fresh_driver_module("watcher")
 
-        spec = importlib.util.spec_from_file_location(
-            "watcher_real",
-            str(
-                Path(__file__).resolve().parents[1]
-                / "googleTtsForNvda"
-                / "synthDrivers"
-                / "googleTtsForNvda"
-                / "watcher.py"
-            ),
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-
-    def test_detects_file_creation(self) -> None:
-        """Creating a file in a watched directory triggers the callback."""
-        import time
-
+    def _run_integration_watch(self, trigger_action: Any) -> tuple[bool, MagicMock]:
         watcher_mod = self._load_real_watcher()
         cb = MagicMock()
         callback_fired = threading.Event()
@@ -384,21 +398,21 @@ class DirectoryChangeWatcherIntegrationTests(unittest.TestCase):
             callback_fired.set()
             cb(reason)
 
-        w = watcher_mod.DirectoryChangeWatcher(
-            lambda: (self._tmpdir,),
-            _on_change,
-        )
+        w = watcher_mod.DirectoryChangeWatcher(lambda: (self._tmpdir,), _on_change)
         w.start()
-        # Give the thread time to set up the notification handle.
-        time.sleep(0.1)
+        try:
+            # Give the thread time to set up the notification handle.
+            time.sleep(0.1)
+            trigger_action()
+            fired = callback_fired.wait(timeout=3)
+        finally:
+            w.stop()
+        return fired, cb
 
-        # Create a file to trigger the notification.
+    def test_detects_file_creation(self) -> None:
+        """Creating a file in a watched directory triggers the callback."""
         test_file = self._tmpdir / "trigger.txt"
-        test_file.write_text("hello", encoding="utf-8")
-
-        fired = callback_fired.wait(timeout=3)
-        w.stop()
-
+        fired, cb = self._run_integration_watch(lambda: test_file.write_text("hello", encoding="utf-8"))
         self.assertTrue(fired, "Callback was not triggered by file creation")
         reason = cb.call_args[0][0]
         self.assertIn("watched directory changed", reason)
@@ -406,69 +420,51 @@ class DirectoryChangeWatcherIntegrationTests(unittest.TestCase):
 
     def test_detects_file_deletion(self) -> None:
         """Deleting a file in a watched directory triggers the callback."""
-        import time
-
-        watcher_mod = self._load_real_watcher()
-        cb = MagicMock()
-        callback_fired = threading.Event()
-
-        def _on_change(reason: str) -> None:
-            callback_fired.set()
-            cb(reason)
-
-        # Pre-create a file to delete.
         test_file = self._tmpdir / "to_delete.txt"
         test_file.write_text("delete me", encoding="utf-8")
-
-        w = watcher_mod.DirectoryChangeWatcher(
-            lambda: (self._tmpdir,),
-            _on_change,
-        )
-        w.start()
-        time.sleep(0.1)
-
-        test_file.unlink()
-
-        fired = callback_fired.wait(timeout=3)
-        w.stop()
-
+        fired, _cb = self._run_integration_watch(test_file.unlink)
         self.assertTrue(fired, "Callback was not triggered by file deletion")
 
     def test_multiple_dirs_watched(self) -> None:
         """Changes in multiple directories are both detected."""
-        import time
-
         watcher_mod = self._load_real_watcher()
         dir_a = self._tmpdir / "a"
         dir_b = self._tmpdir / "b"
         dir_a.mkdir()
         dir_b.mkdir()
 
-        cb = MagicMock()
-        callback_fired = threading.Event()
+        reasons: list[str] = []
+        dir_a_fired = threading.Event()
+        dir_b_fired = threading.Event()
 
         def _on_change(reason: str) -> None:
-            callback_fired.set()
-            cb(reason)
+            reasons.append(reason)
+            if str(dir_a) in reason:
+                dir_a_fired.set()
+            if str(dir_b) in reason:
+                dir_b_fired.set()
 
         w = watcher_mod.DirectoryChangeWatcher(
             lambda: (dir_a, dir_b),
             _on_change,
         )
         w.start()
-        time.sleep(0.1)
+        try:
+            time.sleep(0.1)
 
-        (dir_a / "file_a.txt").write_text("a", encoding="utf-8")
+            (dir_a / "file_a.txt").write_text("a", encoding="utf-8")
+            fired_a = dir_a_fired.wait(timeout=3)
 
-        fired = callback_fired.wait(timeout=3)
-        w.stop()
+            (dir_b / "file_b.txt").write_text("b", encoding="utf-8")
+            fired_b = dir_b_fired.wait(timeout=3)
+        finally:
+            w.stop()
 
-        self.assertTrue(fired, "Callback was not triggered for dir_a")
+        self.assertTrue(fired_a, f"Callback was not triggered for dir_a; reasons={reasons!r}")
+        self.assertTrue(fired_b, f"Callback was not triggered for dir_b; reasons={reasons!r}")
 
     def test_stop_prevents_further_callbacks(self) -> None:
         """After stop(), no more callbacks fire."""
-        import time
-
         watcher_mod = self._load_real_watcher()
         cb = MagicMock()
 
@@ -477,8 +473,10 @@ class DirectoryChangeWatcherIntegrationTests(unittest.TestCase):
             cb,
         )
         w.start()
-        time.sleep(0.1)
-        w.stop()
+        try:
+            time.sleep(0.1)
+        finally:
+            w.stop()
 
         # Now create a file — callback should NOT fire.
         (self._tmpdir / "late.txt").write_text("late", encoding="utf-8")

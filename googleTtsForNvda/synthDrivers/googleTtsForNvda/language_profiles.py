@@ -40,10 +40,8 @@ def _ranges_to_regex_class(ranges: ScriptRanges) -> str:
 
 _COMBINING_MARK_STARTS: tuple[int, ...] = tuple(start for start, _ in COMBINING_MARK_RANGES)
 _COMBINING_MARK_CLASS = _ranges_to_regex_class(COMBINING_MARK_RANGES)
-_WORD_CORE_PATTERN = (
-    rf"(?:[^\W\d_]+{_COMBINING_MARK_CLASS}*)+"
-    rf"(?:[\u200c\u200d](?:[^\W\d_]+{_COMBINING_MARK_CLASS}*)+)*"
-)
+_WORD_SINGLE_RUN = rf"[^\W\d_]+(?:{_COMBINING_MARK_CLASS}+[^\W\d_]+)*{_COMBINING_MARK_CLASS}*"
+_WORD_CORE_PATTERN = rf"{_WORD_SINGLE_RUN}(?:[\u200c\u200d]{_WORD_SINGLE_RUN})*"
 
 _WORD_CONNECTOR_CHARS = "'’_\\-\u2010\u2011\u05be\u05f3\u05f4\u00b7\u22c5"
 _WORD_INTERNAL_CONNECTOR_CLASS = r"['’\u2010\u2011\u05be\u05f3\u05f4\u00b7\u22c5]"
@@ -83,8 +81,16 @@ def is_combining_mark(cp: int) -> bool:
     return unicodedata.category(chr(cp)).startswith("M")
 
 
+_ROOT_CANONICAL_ALIASES: dict[str, str] = {
+    "gom": "kok",
+    "iw": "he",
+    "ory": "or",
+    "pan": "pa",
+}
+
+
 def script_ranges_for_language_root(root: str) -> ScriptRanges:
-    return LANGUAGE_SCRIPT_RANGES.get(root, ())
+    return LANGUAGE_SCRIPT_RANGES.get(_ROOT_CANONICAL_ALIASES.get(root, root), ())
 
 
 def token_has_character_in_ranges(token: str, ranges: ScriptRanges) -> bool:
@@ -103,6 +109,60 @@ def language_script_signal(token: str, candidateRoots: Collection[str]) -> str |
     return None
 
 
+def single_character_candidate_root(
+    token: str,
+    candidateRoots: Collection[str],
+    preferredRoot: str | None,
+) -> str | None:
+    """Resolve the candidate root for a single character across unique or shared non-Latin scripts."""
+    scriptSignal = language_script_signal(token, candidateRoots)
+    if scriptSignal:
+        return scriptSignal if scriptSignal != preferredRoot else None
+    firstLetter = next((ch for ch in token if unicodedata.category(ch).startswith("L")), "")
+    if not firstLetter:
+        return None
+    charScript = get_character_script(ord(firstLetter))
+    if charScript == "Latin" or not charScript:
+        return None
+    prefRanges = script_ranges_for_language_root(preferredRoot or "")
+    if prefRanges and token_has_character_in_ranges(token, prefRanges):
+        return None
+    for root in candidateRoots:
+        ranges = script_ranges_for_language_root(root)
+        if ranges and token_has_character_in_ranges(token, ranges):
+            return root
+    return None
+
+
+def _latin_exemplar_char_key(char: str) -> str:
+    folded = char.lower()
+    return folded if len(folded) == 1 else char
+
+
+def single_grapheme_candidate_root(
+    stripped: str,
+    candidateRoots: Collection[str],
+    preferredRoot: str | None = None,
+) -> str | None:
+    """Return a non-preferred candidate root when a single grapheme matches its script or CLDR Latin exemplar."""
+    if not stripped or not candidateRoots:
+        return None
+    normalized = unicodedata.normalize("NFC", stripped)
+    scriptRoot = single_character_candidate_root(normalized, candidateRoots, preferredRoot)
+    if scriptRoot and scriptRoot != preferredRoot:
+        return scriptRoot
+    if not normalized.isascii():
+        exemplarSignal = latin_exemplar_signal(normalized, candidateRoots)
+        if (
+            exemplarSignal
+            and exemplarSignal != preferredRoot
+            and _latin_exemplar_char_key(normalized)
+            not in _LATIN_NON_ASCII_EXEMPLARS.get(preferredRoot or "", frozenset())
+        ):
+            return exemplarSignal
+    return None
+
+
 def latin_exemplar_signal(text: str, candidateRoots: Collection[str]) -> str | None:
     """Return the winning Latin candidate root based on CLDR non-ASCII exemplar characters."""
     if not text or text.isascii():
@@ -115,8 +175,7 @@ def latin_exemplar_signal(text: str, candidateRoots: Collection[str]) -> str | N
     for char in normalized:
         if char.isascii() or not char.isalpha():
             continue
-        folded = char.lower()
-        nonAsciiChars.append(folded if len(folded) == 1 else char)
+        nonAsciiChars.append(_latin_exemplar_char_key(char))
     if not nonAsciiChars:
         return None
     scores: dict[str, int] = {root: 0 for root in latinRoots}
@@ -155,6 +214,7 @@ def language_token_signal(
 
 
 _MATH_ALPHANUMERIC_TRANSLATION_TABLE: dict[int, str] = NORMALIZATION_TABLE
+_ASCII_NORMALIZATION_CONTROLS = ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x1f")
 _NFC_PRESERVED_PUNCT_RE = re.compile(r"([\u037e\u0387]+)")
 
 
@@ -167,7 +227,11 @@ def normalize_mathematical_alphanumeric(text: str) -> str:
     decomposed combining sequences (NFD -> NFC), and UCD 17.0 / CLDR 48.2
     compatibility characters to standard readable precomposed script characters.
     """
-    if not text or text.isascii():
+    if not text:
+        return text
+    if text.isascii():
+        if any(ctrl in text for ctrl in _ASCII_NORMALIZATION_CONTROLS):
+            return text.translate(_MATH_ALPHANUMERIC_TRANSLATION_TABLE)
         return text
     translated = text.translate(_MATH_ALPHANUMERIC_TRANSLATION_TABLE)
     if "\u037e" in translated or "\u0387" in translated:
@@ -180,13 +244,15 @@ def normalize_mathematical_alphanumeric(text: str) -> str:
 
 
 def is_single_grapheme_token(text: str) -> bool:
-    """Return True if text (ignoring outer whitespace) is a single character or single base character with combining marks."""
+    """Return True if text (ignoring outer whitespace) is a single character, base+marks, or single emoji grapheme."""
     if not text:
         return False
     stripped = normalize_mathematical_alphanumeric(text).strip()
     if not stripped:
         return False
     if len(stripped) == 1:
+        return True
+    if _EMOJI_SINGLE_RE.match(stripped):
         return True
     return all(is_combining_mark(ord(ch)) for ch in stripped[1:])
 
@@ -208,8 +274,11 @@ _EMOJI_BASE = (
     rf"|{_EMOJI_PICTOGRAPH_CLASS}"
     r")"
 )
-_EMOJI_MODIFIERS = r"(?:[\uFE0E\uFE0F\u20E3\U0001F3FB-\U0001F3FF\U000E0020-\U000E007F])*"
-_EMOJI_RUN_PATTERN = rf"(?:{_EMOJI_BASE}{_EMOJI_MODIFIERS}(?:\u200D{_EMOJI_BASE}{_EMOJI_MODIFIERS})*)+"
+_EMOJI_MODIFIERS = r"[\uFE0E\uFE0F\u20E3\U0001F3FB-\U0001F3FF\U000E0020-\U000E007F]*+"
+_EMOJI_ZWJ_LINK = rf"(?>\u200D{_EMOJI_BASE}{_EMOJI_MODIFIERS})*+"
+_EMOJI_SINGLE_PATTERN = rf"{_EMOJI_BASE}{_EMOJI_MODIFIERS}{_EMOJI_ZWJ_LINK}"
+_EMOJI_RUN_PATTERN = rf"(?>{_EMOJI_SINGLE_PATTERN})++"
+_EMOJI_SINGLE_RE = re.compile(rf"^{_EMOJI_SINGLE_PATTERN}$", re.UNICODE)
 _EMOJI_TOKEN_RE = re.compile(rf"^{_EMOJI_RUN_PATTERN}$", re.UNICODE)
 
 
@@ -234,11 +303,11 @@ _UNITS_PATTERN = rf"(?-i:(?:{'|'.join(re.escape(u) for u in _INTERNATIONAL_UNITS
 _TIME_PATTERN = (
     r"(?:"
     r"\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:AM|PM|am|pm))?"
-    r"|\d{1,2}[h:]\d{2}(?:[a-zA-Z]+)?"
+    r"|\d{1,2}[h:]\d{2}(?:am|pm|sa|ch|a\.m\.|p\.m\.|[hmps])?(?![^\W\d_])"
     r")"
 )
-_NUM_CORE = r"(?:\d+(?:[.,/:\u066b\u066c\u060d]\d+)*)"
-_NUM_RANGE_OP = r"[–—~×xX*+±/\-]"
+_NUM_CORE = r"(?:\d++(?:[.,/:\u066b\u066c\u060d]\d++)*+)"
+_NUM_RANGE_OP = r"(?:[–—~×xX*+±\-]|/(?!\d)|(?<!\d)/)"
 
 _NUMBER_CHUNK_PATTERN = (
     rf"(?:(?:[±~]\s*|[+\-])?(?:(?:{_CURRENCY_PATTERN}|{_PERCENT_PATTERN})\s*)?"
@@ -259,9 +328,15 @@ def is_number_token(token: str) -> bool:
 
 def is_symbol_or_emoji_token(token: str) -> bool:
     """Check if token is composed entirely of symbols, emojis, or punctuation."""
-    return is_emoji_token(token) or (
-        bool(token) and all(not unicodedata.category(c).startswith("L") and not c.isdigit() for c in token)
+    stripped = token.strip() if token else ""
+    return is_emoji_token(stripped) or (
+        bool(stripped) and all(not unicodedata.category(c).startswith("L") and not c.isdigit() for c in stripped)
     )
+
+
+_NON_LATIN_ROOT_ALIASES: dict[str, tuple[str, ...]] = {
+    "he": ("iw",),
+}
 
 
 def _build_script_to_candidate_roots() -> dict[str, tuple[str, ...]]:
@@ -272,12 +347,16 @@ def _build_script_to_candidate_roots() -> dict[str, tuple[str, ...]]:
     """
     byScript: dict[str, list[str]] = {}
     for root, scripts in SUPPORTED_LANGUAGE_SCRIPTS.items():
+        aliases = _NON_LATIN_ROOT_ALIASES.get(root, ())
         for script in scripts:
             if script in ("Latin", "Han"):
                 continue
-            byScript.setdefault(script, []).append(root)
-    if "Hebrew" in byScript and "iw" not in byScript["Hebrew"]:
-        byScript["Hebrew"].append("iw")
+            roots = byScript.setdefault(script, [])
+            if root not in roots:
+                roots.append(root)
+            for alias in aliases:
+                if alias not in roots:
+                    roots.append(alias)
     return {script: tuple(sorted(roots)) for script, roots in sorted(byScript.items())}
 
 
@@ -300,19 +379,28 @@ def get_character_script(cp: int) -> str | None:
     return None
 
 
+_DOMAIN_LABEL = r"[A-Za-z0-9_](?:[A-Za-z0-9_\-]*[A-Za-z0-9_])?"
+_LOWER_DOMAIN_LABEL = r"[a-z0-9_](?:[a-z0-9_\-]*[a-z0-9_])?"
 _URL_EMAIL_DOMAIN_PATTERN = (
     r"(?:"
-    r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s<>\"')\]}]*[A-Za-z0-9/_=#%&+\-~]"
+    r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s<>\"')\]}]*(?:[A-Za-z0-9/_=#%&+\-~]|[^\W\d_])"
     r"|[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"
-    r"|(?-i:[A-Za-z0-9_]+(?:\.[a-z0-9_]+)*\.[a-z]{2,})"
+    rf"|(?-i:(?=[A-Z0-9_.]*[A-Z])[A-Z0-9_]{{2,}}(?:\.[A-Z0-9_]{{2,}})+|{_DOMAIN_LABEL}(?:\.{_LOWER_DOMAIN_LABEL})*\.[a-z]{{2,}})"
     r")"
 )
+_URL_EMAIL_DOMAIN_RE = re.compile(rf"^(?:{_URL_EMAIL_DOMAIN_PATTERN})$", re.IGNORECASE | re.UNICODE)
+
+
+def is_url_or_email_token(token: str) -> bool:
+    """Return True if token is a URL, email address, or dotted domain/filename."""
+    return bool(_URL_EMAIL_DOMAIN_RE.match(token))
+
 
 _MIXED_TOKENIZER_RE = re.compile(
     rf"\s+"
     rf"|{_EMOJI_RUN_PATTERN}"
-    rf"|{_NUMBER_CHUNK_PATTERN}"
     rf"|{_URL_EMAIL_DOMAIN_PATTERN}"
+    rf"|{_NUMBER_CHUNK_PATTERN}"
     rf"|{_WORD_TOKEN_PATTERN}"
     rf"|(?:[^\w\s]|_)+",
     re.IGNORECASE | re.UNICODE,
@@ -471,13 +559,15 @@ def _is_clause_break_chunk(chunks: list[tuple[str, str]], idx: int) -> bool:
 
 
 def has_language_words(text: str) -> bool:
-    """Return True if text contains at least one word token (excluding numbers, units, currencies, symbols, and emojis)."""
+    """Return True if text contains at least one word token (excluding numbers, URLs, symbols, and emojis)."""
     normalizedText = normalize_mathematical_alphanumeric(text)
     stripped = normalizedText.strip()
     if not stripped:
         return False
     tokens = [tok for tok in _MIXED_TOKENIZER_RE.findall(stripped) if not tok.isspace()]
-    return any(not (is_number_token(tok) or is_symbol_or_emoji_token(tok)) for tok in tokens)
+    return any(
+        not (is_number_token(tok) or is_url_or_email_token(tok) or is_symbol_or_emoji_token(tok)) for tok in tokens
+    )
 
 
 def is_spelling_only_text(text: str) -> bool:
@@ -508,7 +598,7 @@ def _candidate_roots_map(candidateLanguages: list[str]) -> dict[str, str]:
     """Map language roots to their highest-priority candidate locale."""
     roots: dict[str, str] = {}
     for cand in candidateLanguages:
-        roots.setdefault(cand.split("-", 1)[0].lower(), cand)
+        roots.setdefault(cand.replace("_", "-").split("-", 1)[0].lower(), cand)
     return roots
 
 
@@ -545,39 +635,34 @@ def segment_mixed_text(
         return [(normalizedText, lang)]
 
     candidateRoots = _candidate_roots_map(candidateLanguages)
-    prefRoot = preferredLanguage.split("-", 1)[0].lower()
+    prefRoot = preferredLanguage.replace("_", "-").split("-", 1)[0].lower()
 
     # Single character reading (when not part of a multi-item utterance with an active defaultLanguage):
     # route directly to preferred language (or candidate language if matching a non-Latin script
     # or a non-preferred Latin exemplar character).
     if is_single_grapheme_token(stripped) and defaultLanguage is None:
-        scriptSignal = language_script_signal(stripped, candidateRoots)
-        if scriptSignal and scriptSignal != prefRoot and scriptSignal in candidateRoots:
-            return [(normalizedText, candidateRoots[scriptSignal])]
-        if not stripped.isascii():
-            exemplarSignal = latin_exemplar_signal(stripped, candidateRoots)
-            if (
-                exemplarSignal
-                and exemplarSignal != prefRoot
-                and exemplarSignal in candidateRoots
-                and stripped.lower() not in _LATIN_NON_ASCII_EXEMPLARS.get(prefRoot, frozenset())
-            ):
-                return [(normalizedText, candidateRoots[exemplarSignal])]
+        matchedRoot = single_grapheme_candidate_root(stripped, candidateRoots, prefRoot)
+        if matchedRoot and matchedRoot in candidateRoots:
+            return [(normalizedText, candidateRoots[matchedRoot])]
         return [(normalizedText, preferredLanguage)]
 
     spellingOnlyUtterance = is_spelling_only_text(normalizedText)
 
     chunks: list[tuple[str, str]] = []
-    # Tokenize preserving exact whitespace, emojis, numbers with units/currency/time, words, and punctuation
+    chunkHasKana: list[bool] = []
+    # Tokenize preserving exact whitespace, emojis, numbers with units/currency/time, URLs, words, and punctuation
     rawTokens = _MIXED_TOKENIZER_RE.findall(normalizedText)
 
     for tok in rawTokens:
+        tokenHasKana = False
         if tok.isspace():
             chunks.append((tok, "WHITE"))
         elif is_emoji_token(tok):
             chunks.append((tok, "SYM"))
         elif is_number_token(tok):
             chunks.append((tok, "NUM"))
+        elif is_url_or_email_token(tok):
+            chunks.append((tok, "URL"))
         elif is_symbol_or_emoji_token(tok):
             if all(unicodedata.category(c).startswith("P") or c.isspace() for c in tok):
                 chunks.append((tok, "PUNCT"))
@@ -585,23 +670,43 @@ def segment_mixed_text(
                 chunks.append((tok, "SYM"))
         else:
             scripts = [get_character_script(ord(c)) for c in tok if unicodedata.category(c).startswith("L")]
+            tokenHasKana = any(s in ("Hiragana", "Katakana") for s in scripts)
             dominantScript = next((s for s in scripts if s is not None), "Latin")
             chunks.append((tok, f"SCRIPT_{dominantScript}"))
+        chunkHasKana.append(tokenHasKana)
 
-    hasKana = any(cat in ("SCRIPT_Hiragana", "SCRIPT_Katakana") for _, cat in chunks)
-    hanCandidates = [cand for cand in candidateLanguages if cand.split("-", 1)[0].lower() in _HAN_CANDIDATE_ROOTS]
+    clauseHasKana = [False] * len(chunks)
+    clauseStartIdx = 0
+    while clauseStartIdx < len(chunks):
+        if _is_clause_break_chunk(chunks, clauseStartIdx):
+            clauseStartIdx += 1
+            continue
+        clauseEndIdx = clauseStartIdx
+        hasKanaInClause = False
+        while clauseEndIdx < len(chunks) and not _is_clause_break_chunk(chunks, clauseEndIdx):
+            if chunkHasKana[clauseEndIdx]:
+                hasKanaInClause = True
+            clauseEndIdx += 1
+        if hasKanaInClause:
+            for k in range(clauseStartIdx, clauseEndIdx):
+                clauseHasKana[k] = True
+        clauseStartIdx = clauseEndIdx
+
+    hanCandidates = [
+        cand for cand in candidateLanguages if cand.replace("_", "-").split("-", 1)[0].lower() in _HAN_CANDIDATE_ROOTS
+    ]
 
     # Initial language classification for chunks:
-    # Whitespace, punctuation, symbols/emojis, and numbers/units/currencies/times are language-neutral (None)
-    # and inherit the language of the clause being spoken.
+    # Whitespace, punctuation, symbols/emojis, URLs/emails, and numbers/units/currencies/times
+    # are language-neutral (None) and inherit the language of the clause being spoken.
     classifiedChunks: list[tuple[str, str | None]] = []
-    for val, cat in chunks:
-        if cat in ("WHITE", "PUNCT", "SYM", "NUM"):
+    for idx, (val, cat) in enumerate(chunks):
+        if cat in ("WHITE", "PUNCT", "SYM", "NUM", "URL"):
             classifiedChunks.append((val, None))
         elif cat.startswith("SCRIPT_"):
             scriptName = cat.split("_", 1)[1]
             if scriptName == "Han":
-                if hasKana and "ja" in candidateRoots:
+                if clauseHasKana[idx] and "ja" in candidateRoots:
                     classifiedChunks.append((val, candidateRoots["ja"]))
                 elif len(hanCandidates) == 1:
                     classifiedChunks.append((val, hanCandidates[0]))
@@ -624,13 +729,15 @@ def segment_mixed_text(
             elif scriptName in _SCRIPT_TO_CANDIDATE_ROOTS:
                 # Check preferredLanguage first if it supports this script
                 validRoots = _SCRIPT_TO_CANDIDATE_ROOTS[scriptName]
-                if prefRoot in validRoots:
+                canonicalPrefRoot = _ROOT_CANONICAL_ALIASES.get(prefRoot, prefRoot)
+                if canonicalPrefRoot in validRoots:
                     classifiedChunks.append((val, preferredLanguage))
                 else:
                     # Match according to user-configured priority in candidateLanguages
                     for cand in candidateLanguages:
-                        candRoot = cand.split("-", 1)[0].lower()
-                        if candRoot in validRoots:
+                        candRoot = cand.replace("_", "-").split("-", 1)[0].lower()
+                        canonicalCandRoot = _ROOT_CANONICAL_ALIASES.get(candRoot, candRoot)
+                        if canonicalCandRoot in validRoots:
                             classifiedChunks.append((val, cand))
                             break
                     else:
@@ -641,7 +748,16 @@ def segment_mixed_text(
 
     # Resolve LATIN chunks
     latinCandidateRoots = [r for r in candidateRoots if "Latin" in SUPPORTED_LANGUAGE_SCRIPTS.get(r, ())]
-    latinCandidates = [cand for cand in candidateLanguages if cand.split("-", 1)[0].lower() in latinCandidateRoots]
+    latinCandidates = [
+        cand for cand in candidateLanguages if cand.replace("_", "-").split("-", 1)[0].lower() in latinCandidateRoots
+    ]
+    preferredLatin = (
+        preferredLanguage
+        if preferredLanguage in latinCandidates
+        else candidateRoots.get(prefRoot)
+        if prefRoot in latinCandidateRoots
+        else None
+    )
     if len(latinCandidates) <= 1:
         singleLatin = latinCandidates[0] if latinCandidates else preferredLanguage
         classifiedChunks = [(v, singleLatin if lang == "LATIN" else lang) for v, lang in classifiedChunks]
@@ -680,9 +796,9 @@ def segment_mixed_text(
                         latinCandidates,
                         preferredLanguage=None,
                     )
-                    latinTarget = detectedLatin or candidateRoots.get("en") or latinCandidates[0]
+                    latinTarget = detectedLatin or preferredLatin or candidateRoots.get("en") or latinCandidates[0]
                 else:
-                    latinTarget = candidateRoots.get("en") or latinCandidates[0]
+                    latinTarget = candidateRoots.get("en") or preferredLatin or latinCandidates[0]
                 for k in range(start, end):
                     if classifiedChunks[k][1] == "LATIN":
                         classifiedChunks[k] = (classifiedChunks[k][0], latinTarget)
@@ -690,12 +806,18 @@ def segment_mixed_text(
             else:
                 i += 1
 
-    # Attach neutral tokens (spaces, punctuation, symbols, numbers) to the active clause language.
-    # Leading neutral tokens attach to the first non-None word language (or defaultLanguage / preferredLanguage).
+    # Attach neutral tokens (spaces, punctuation, symbols, URLs, numbers) to the active clause language.
+    # Leading neutral tokens attach to the first non-None word language in the initial clause
+    # (or defaultLanguage / preferredLanguage when a neutral clause ends at punctuation before any word).
     firstLang = defaultLanguage or preferredLanguage
-    for _val, lang in classifiedChunks:
+    sawNeutralContent = False
+    for idx, (_val, lang) in enumerate(classifiedChunks):
         if lang is not None:
             firstLang = lang
+            break
+        if chunks[idx][1] in ("NUM", "URL"):
+            sawNeutralContent = True
+        elif sawNeutralContent and _is_clause_break_chunk(chunks, idx):
             break
 
     resolved: list[tuple[str, str]] = []
@@ -708,7 +830,7 @@ def segment_mixed_text(
             awaitingClauseLang = False
             resolved.append((val, lang))
         else:
-            if awaitingClauseLang and cat in ("NUM", "SYM"):
+            if awaitingClauseLang and cat in ("NUM", "SYM", "URL"):
                 for nextIdx in range(idx + 1, len(classifiedChunks)):
                     _nextVal, nextLang = classifiedChunks[nextIdx]
                     if nextLang is not None:

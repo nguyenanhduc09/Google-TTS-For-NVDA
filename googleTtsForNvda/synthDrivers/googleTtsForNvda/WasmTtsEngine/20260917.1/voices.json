@@ -713,6 +713,7 @@
     "sha256Checksum": "bb581763820952263cc92c6186d650fbe9035de9c6042f0de41d6b1ce04e77e2",
     "compressedSize": 8020636,
     "remote": true,
+    "dependentVoiceId": "de-de-x-multi",
     "speakers": [
       {
         "speaker": "dea",
@@ -814,6 +815,7 @@
     "sha256Checksum": "2d2338cbdbad6ceddd23ab657ca2f2f6a4d7428447beeeabb62c98f7eebc820b",
     "compressedSize": 56559714,
     "remote": true,
+    "dependentVoiceId": "de-de-x-multi",
     "speakers": [
       {
         "speaker": "dej",
@@ -834,6 +836,7 @@
     "sha256Checksum": "bb71d5672196281e8e86a1919af251231370d2a73924c10600d5f45296ee982c",
     "compressedSize": 11291057,
     "remote": true,
+    "dependentVoiceId": "de-de-x-multi",
     "speakers": [
       {
         "speaker": "dej",
@@ -976,6 +979,7 @@
     "sha256Checksum": "a53951201b6391fde388b5a412996db125374754b6ef799cf5913c77227f71ee",
     "compressedSize": 10844552,
     "remote": true,
+    "dependentVoiceId": "en-au-x-multi",
     "speakers": [
       {
         "speaker": "afh",
@@ -1107,6 +1111,7 @@
     "sha256Checksum": "49fcd93a61b87d9cfdfd71867093a3d81a05c18511eb5fdc7d3d8bb215add330",
     "compressedSize": 8619025,
     "remote": true,
+    "dependentVoiceId": "en-gb-x-multi",
     "speakers": [
       {
         "speaker": "fis",
@@ -1289,6 +1294,7 @@
     "sha256Checksum": "c1d5a0239206b7ea02fa0aca20ad027885ef35a01fac9dcc0b9db2115bc491cc",
     "compressedSize": 66417567,
     "remote": true,
+    "dependentVoiceId": "en-in-x-multi",
     "speakers": [
       {
         "speaker": "cxx",
@@ -1339,6 +1345,7 @@
     "sha256Checksum": "6493375c96021f3f518342fce927c302bd52b8e409e8978b7567757230f4eb03",
     "compressedSize": 21108800,
     "remote": true,
+    "dependentVoiceId": "en-in-x-multi",
     "speakers": [
       {
         "speaker": "cxx",
@@ -1471,6 +1478,7 @@
     "sha256Checksum": "3753e61c1c713f080eb420f02cb4be398a035b7ecfb7a748d8a87f807e4dc904",
     "compressedSize": 18575475,
     "remote": true,
+    "dependentVoiceId": "en-us-x-multi",
     "speakers": [
       {
         "speaker": "guriel",
@@ -1632,6 +1640,7 @@
     "sha256Checksum": "4f61afe00c2e2a67a9cc09eb848224718ef6f36168eedc5b0b5a545527c9bc20",
     "compressedSize": 16252681,
     "remote": true,
+    "dependentVoiceId": "en-us-x-multi",
     "speakers": [
       {
         "speaker": "hol",
@@ -1823,6 +1832,7 @@
     "sha256Checksum": "e541a23256763fcbd8daeeda0a89cd3f19f29db94aae06e197dd6237463159a8",
     "compressedSize": 56652730,
     "remote": true,
+    "dependentVoiceId": "en-us-x-multi",
     "speakers": [
       {
         "speaker": "msf00005",
@@ -1873,6 +1883,7 @@
     "sha256Checksum": "3812997ea1f4b8e92234bfffcff9a88c1d4c3b13cde7d7393a753a824c411a4f",
     "compressedSize": 11624889,
     "remote": true,
+    "dependentVoiceId": "en-us-x-multi",
     "speakers": [
       {
         "speaker": "msf00005",
@@ -2089,6 +2100,7 @@
     "sha256Checksum": "38d59700a574aaefba304f7b3dcd4efa99e5d62251cb436ddeced64b24faefa4",
     "compressedSize": 10066341,
     "remote": true,
+    "dependentVoiceId": "es-us-x-multi",
     "speakers": [
       {
         "speaker": "sfb",
@@ -2220,6 +2232,7 @@
     "sha256Checksum": "9d7cece517ee8beab9ac8a54315b7fa487df6f82a7ab4ff7574f076733258b78",
     "compressedSize": 56334620,
     "remote": true,
+    "dependentVoiceId": "es-us-x-multi",
     "speakers": [
       {
         "speaker": "esk",
@@ -2250,6 +2263,7 @@
     "sha256Checksum": "00add2f452ba39a9b8afb2472199e450e1087ea2e126c42661fc645ed5520b00",
     "compressedSize": 11510205,
     "remote": true,
+    "dependentVoiceId": "es-us-x-multi",
     "speakers": [
       {
         "speaker": "esk",
@@ -2549,6 +2563,7 @@
     "sha256Checksum": "f5537e69a3660ca5de91b1c3602b6f074932ad9308f6fe0e1bd1d92439a56392",
     "compressedSize": 11537708,
     "remote": true,
+    "dependentVoiceId": "fr-fr-x-multi",
     "speakers": [
       {
         "speaker": "cfe",
@@ -2589,6 +2604,7 @@
     "sha256Checksum": "13212da7913a08cd968f36d049fca9b5006e77c25e091f77a826df670445c094",
     "compressedSize": 6021416,
     "remote": true,
+    "dependentVoiceId": "fr-fr-x-multi",
     "speakers": [
       {
         "speaker": "cfe",
@@ -2903,6 +2919,7 @@
     "sha256Checksum": "a90c7bd705d27315d600621d182b1f30eb443b48cf9f865146c45e5f5cb52fa9",
     "compressedSize": 56810592,
     "remote": true,
+    "dependentVoiceId": "hi-in-x-multi",
     "speakers": [
       {
         "speaker": "hif",
@@ -2933,6 +2950,7 @@
     "sha256Checksum": "6483ec6c52c296c1662690ebaf6970e36bd793b818268d5463683747064075aa",
     "compressedSize": 11509951,
     "remote": true,
+    "dependentVoiceId": "hi-in-x-multi",
     "speakers": [
       {
         "speaker": "hif",
@@ -4554,6 +4572,7 @@
     "sha256Checksum": "d76af61ec3a62423b68cbd84aeda41c9f21fa422dbd83e83cefa7f4251838c39",
     "compressedSize": 56691283,
     "remote": true,
+    "dependentVoiceId": "pt-br-x-multi",
     "speakers": [
       {
         "speaker": "ptf",
@@ -4584,6 +4603,7 @@
     "sha256Checksum": "0e177d0043dcdea111df4bd67e4b1f803fc2f2b363a934c3a41d99b3ee3829aa",
     "compressedSize": 11530329,
     "remote": true,
+    "dependentVoiceId": "pt-br-x-multi",
     "speakers": [
       {
         "speaker": "ptf",

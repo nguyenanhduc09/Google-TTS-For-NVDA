@@ -9,6 +9,8 @@ from tests.test_support import pcm_bytes as _pcm
 from tests.test_support import pcm_samples as _samples
 
 CORPUS_PATH = ROOT / "tests" / "segmentation_corpus.json"
+processing = load_driver_module("speech_processing")
+_SEGMENTER = processing.DEFAULT_TEXT_SEGMENTER
 SUPPORTED_SCHEMA_VERSION = 1
 SUPPORTED_OPERATIONS = {"sentenceUnits", "latencySegments"}
 REQUIRED_CATEGORIES = {
@@ -42,9 +44,7 @@ def _sentence_units(segmenter: object, text: str) -> list[str]:
 
 
 class PcmSilenceShortenerTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
+    processing = processing
 
     def _process(self, mode: str, pcm: bytes, chunks: list[int] | None = None) -> bytes:
         shortener = self.processing.create_pcm_silence_shortener(mode, 1000)
@@ -209,9 +209,7 @@ class PcmSilenceShortenerTests(unittest.TestCase):
 
 
 class PcmLeadBufferTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
+    processing = processing
 
     def test_lead_is_released_once_and_later_pcm_passes_through(self) -> None:
         lead = self.processing.PcmLeadBuffer(sampleRate=1000, leadMs=3)
@@ -228,16 +226,14 @@ class PcmLeadBufferTests(unittest.TestCase):
 
 
 class TextSegmenterTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
-        cls.segmenter = cls.processing.DEFAULT_TEXT_SEGMENTER
-        cls.corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    processing = processing
+    segmenter = _SEGMENTER
+    corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
 
     def test_medium_fast_first_segmentation_is_opt_in(self) -> None:
         text = (
             "This medium announcement deliberately has no punctuation and remains below the regular "
-            "phrase limit while still being long enough to benefit from a fast first segment"
+            "phrase limit while still being long enough to trigger a short first segment"
         )
 
         regular = list(self.segmenter.iter_text_segments_for_latency(text, False))
@@ -283,7 +279,7 @@ class TextSegmenterTests(unittest.TestCase):
             self.assertGreaterEqual(len(segment), self.processing.MIN_ORPHAN_SPACE_CHARS)
 
     def test_fast_first_early_soft_break_preference(self) -> None:
-        """Verify that an early comma produces a faster, natural first segment."""
+        """Verify that an early comma produces a natural first segment."""
         text = (
             "Khi chúng tôi tiến hành thử nghiệm cấu hình âm thanh mới, kết quả đo đạc thực tế "
             "trên hệ thống được ghi nhận đầy đủ và lưu trữ vào cơ sở dữ liệu."
@@ -293,6 +289,13 @@ class TextSegmenterTests(unittest.TestCase):
         self.assertTrue(segments[0].endswith(","))
         self.assertLessEqual(len(segments[0]), self.processing.FAST_FIRST_PREFERRED_SOFT_CHARS + 5)
         self.assertGreaterEqual(len(segments[1]), self.processing.MIN_ORPHAN_SPACE_CHARS)
+
+    def test_extend_cut_never_splits_multi_zwj_emoji_past_max_cut(self) -> None:
+        family = "👨\u200d👩\u200d👧\u200d👦"
+        text = "prefix" + family + "suffix"
+        cut_inside_zwj = len("prefix") + 2
+        extended = self.segmenter._extend_cut_over_combining_marks(text, cut_inside_zwj, cut_inside_zwj + 1)
+        self.assertEqual(len("prefix") + len(family), extended)
 
     def test_fast_first_under_120_chars_stays_intact(self) -> None:
         """Verify natural single sentences under the 120-char trigger are not prematurely split."""
@@ -416,9 +419,10 @@ class TextSegmenterTests(unittest.TestCase):
 
 
 class ShortAudioCacheKeyTests(unittest.TestCase):
+    processing = processing
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
         cls.expected_option_fields = (
             "voiceId",
             "rate",
@@ -566,10 +570,8 @@ class ShortAudioCacheKeyTests(unittest.TestCase):
 class SingleLetterAbbreviationGuardTests(unittest.TestCase):
     """Verify the isascii() guard prevents non-Latin single-letter words from blocking splits."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
-        cls.segmenter = cls.processing.DEFAULT_TEXT_SEGMENTER
+    processing = processing
+    segmenter = _SEGMENTER
 
     def test_kannada_single_letter_before_period_splits(self) -> None:
         splits = self.segmenter.find_sentence_splits("\u0caf. \u0caf.")
@@ -587,9 +589,7 @@ class SingleLetterAbbreviationGuardTests(unittest.TestCase):
 class UnicodeSentenceTerminatorTests(unittest.TestCase):
     """Ensure the public is_sentence_terminator_character covers every script."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
+    processing = processing
 
     def test_ascii_sentence_terminals(self) -> None:
         is_term = self.processing.is_sentence_terminator_character
@@ -665,9 +665,7 @@ class UnicodeSentenceTerminatorTests(unittest.TestCase):
 class CommonAbbreviationsIntegrityTests(unittest.TestCase):
     """Verify that no hardcoded abbreviation dictionary is retained in the synth driver."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
+    processing = processing
 
     def test_no_hardcoded_abbreviations_retained(self) -> None:
         abbrevs = self.processing.COMMON_ABBREVIATIONS
@@ -687,10 +685,8 @@ class CommonAbbreviationsIntegrityTests(unittest.TestCase):
 class ForcedLatencyCutLoggingTests(unittest.TestCase):
     """Verify debug logging when forced latency cuts are triggered."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
-        cls.segmenter = cls.processing.DEFAULT_TEXT_SEGMENTER
+    processing = processing
+    segmenter = _SEGMENTER
 
     def test_forced_cut_emits_debug_log(self) -> None:
         long_text = "word " * 30  # 150 chars
@@ -704,27 +700,27 @@ class ForcedLatencyCutLoggingTests(unittest.TestCase):
 class UrlAndDomainBoundaryTests(unittest.TestCase):
     """Verify URL token recognition and sentence splitting at URL/domain boundaries."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.processing = load_driver_module("speech_processing")
-        cls.segmenter = cls.processing.DEFAULT_TEXT_SEGMENTER
+    processing = processing
+    segmenter = _SEGMENTER
 
     def test_looks_like_url_token(self) -> None:
-        self.assertTrue(self.segmenter.looks_like_url_token("https://google.com"))
+        self.assertTrue(self.segmenter.looks_like_url_token("https://example.org"))
         self.assertTrue(self.segmenter.looks_like_url_token("http://example.com/path"))
-        self.assertTrue(self.segmenter.looks_like_url_token("www.google.com"))
+        self.assertTrue(self.segmenter.looks_like_url_token("www.example.org"))
         self.assertTrue(self.segmenter.looks_like_url_token("ftp.example.org"))
         self.assertTrue(self.segmenter.looks_like_url_token("mailto:user@example.com"))
         self.assertTrue(self.segmenter.looks_like_url_token("user@example.com"))
         self.assertFalse(self.segmenter.looks_like_url_token("hello world"))
         self.assertFalse(self.segmenter.looks_like_url_token("plain"))
         self.assertFalse(self.segmenter.looks_like_url_token("U.S.A."))
+        self.assertFalse(self.segmenter.looks_like_url_token("1/2"))
+        self.assertFalse(self.segmenter.looks_like_url_token("2026/11/16"))
 
     def test_sentence_split_after_url_and_domain(self) -> None:
         cases = [
-            ("Truy cập https://google.com. Sau đó nhấn Enter.", 29),
+            ("Truy cập https://example.org. Sau đó nhấn Enter.", 30),
             ("Open www.example.org. Then continue.", 22),
-            ("Truy cập google.com. Sau đó tiếp tục.", 21),
+            ("Truy cập example.org. Sau đó tiếp tục.", 22),
             ("Read news on example.net. Check later.", 26),
             ("Check example.co.uk. Then reply.", 21),
         ]
@@ -828,6 +824,51 @@ class UrlAndDomainBoundaryTests(unittest.TestCase):
             self.assertGreaterEqual(ms_shorten_all, 15)
             self.assertLessEqual(ms_shorten_all, 45)
             self.assertEqual(ms_end_only - ms_shorten_all, 10)
+
+    def test_variation_selector_on_punctuation_not_split_or_orphaned(self) -> None:
+        # Unicode sentence terminators & soft breaks followed by U+FE0F stay attached and never orphan marks.
+        second = "And the next sentence keeps adding many descriptive words so that both sentences stay separated."
+        for first in (
+            "This opening sentence keeps adding descriptive words until it clearly reaches enough length right here\u203c\ufe0f",
+            "This opening sentence keeps adding descriptive words until it clearly reaches enough length right here!\ufe0f",
+        ):
+            combined = f"{first} {second}"
+            self.assertEqual([len(first) + 1], self.segmenter.find_sentence_splits(combined))
+            parts = self.segmenter.split_text_for_latency(combined)
+            self.assertEqual([first, second], parts)
+            self.assertTrue(self.segmenter.should_pause_after_segment(first))
+            self.assertTrue(self.segmenter.ends_with_pause_punctuation(first))
+
+        long_comma = ("word " * 20) + "pause,\ufe0f " + ("more words " * 15)
+        soft_parts = self.segmenter.split_text_for_latency(long_comma)
+        self.assertEqual(2, len(soft_parts))
+        self.assertTrue(soft_parts[0].endswith(",\ufe0f"))
+        self.assertFalse(soft_parts[1].startswith("\ufe0f"))
+        self.assertTrue(self.segmenter.ends_with_pause_punctuation(soft_parts[0]))
+
+    def test_silence_shortener_hold_cap_and_segmentation_edge_guards(self) -> None:
+        shortener = self.processing.create_pcm_silence_shortener(
+            self.processing.PAUSE_MODE_SHORTEN_END_ONLY,
+            8000,
+        )
+        # 70 seconds of silence (16,000 bytes/s -> 1,120,000 bytes) must be capped at 60s.
+        silence_chunk = b"\x00\x00" * 8000  # 1s
+        for _ in range(70):
+            shortener.feed(silence_chunk)
+        self.assertLessEqual(len(shortener._heldSilence), shortener._maxHoldBytes)
+        self.assertEqual(960000, shortener._maxHoldBytes)
+
+        self.assertTrue(self.segmenter._needs_spoken_segment_space(",", "b"))
+        self.assertTrue(self.segmenter._needs_spoken_segment_space(";", "b"))
+        self.assertTrue(self.segmenter._needs_spoken_segment_space(":", "b"))
+        self.assertFalse(self.segmenter._needs_spoken_segment_space(",", "5"))
+        self.assertFalse(self.segmenter._needs_spoken_segment_space("1", ","))
+        self.assertEqual(4, self.segmenter._find_whitespace_cut("abc def", 0, 10, 0))
+        self.assertIsNone(self.segmenter._find_whitespace_cut("abcd ", 0, 3, 0))
+
+        uri_text = "Contact " + ("mailto:user@example.com " * 5) + "immediately."
+        uri_segments = list(self.segmenter.iter_text_segments_for_latency(uri_text, True))
+        self.assertTrue(all(not seg.endswith("mailto:") for seg in uri_segments))
 
 
 if __name__ == "__main__":

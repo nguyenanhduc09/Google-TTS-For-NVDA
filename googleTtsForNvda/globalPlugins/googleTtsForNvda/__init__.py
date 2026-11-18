@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import inspect
 import os
 import threading
@@ -11,7 +12,6 @@ from typing import Any
 import addonHandler
 import config
 import globalPluginHandler
-import globalVars
 import gui
 import speech.extensions
 import speech.shortcutKeys as shortcutKeysModule
@@ -36,12 +36,18 @@ try:
 except ImportError:
     sayAllModule = None  # type: ignore[assignment]
 try:
-    from speech.commands import CharacterModeCommand, LangChangeCommand
+    from speech.commands import CharacterModeCommand, EndUtteranceCommand, LangChangeCommand
 except ImportError:
     from speech.commands import LangChangeCommand  # type: ignore[assignment]
 
     CharacterModeCommand = None  # type: ignore[misc,assignment]
+    EndUtteranceCommand = None  # type: ignore[misc,assignment]
+try:
+    from speech.commands import SuppressUnicodeNormalizationCommand
+except ImportError:
+    SuppressUnicodeNormalizationCommand = None  # type: ignore[misc,assignment]
 from synthDrivers.googleTtsForNvda import (
+    audio_math,
     language_detector,
     language_profiles,
     language_utils,
@@ -49,40 +55,72 @@ from synthDrivers.googleTtsForNvda import (
     voice_store,
 )
 from synthDrivers.googleTtsForNvda.bridge import (
-    CONFIG_AUTO_LANGUAGE_CANDIDATES,
-    CONFIG_AUTO_LANGUAGE_DETECTION,
-    CONFIG_AUTO_LANGUAGE_PREFERRED,
-    CONFIG_AUTO_LANGUAGE_PROFILES,
-    CONFIG_BROWSER_RUNTIME,
-    CONFIG_KEEP_BROWSER_RUNTIME_READY,
-    CONFIG_SECTION,
-    DEFAULT_AUTO_LANGUAGE_CANDIDATES,
-    DEFAULT_AUTO_LANGUAGE_DETECTION,
-    DEFAULT_AUTO_LANGUAGE_PREFERRED,
-    DEFAULT_AUTO_LANGUAGE_PROFILES,
-    DEFAULT_BROWSER_RUNTIME,
-    DEFAULT_KEEP_BROWSER_RUNTIME_READY,
+    CONFIG_AUTO_LANGUAGE_CANDIDATES as CONFIG_AUTO_LANGUAGE_CANDIDATES,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    CONFIG_AUTO_LANGUAGE_DETECTION as CONFIG_AUTO_LANGUAGE_DETECTION,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    CONFIG_AUTO_LANGUAGE_PREFERRED as CONFIG_AUTO_LANGUAGE_PREFERRED,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    CONFIG_AUTO_LANGUAGE_PROFILES as CONFIG_AUTO_LANGUAGE_PROFILES,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    CONFIG_BROWSER_RUNTIME as CONFIG_BROWSER_RUNTIME,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    CONFIG_KEEP_BROWSER_RUNTIME_READY as CONFIG_KEEP_BROWSER_RUNTIME_READY,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    CONFIG_SECTION as CONFIG_SECTION,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    DEFAULT_AUTO_LANGUAGE_CANDIDATES as DEFAULT_AUTO_LANGUAGE_CANDIDATES,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    DEFAULT_AUTO_LANGUAGE_DETECTION as DEFAULT_AUTO_LANGUAGE_DETECTION,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    DEFAULT_AUTO_LANGUAGE_PREFERRED as DEFAULT_AUTO_LANGUAGE_PREFERRED,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    DEFAULT_AUTO_LANGUAGE_PROFILES as DEFAULT_AUTO_LANGUAGE_PROFILES,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    DEFAULT_BROWSER_RUNTIME as DEFAULT_BROWSER_RUNTIME,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
+    DEFAULT_KEEP_BROWSER_RUNTIME_READY as DEFAULT_KEEP_BROWSER_RUNTIME_READY,
+)
+from synthDrivers.googleTtsForNvda.bridge import (
     SYNTH_NAME,
     edge_webview2_blocks_effective_runtime,
+    ensure_config_spec,
 )
 from synthDrivers.googleTtsForNvda.catalog import EngineLibraryError, VoiceCatalog, engine_library_error_message
 
+from . import settings as settingsModule
 from . import updateGui, updater
 from .settings import GoogleTtsSettingsPanel
-from .uiUtils import bind_read_only_text_focus_announcement, show_runtime_error_dialog
+from .uiUtils import (
+    _from_dip,
+    bind_read_only_text_focus_announcement,
+    dialog_parent,
+    is_secure_mode,
+    post_popup,
+    pre_popup,
+    show_message_box,
+    show_runtime_error_dialog,
+    window_is_alive,
+)
+from .uiUtils import (
+    call_compat as _call_compat,
+)
 from .voiceManager import VoiceManagerDialog
 
 addonHandler.initTranslation()
-
-config.conf.spec[CONFIG_SECTION] = {
-    CONFIG_AUTO_LANGUAGE_CANDIDATES: f"string(default={DEFAULT_AUTO_LANGUAGE_CANDIDATES})",
-    CONFIG_AUTO_LANGUAGE_DETECTION: f"boolean(default={str(DEFAULT_AUTO_LANGUAGE_DETECTION).lower()})",
-    CONFIG_AUTO_LANGUAGE_PREFERRED: f"string(default={DEFAULT_AUTO_LANGUAGE_PREFERRED})",
-    CONFIG_AUTO_LANGUAGE_PROFILES: f"string(default={DEFAULT_AUTO_LANGUAGE_PROFILES})",
-    updateGui.CONFIG_AUTO_UPDATE_CHECK: f"boolean(default={str(updateGui.DEFAULT_AUTO_UPDATE_CHECK).lower()})",
-    CONFIG_BROWSER_RUNTIME: f"string(default={DEFAULT_BROWSER_RUNTIME})",
-    CONFIG_KEEP_BROWSER_RUNTIME_READY: f"boolean(default={str(DEFAULT_KEEP_BROWSER_RUNTIME_READY).lower()})",
-}
+ensure_config_spec()
 
 _AUTO_LANGUAGE_NOTICE_ID = "notice"
 _dialog: VoiceManagerDialog | None = None
@@ -97,13 +135,19 @@ _originalSpeechSpeak: Any | None = None
 _originalSpeechPackageSpeak: Any | None = None
 _originalSayAllSpeak: Any | None = None
 _originalSayAllSpeakWithoutPauses: Any | None = None
+_originalSayAllInitialize: Any | None = None
 _originalSpeechProcessText: Any | None = None
+_originalSpeechPackageProcessText: Any | None = None
 _originalSpeechGetSpellingSpeech: Any | None = None
+_originalSpeechPackageGetSpellingSpeech: Any | None = None
+_originalSpeechGetSingleCharDescription: Any | None = None
+_originalSpeechPackageGetSingleCharDescription: Any | None = None
 _originalShortcutKeysShouldUseSpellingFunctionality: Any | None = None
 _originalLanguageHandlingShouldMakeLangChangeCommand: Any | None = None
 _originalLanguageHandlingShouldSwitchVoice: Any | None = None
 _originalSpeechManagerShouldSwitchVoice: Any | None = None
 _originalSpeechDictLoadVoiceDict: Any | None = None
+_originalSpeechDictDefinitionsLoadVoiceDict: Any | None = None
 _originalPopupSettingsDialog: Any | None = None
 _patchedAutoSettingsGetSettingMaker: Any | None = None
 _patchedAutoSettingsUpdateValueForControl: Any | None = None
@@ -114,8 +158,10 @@ _patchedSpeechSpeak: Any | None = None
 _patchedSpeechPackageSpeak: Any | None = None
 _patchedSayAllSpeak: Any | None = None
 _patchedSayAllSpeakWithoutPauses: Any | None = None
+_patchedSayAllInitialize: Any | None = None
 _patchedSpeechProcessText: Any | None = None
 _patchedSpeechGetSpellingSpeech: Any | None = None
+_patchedSpeechGetSingleCharDescription: Any | None = None
 _patchedShortcutKeysShouldUseSpellingFunctionality: Any | None = None
 _patchedLanguageHandlingShouldMakeLangChangeCommand: Any | None = None
 _patchedLanguageHandlingShouldSwitchVoice: Any | None = None
@@ -126,12 +172,111 @@ _autoLanguageSpeechFilterRegistered = False
 _GOOGLE_TTS_LANG_CHANGE_ATTR = language_detector.GOOGLE_TTS_LANG_CHANGE_ATTR
 _GOOGLE_TTS_SPELLING_LANG_ATTR = "googleTtsForNvdaSpellingLanguage"
 _MISSING_GOOGLE_TTS_LANGUAGE = language_detector.MISSING_GOOGLE_TTS_LANGUAGE
+_GoogleTtsProfileLangCommand = language_detector.GoogleTtsProfileLangCommand
 _missingVoicesPromptActive = False
 _edgeWebView2PromptActive = False
+_voiceDictLock = threading.RLock()
 _speechConfigOverlayLock = threading.RLock()
 _autoProfileSpeakDepth = 0
+_speakPipelineState = threading.local()
 _EDGE_WEBVIEW2_BOOTSTRAPPER_URL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
 _EDGE_WEBVIEW2_DOWNLOAD_PAGE_URL = "https://developer.microsoft.com/microsoft-edge/webview2"
+_UNSET = object()
+_SET_SYNTH_WRAPPER_METADATA: dict[str, Any] | None = None
+_retainedSetSynth: Any | None = None
+_synthSelectionPatchActive = False
+_readOnlyTextSettingPatchActive: list[bool] | None = None
+_voiceDictionaryDialogPatchActive: list[bool] | None = None
+_voiceDictionaryLoadingPatchActive: list[bool] | None = None
+_autoLanguagePatchActive: list[bool] | None = None
+
+
+def _wrap_nvda_callable(wrapper: Any, original: Any) -> Any:
+    """Copy NVDA callable metadata and __wrapped__ onto a monkeypatch wrapper."""
+    if wrapper is None or original is None:
+        return wrapper
+    with contextlib.suppress(Exception):
+        functools.wraps(original)(wrapper)
+    return wrapper
+
+
+def _extract_named_arg(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    name: str,
+    posIndex: int,
+    default: Any = None,
+) -> Any:
+    if name in kwargs:
+        return kwargs[name]
+    if len(args) > posIndex:
+        return args[posIndex]
+    return default
+
+
+def _replace_text_locale(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    textIndex: int = 0,
+    localeIndex: int = 1,
+    text: Any = _UNSET,
+    locale: Any = _UNSET,
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    newArgs = list(args)
+    newKwargs = dict(kwargs)
+    if text is not _UNSET:
+        if "text" in newKwargs:
+            newKwargs["text"] = text
+        elif len(newArgs) > textIndex:
+            newArgs[textIndex] = text
+        else:
+            newKwargs["text"] = text
+    if locale is not _UNSET:
+        if "locale" in newKwargs:
+            newKwargs["locale"] = locale
+        elif len(newArgs) > localeIndex:
+            newArgs[localeIndex] = locale
+        else:
+            newKwargs["locale"] = locale
+    return tuple(newArgs), newKwargs
+
+
+def _extract_set_synth_invocation(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[str | None, bool, list[str] | None, tuple[Any, ...], dict[str, Any], bool, bool]:
+    remainingKwargs = dict(kwargs)
+    if args:
+        name = args[0]
+    elif "name" in remainingKwargs:
+        name = remainingKwargs.pop("name")
+    elif "synthName" in remainingKwargs:
+        name = remainingKwargs.pop("synthName")
+    else:
+        raise TypeError("setSynth() missing required argument: 'name'")
+    explicitIsFallback = False
+    isFallback = False
+    if len(args) >= 2:
+        if "isFallback" in remainingKwargs:
+            raise TypeError("setSynth() got multiple values for argument 'isFallback'")
+        isFallback = bool(args[1])
+        explicitIsFallback = True
+    elif "isFallback" in remainingKwargs:
+        isFallback = bool(remainingKwargs.pop("isFallback"))
+        explicitIsFallback = True
+    explicitLeftToTry = False
+    _leftToTry = None
+    if len(args) >= 3:
+        if "_leftToTry" in remainingKwargs:
+            raise TypeError("setSynth() got multiple values for argument '_leftToTry'")
+        _leftToTry = args[2]
+        explicitLeftToTry = True
+    elif "_leftToTry" in remainingKwargs:
+        _leftToTry = remainingKwargs.pop("_leftToTry")
+        explicitLeftToTry = True
+    extraArgs = args[3:]
+    return name, isFallback, _leftToTry, extraArgs, remainingKwargs, explicitIsFallback, explicitLeftToTry
 
 
 def _call_set_synth_compat(
@@ -139,80 +284,77 @@ def _call_set_synth_compat(
     name: str | None,
     isFallback: bool = False,
     _leftToTry: list[str] | None = None,
+    extraArgs: tuple[Any, ...] = (),
+    extraKwargs: dict[str, Any] | None = None,
+    *,
+    explicitIsFallback: bool = True,
+    explicitLeftToTry: bool = False,
 ) -> bool:
+    extraKwargs = dict(extraKwargs or {})
     try:
-        signature = inspect.signature(setSynth)
+        signature = inspect.signature(setSynth, follow_wrapped=False)
     except (TypeError, ValueError):
         try:
-            return setSynth(name, isFallback, _leftToTry)
+            if explicitLeftToTry:
+                return bool(setSynth(name, isFallback, _leftToTry, *extraArgs, **extraKwargs))
+            if explicitIsFallback:
+                return bool(setSynth(name, isFallback, *extraArgs, **extraKwargs))
+            return bool(setSynth(name, *extraArgs, **extraKwargs))
         except TypeError as exc:
-            if "_leftToTry" not in str(exc):
-                raise
-        try:
-            return setSynth(name, isFallback)
-        except TypeError as exc:
-            if "isFallback" not in str(exc):
-                raise
-        return setSynth(name)
+            message = str(exc)
+            if "_leftToTry" in message or "positional argument" in message:
+                try:
+                    return bool(setSynth(name, isFallback))
+                except TypeError:
+                    return bool(setSynth(name))
+            raise
 
     parameters = signature.parameters
     acceptsVarargs = any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters.values())
     acceptsKwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
     positionalArgs: list[Any] = [name]
     kwargs: dict[str, Any] = {}
-    for parameterName, value in (
-        ("isFallback", isFallback),
-        ("_leftToTry", _leftToTry),
+    for parameterName, value, shouldForwardIfVar in (
+        ("isFallback", isFallback, explicitIsFallback or "isFallback" in parameters),
+        ("_leftToTry", _leftToTry, explicitLeftToTry or "_leftToTry" in parameters),
     ):
-        if acceptsVarargs and parameterName not in parameters and not acceptsKwargs:
-            positionalArgs.append(value)
-            continue
-        if acceptsKwargs:
-            kwargs[parameterName] = value
-            continue
         parameter = parameters.get(parameterName)
-        if parameter is None:
-            continue
-        if parameter.kind == inspect.Parameter.POSITIONAL_ONLY:
-            positionalArgs.append(value)
-        else:
+        if parameter is not None:
+            if parameter.kind == inspect.Parameter.POSITIONAL_ONLY:
+                positionalArgs.append(value)
+            else:
+                kwargs[parameterName] = value
+        elif acceptsKwargs and shouldForwardIfVar:
             kwargs[parameterName] = value
-    return setSynth(*positionalArgs, **kwargs)
+        elif acceptsVarargs and shouldForwardIfVar and not acceptsKwargs:
+            positionalArgs.append(value)
+
+    if acceptsVarargs and extraArgs:
+        positionalArgs.extend(extraArgs)
+    for key, value in extraKwargs.items():
+        parameter = parameters.get(key)
+        if acceptsKwargs or (
+            parameter is not None
+            and parameter.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        ):
+            kwargs[key] = value
+    try:
+        return bool(setSynth(*positionalArgs, **kwargs))
+    except TypeError:
+        if extraKwargs and acceptsKwargs:
+            filteredKwargs = {key: value for key, value in kwargs.items() if key not in extraKwargs}
+            return bool(setSynth(*positionalArgs, **filteredKwargs))
+        raise
 
 
 def _normalize_set_synth_args(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> tuple[str | None, bool, list[str] | None]:
-    kwargs = dict(kwargs)
-    name = None
-    if args:
-        name = args[0]
-    elif "name" in kwargs:
-        name = kwargs.pop("name")
-    elif "synthName" in kwargs:
-        name = kwargs.pop("synthName")
-    else:
-        raise TypeError("setSynth() missing required argument: 'name'")
-    if len(args) > 3:
-        raise TypeError(f"setSynth() takes at most 3 positional arguments ({len(args)} given)")
-    isFallback = False
-    _leftToTry = None
-    if len(args) >= 2:
-        if "isFallback" in kwargs:
-            raise TypeError("setSynth() got multiple values for argument 'isFallback'")
-        isFallback = args[1]
-    if len(args) >= 3:
-        if "_leftToTry" in kwargs:
-            raise TypeError("setSynth() got multiple values for argument '_leftToTry'")
-        _leftToTry = args[2]
-    for key in kwargs:
-        if key not in {"isFallback", "_leftToTry"}:
-            raise TypeError(f"setSynth() got an unexpected keyword argument '{key}'")
-    if "isFallback" in kwargs:
-        isFallback = kwargs["isFallback"]
-    if "_leftToTry" in kwargs:
-        _leftToTry = kwargs["_leftToTry"]
+    name, isFallback, _leftToTry, _extraArgs, _extraKwargs, _expFallback, _expLeft = _extract_set_synth_invocation(
+        args,
+        kwargs,
+    )
     return name, isFallback, _leftToTry
 
 
@@ -224,26 +366,32 @@ def _clear_dialog_reference(dialog: VoiceManagerDialog) -> None:
 
 def _open_voice_manager(initialPage: str = "installed") -> None:
     global _dialog
+    if is_secure_mode():
+        return
     if _dialog is not None:
-        try:
-            if _dialog.IsShown():
-                if initialPage == "download":
-                    _dialog.show_download_tab()
-                _dialog.Raise()
-                _dialog.focus_default_control()
-                return
-        except RuntimeError:
+        if not window_is_alive(_dialog):
             _dialog = None
-    gui.mainFrame.prePopup()
+        else:
+            try:
+                if _dialog.IsShown():
+                    if initialPage == "download":
+                        _dialog.show_download_tab()
+                    _dialog.Raise()
+                    _dialog.focus_default_control()
+                    return
+            except RuntimeError:
+                _dialog = None
+    parent = dialog_parent()
+    pre_popup()
     try:
         try:
-            _dialog = VoiceManagerDialog(gui.mainFrame, _clear_dialog_reference, initialPage=initialPage)
+            _dialog = VoiceManagerDialog(parent, _clear_dialog_reference, initialPage=initialPage)
         except EngineLibraryError as exc:
             _show_engine_library_error(exc)
             return
         _dialog.Show()
     finally:
-        gui.mainFrame.postPopup()
+        post_popup()
 
 
 def open_voice_manager_download_tab() -> None:
@@ -266,22 +414,18 @@ def _google_tts_voice_status() -> str:
         return "missing"
 
 
-def _engine_library_error_message(error: EngineLibraryError) -> str:
-    return engine_library_error_message(error)
-
-
 def _show_engine_library_error(error: EngineLibraryError) -> None:
     log.error("Google TTS WASM TTS Engine error: %s", error.technicalDetail)
-    show_runtime_error_dialog(_engine_library_error_message(error))
+    show_runtime_error_dialog(engine_library_error_message(error))
 
 
 def _show_missing_voices_prompt(message: str | None = None) -> None:
     global _missingVoicesPromptActive
-    if _missingVoicesPromptActive:
+    if _missingVoicesPromptActive or is_secure_mode():
         return
     _missingVoicesPromptActive = True
     try:
-        answer = gui.messageBox(
+        answer = show_message_box(
             message
             or _(
                 "No Google TTS For NVDA voices are installed.\n\n"
@@ -292,7 +436,7 @@ def _show_missing_voices_prompt(message: str | None = None) -> None:
             ),
             _("Google TTS For NVDA"),
             wx.OK | wx.CANCEL | wx.ICON_INFORMATION,
-            gui.mainFrame,
+            dialog_parent(),
         )
         if answer == wx.OK or answer == getattr(wx, "ID_OK", wx.OK):
             open_voice_manager_download_tab()
@@ -320,9 +464,12 @@ def _copy_text_to_clipboard(text: str) -> bool:
 
 
 def _show_manual_web_url_dialog(url: str) -> None:
-    gui.mainFrame.prePopup()
+    if is_secure_mode():
+        return
+    parent = dialog_parent()
+    pre_popup()
     try:
-        dialog = wx.Dialog(gui.mainFrame, title=_("Google TTS For NVDA"))
+        dialog = wx.Dialog(parent, title=_("Google TTS For NVDA"))
         try:
             mainSizer = wx.BoxSizer(wx.VERTICAL)
             helper = guiHelper.BoxSizerHelper(dialog, sizer=mainSizer)
@@ -330,7 +477,7 @@ def _show_manual_web_url_dialog(url: str) -> None:
                 dialog,
                 label=_("The download page could not be opened. Please visit this address manually:"),
             )
-            message.Wrap(520)
+            message.Wrap(_from_dip(dialog, 520))
             helper.addItem(message, flag=wx.EXPAND)
             urlControl = helper.addLabeledControl(
                 _("Download address") + ":",
@@ -352,14 +499,14 @@ def _show_manual_web_url_dialog(url: str) -> None:
 
             def on_copy(evt: wx.CommandEvent) -> None:
                 if _copy_text_to_clipboard(url):
-                    gui.messageBox(
+                    show_message_box(
                         _("The link was copied to the clipboard."),
                         _("Google TTS For NVDA"),
                         wx.OK | wx.ICON_INFORMATION,
                         dialog,
                     )
                 else:
-                    gui.messageBox(
+                    show_message_box(
                         _("The link could not be copied to the clipboard."),
                         _("Google TTS For NVDA"),
                         wx.OK | wx.ICON_ERROR,
@@ -372,19 +519,20 @@ def _show_manual_web_url_dialog(url: str) -> None:
         finally:
             dialog.Destroy()
     finally:
-        gui.mainFrame.postPopup()
+        post_popup()
 
 
 def show_edge_webview2_prompt() -> None:
     global _edgeWebView2PromptActive
-    if _edgeWebView2PromptActive:
+    if _edgeWebView2PromptActive or is_secure_mode():
         return
     _edgeWebView2PromptActive = True
     try:
-        gui.mainFrame.prePopup()
+        parent = dialog_parent()
+        pre_popup()
         result = wx.ID_CANCEL
         try:
-            dialog = wx.Dialog(gui.mainFrame, title=_("Microsoft Edge WebView2 Runtime is needed"))
+            dialog = wx.Dialog(parent, title=_("Microsoft Edge WebView2 Runtime is needed"))
             try:
                 mainSizer = wx.BoxSizer(wx.VERTICAL)
                 message = wx.StaticText(
@@ -397,7 +545,7 @@ def show_edge_webview2_prompt() -> None:
                         "Choose Open Microsoft WebView2 page if you need an offline installer or a fixed-version package."
                     ),
                 )
-                message.Wrap(520)
+                message.Wrap(_from_dip(dialog, 520))
                 mainSizer.Add(message, border=guiHelper.BORDER_FOR_DIALOGS, flag=wx.ALL | wx.EXPAND)
                 buttonSizer = wx.BoxSizer(wx.HORIZONTAL)
                 downloadButton = wx.Button(dialog, label=_("&Download online installer"))
@@ -417,7 +565,7 @@ def show_edge_webview2_prompt() -> None:
             finally:
                 dialog.Destroy()
         finally:
-            gui.mainFrame.postPopup()
+            post_popup()
         if result == wx.ID_YES:
             _open_web_url(_EDGE_WEBVIEW2_BOOTSTRAPPER_URL)
         elif result == wx.ID_NO:
@@ -430,10 +578,12 @@ def _set_synth_with_google_tts_voice_prompt(
     *args: Any,
     **kwargs: Any,
 ) -> bool:
-    name, isFallback, _leftToTry = _normalize_set_synth_args(args, kwargs)
+    name, isFallback, _leftToTry, extraArgs, extraKwargs, explicitIsFallback, explicitLeftToTry = (
+        _extract_set_synth_invocation(args, kwargs)
+    )
     # Keep the current synthesizer active so NVDA can speak the prompt instead of
     # showing its generic "could not load synthesizer" error first.
-    if name == SYNTH_NAME and not isFallback:
+    if _synthSelectionPatchActive and name == SYNTH_NAME and not isFallback:
         if edge_webview2_blocks_effective_runtime():
             wx.CallAfter(show_edge_webview2_prompt)
             return True
@@ -452,32 +602,113 @@ def _set_synth_with_google_tts_voice_prompt(
                 )
             wx.CallAfter(_show_missing_voices_prompt, message)
             return True
-    if _originalSetSynth is None:
+    originalSetSynth = _originalSetSynth if _synthSelectionPatchActive else _retainedSetSynth
+    if originalSetSynth is None:
         return False
-    return _call_set_synth_compat(_originalSetSynth, name, isFallback, _leftToTry)
+    return _call_set_synth_compat(
+        originalSetSynth,
+        name,
+        isFallback,
+        _leftToTry,
+        extraArgs,
+        extraKwargs,
+        explicitIsFallback=explicitIsFallback,
+        explicitLeftToTry=explicitLeftToTry,
+    )
+
+
+def _callable_contains_target(func: Any, target: Any) -> bool:
+    seen: set[int] = set()
+    current = func
+    while callable(current) and id(current) not in seen:
+        if current is target:
+            return True
+        seen.add(id(current))
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
+def _unwrap_self_reference(func: Any, target: Any) -> Any:
+    current = func
+    while current is target:
+        unwrapped = getattr(current, "__wrapped__", None)
+        if not callable(unwrapped) or unwrapped is current:
+            return None
+        current = unwrapped
+    return current
 
 
 def _patch_synth_selection() -> None:
-    global _originalSetSynth, _originalSettingsDialogSetSynth
+    global _originalSetSynth, _originalSettingsDialogSetSynth, _SET_SYNTH_WRAPPER_METADATA
+    global _retainedSetSynth, _synthSelectionPatchActive
     if _originalSetSynth is not None:
         return
-    _originalSetSynth = synthDriverHandler.setSynth
+    currentSetSynth = synthDriverHandler.setSynth
+    if _retainedSetSynth is not None and _callable_contains_target(
+        currentSetSynth, _set_synth_with_google_tts_voice_prompt
+    ):
+        _synthSelectionPatchActive = True
+        _originalSetSynth = _retainedSetSynth
+        _retainedSetSynth = None
+        settingsDialogs = getattr(gui, "settingsDialogs", None)
+        if settingsDialogs is not None and hasattr(settingsDialogs, "setSynth"):
+            dialogSetSynth = settingsDialogs.setSynth
+            if not _callable_contains_target(dialogSetSynth, _set_synth_with_google_tts_voice_prompt):
+                _originalSettingsDialogSetSynth = dialogSetSynth
+                settingsDialogs.setSynth = _set_synth_with_google_tts_voice_prompt
+        return
+    originalSetSynth = _unwrap_self_reference(currentSetSynth, _set_synth_with_google_tts_voice_prompt)
+    if originalSetSynth is None:
+        return
+    _synthSelectionPatchActive = True
+    _retainedSetSynth = None
+    _originalSetSynth = originalSetSynth
+    if _SET_SYNTH_WRAPPER_METADATA is None:
+        _SET_SYNTH_WRAPPER_METADATA = {
+            "__module__": _set_synth_with_google_tts_voice_prompt.__module__,
+            "__name__": _set_synth_with_google_tts_voice_prompt.__name__,
+            "__qualname__": _set_synth_with_google_tts_voice_prompt.__qualname__,
+            "__doc__": _set_synth_with_google_tts_voice_prompt.__doc__,
+            "__annotations__": dict(getattr(_set_synth_with_google_tts_voice_prompt, "__annotations__", {})),
+        }
+    _wrap_nvda_callable(_set_synth_with_google_tts_voice_prompt, _originalSetSynth)
     synthDriverHandler.setSynth = _set_synth_with_google_tts_voice_prompt
     settingsDialogs = getattr(gui, "settingsDialogs", None)
     if settingsDialogs is not None and hasattr(settingsDialogs, "setSynth"):
-        _originalSettingsDialogSetSynth = settingsDialogs.setSynth
+        dialogSetSynth = _unwrap_self_reference(settingsDialogs.setSynth, _set_synth_with_google_tts_voice_prompt)
+        _originalSettingsDialogSetSynth = dialogSetSynth if dialogSetSynth is not None else originalSetSynth
         settingsDialogs.setSynth = _set_synth_with_google_tts_voice_prompt
 
 
 def _unpatch_synth_selection() -> None:
-    global _originalSetSynth, _originalSettingsDialogSetSynth
+    global _originalSetSynth, _originalSettingsDialogSetSynth, _SET_SYNTH_WRAPPER_METADATA
+    global _retainedSetSynth, _synthSelectionPatchActive
     if _originalSetSynth is None:
         return
-    synthDriverHandler.setSynth = _originalSetSynth
-    _originalSetSynth = None
+    _synthSelectionPatchActive = False
+    stillReferenced = False
+    if getattr(synthDriverHandler, "setSynth", None) is _set_synth_with_google_tts_voice_prompt:
+        synthDriverHandler.setSynth = _originalSetSynth
+    else:
+        stillReferenced = True
     settingsDialogs = getattr(gui, "settingsDialogs", None)
     if settingsDialogs is not None and _originalSettingsDialogSetSynth is not None:
-        settingsDialogs.setSynth = _originalSettingsDialogSetSynth
+        if getattr(settingsDialogs, "setSynth", None) is _set_synth_with_google_tts_voice_prompt:
+            settingsDialogs.setSynth = _originalSettingsDialogSetSynth
+        else:
+            stillReferenced = True
+    if stillReferenced:
+        _retainedSetSynth = _originalSetSynth
+    else:
+        _retainedSetSynth = None
+        if _SET_SYNTH_WRAPPER_METADATA is not None:
+            for attrName, attrValue in _SET_SYNTH_WRAPPER_METADATA.items():
+                with contextlib.suppress(Exception):
+                    setattr(_set_synth_with_google_tts_voice_prompt, attrName, attrValue)
+            with contextlib.suppress(Exception):
+                delattr(_set_synth_with_google_tts_voice_prompt, "__wrapped__")
+            _SET_SYNTH_WRAPPER_METADATA = None
+    _originalSetSynth = None
     _originalSettingsDialogSetSynth = None
 
 
@@ -516,7 +747,16 @@ def _is_google_tts_read_only_setting(setting: Any, settingsStorage: Any | None =
 
 
 def _hide_google_tts_auto_profile_speech_controls(panel: Any) -> None:
-    if not _google_auto_language_detection_active():
+    if not window_is_alive(panel):
+        return
+    driver = getattr(panel, "driver", None)
+    if driver is None and callable(getattr(panel, "getSettings", None)):
+        with contextlib.suppress(Exception):
+            driver = panel.getSettings()
+    isGoogleTts = driver is not None and getattr(driver, "name", "") == SYNTH_NAME
+    hideControls = isGoogleTts and _google_auto_language_detection_active()
+    previouslyHidden = bool(getattr(panel, "_googleTtsHidAutoProfileSpeechControls", False))
+    if not hideControls and not previouslyHidden:
         return
     for controlName in (
         "capPitchChangeEdit",
@@ -525,22 +765,28 @@ def _hide_google_tts_auto_profile_speech_controls(panel: Any) -> None:
         "useSpellingFunctionalityCheckBox",
     ):
         control = getattr(panel, controlName, None)
-        if control is None:
+        if control is None or not window_is_alive(control):
             continue
         try:
             if controlName == "capPitchChangeEdit":
                 sizer = control.GetContainingSizer()
                 if sizer is not None:
-                    sizer.ShowItems(False)
+                    sizer.ShowItems(not hideControls)
+                    control.Enable(not hideControls)
                     continue
-            control.Hide()
-            control.Disable()
+            if hideControls:
+                control.Hide()
+                control.Disable()
+            else:
+                control.Show()
+                control.Enable()
         except Exception:
             log.debug("Could not hide Google TTS auto-profile speech setting.", exc_info=True)
+    panel._googleTtsHidAutoProfileSpeechControls = hideControls
     try:
         panel.Layout()
         parent = panel.GetParent()
-        if parent is not None:
+        if parent is not None and window_is_alive(parent):
             parent.Layout()
     except Exception:
         log.debug("Could not relayout Google TTS Speech Settings controls.", exc_info=True)
@@ -556,6 +802,7 @@ def _patch_read_only_text_setting() -> None:
     global _patchedAutoSettingsGetSettingMaker, _patchedAutoSettingsUpdateValueForControl, _patchedAutoSettingsOnDiscard
     global _patchedAutoSettingsRefreshGui
     global _patchedVoiceSettingsMakeSettings
+    global _readOnlyTextSettingPatchActive
     if _originalAutoSettingsGetSettingMaker is not None:
         return
     autoSettingsMixin = getattr(gui.settingsDialogs, "AutoSettingsMixin", None)
@@ -575,9 +822,11 @@ def _patch_read_only_text_setting() -> None:
         originalVoiceMakeSettings = _originalVoiceSettingsMakeSettings
     else:
         originalVoiceMakeSettings = None
+    patchActive = [True]
+    _readOnlyTextSettingPatchActive = patchActive
 
     def _get_setting_maker(self: Any, setting: Any, *args: Any, **kwargs: Any) -> Any:
-        if _is_google_tts_read_only_setting(setting):
+        if patchActive[0] and _is_google_tts_read_only_setting(setting):
 
             def _make_control(
                 setting: Any,
@@ -585,17 +834,13 @@ def _patch_read_only_text_setting() -> None:
                 *controlArgs: Any,
                 **controlKwargs: Any,
             ) -> wx.BoxSizer:
-                if not _is_google_tts_read_only_setting(setting, settingsStorage):
-                    return originalGetSettingMaker(self, setting, *args, **kwargs)(
-                        setting,
-                        settingsStorage,
-                        *controlArgs,
-                        **controlKwargs,
-                    )
+                if not patchActive[0] or not _is_google_tts_read_only_setting(setting, settingsStorage):
+                    maker = _call_compat(originalGetSettingMaker, self, setting, *args, **kwargs)
+                    return _call_compat(maker, setting, settingsStorage, *controlArgs, **controlKwargs)
                 return _make_read_only_text_setting_control(self, setting, settingsStorage)
 
             return _make_control
-        return originalGetSettingMaker(self, setting, *args, **kwargs)
+        return _call_compat(originalGetSettingMaker, self, setting, *args, **kwargs)
 
     def _update_value_for_control(
         self: Any,
@@ -605,6 +850,8 @@ def _patch_read_only_text_setting() -> None:
         **kwargs: Any,
     ) -> None:
         originalKwargs = dict(kwargs)
+        if not patchActive[0]:
+            return _call_compat(originalUpdateValueForControl, self, setting, settingsStorage, *args, **originalKwargs)
         if "settingsStorage" in originalKwargs:
             if settingsStorage is None:
                 settingsStorage = originalKwargs["settingsStorage"]
@@ -618,32 +865,50 @@ def _patch_read_only_text_setting() -> None:
             except Exception:
                 log.debug("Could not update Google TTS read-only speech setting.", exc_info=True)
             return
-        if getattr(settingsStorage, "name", "") == SYNTH_NAME and getattr(setting, "id", "") == "variant":
+        settingId = getattr(setting, "id", "")
+        if getattr(settingsStorage, "name", "") == SYNTH_NAME and settingId in ("voice", "variant"):
             try:
-                options = list(settingsStorage.availableVariants.values())
-                control = getattr(self, "variantList", None)
-                if control is not None:
-                    currentOptions = getattr(self, "_variants", [])
-                    if [option.id for option in currentOptions] != [option.id for option in options]:
-                        self._variants = options
-                        control.Clear()
-                        for option in options:
-                            control.Append(option.displayName)
+                availableAttr = "availableVoices" if settingId == "voice" else "availableVariants"
+                available = getattr(settingsStorage, availableAttr, None)
+                if available is not None and hasattr(available, "values"):
+                    options = list(available.values())
+                    control = getattr(self, f"{settingId}List", None)
+                    if control is not None:
+                        currentOptions = getattr(self, f"_{settingId}s", [])
+                        if [option.id for option in currentOptions] != [option.id for option in options]:
+                            setattr(self, f"_{settingId}s", options)
+                            control.Clear()
+                            for option in options:
+                                control.Append(option.displayName)
             except Exception:
-                log.debug("Could not refresh Google TTS variant choices.", exc_info=True)
-        return originalUpdateValueForControl(self, setting, settingsStorage, *args, **originalKwargs)
+                log.debug("Could not refresh Google TTS %s choices.", settingId, exc_info=True)
+        return _call_compat(originalUpdateValueForControl, self, setting, settingsStorage, *args, **originalKwargs)
 
     def _on_discard(self: Any, *args: Any, **kwargs: Any) -> None:
+        if not patchActive[0]:
+            return _call_compat(originalOnDiscard, self, *args, **kwargs)
         try:
             settingsInst = self.getSettings()
         except Exception:
-            return originalOnDiscard(self, *args, **kwargs)
+            return _call_compat(originalOnDiscard, self, *args, **kwargs)
         if getattr(settingsInst, "name", "") != SYNTH_NAME:
-            return originalOnDiscard(self, *args, **kwargs)
-        for setting in getattr(settingsInst, "supportedSettings", ()):
-            if isinstance(setting, (NumericDriverSetting, BooleanDriverSetting)):
-                continue
-            control = getattr(self, f"{setting.id}List", None)
+            return _call_compat(originalOnDiscard, self, *args, **kwargs)
+        supportedSettings = tuple(getattr(settingsInst, "supportedSettings", ()))
+        nonStringIds = {
+            getattr(setting, "id", "")
+            for setting in supportedSettings
+            if isinstance(setting, (NumericDriverSetting, BooleanDriverSetting))
+        }
+        candidateIds = {
+            getattr(setting, "id", "")
+            for setting in supportedSettings
+            if getattr(setting, "id", "") and getattr(setting, "id", "") not in nonStringIds
+        }
+        sizerDict = getattr(self, "sizerDict", None)
+        if isinstance(sizerDict, dict):
+            candidateIds.update(name for name in sizerDict if name and name not in nonStringIds)
+        for settingId in candidateIds:
+            control = getattr(self, f"{settingId}List", None)
             if control is None:
                 continue
             try:
@@ -651,19 +916,51 @@ def _patch_read_only_text_setting() -> None:
             except Exception:
                 log.debug("Could not unbind Google TTS speech setting control.", exc_info=True)
         settingsInst.loadSettings()
+        if originalOnDiscard is not None:
+            try:
+                _call_compat(originalOnDiscard, self, *args, **kwargs)
+            except AttributeError:
+                log.debug("Ignoring missing control during base NVDA onDiscard cleanup.", exc_info=True)
 
     def _refresh_gui(self: Any, *args: Any, **kwargs: Any) -> None:
+        if not patchActive[0]:
+            return _call_compat(originalRefreshGui, self, *args, **kwargs)
         try:
-            return originalRefreshGui(self, *args, **kwargs)
+            hadAliveSettingsRef = bool(
+                callable(getattr(self, "_currentSettingsRef", None)) and self._currentSettingsRef() is not None
+            )
+            result = _call_compat(originalRefreshGui, self, *args, **kwargs)
+            if hadAliveSettingsRef:
+                try:
+                    settingsInst = self.getSettings()
+                    if getattr(settingsInst, "name", "") == SYNTH_NAME and isinstance(
+                        getattr(self, "sizerDict", None), dict
+                    ):
+                        supportedIds = {getattr(s, "id", "") for s in getattr(settingsInst, "supportedSettings", ())}
+                        for name, sizer in self.sizerDict.items():
+                            if name not in supportedIds:
+                                self.settingsSizer.Hide(sizer)
+                        self.updateDriverSettings()
+                        _hide_google_tts_auto_profile_speech_controls(self)
+                    elif getattr(self, "_googleTtsHidAutoProfileSpeechControls", False):
+                        _hide_google_tts_auto_profile_speech_controls(self)
+                except Exception:
+                    log.debug("Could not sync Google TTS Speech Settings panel on refresh.", exc_info=True)
+            return result
         except RuntimeError as exc:
-            if "has been deleted" not in str(exc):
+            if window_is_alive(self) and "has been deleted" not in str(exc):
                 raise
             log.debug("Ignoring refresh for destroyed NVDA auto settings panel.", exc_info=True)
 
     def _voice_make_settings(self: Any, settingsSizer: wx.Sizer, *args: Any, **kwargs: Any) -> None:
-        originalVoiceMakeSettings(self, settingsSizer, *args, **kwargs)
-        _hide_google_tts_auto_profile_speech_controls(self)
+        _call_compat(originalVoiceMakeSettings, self, settingsSizer, *args, **kwargs)
+        if patchActive[0]:
+            _hide_google_tts_auto_profile_speech_controls(self)
 
+    _wrap_nvda_callable(_get_setting_maker, originalGetSettingMaker)
+    _wrap_nvda_callable(_update_value_for_control, originalUpdateValueForControl)
+    _wrap_nvda_callable(_on_discard, originalOnDiscard)
+    _wrap_nvda_callable(_refresh_gui, originalRefreshGui)
     _patchedAutoSettingsGetSettingMaker = _get_setting_maker
     _patchedAutoSettingsUpdateValueForControl = _update_value_for_control
     _patchedAutoSettingsOnDiscard = _on_discard
@@ -673,6 +970,7 @@ def _patch_read_only_text_setting() -> None:
     autoSettingsMixin.onDiscard = _on_discard
     autoSettingsMixin.refreshGui = _refresh_gui
     if voiceSettingsPanel is not None and originalVoiceMakeSettings is not None:
+        _wrap_nvda_callable(_voice_make_settings, originalVoiceMakeSettings)
         _patchedVoiceSettingsMakeSettings = _voice_make_settings
         voiceSettingsPanel.makeSettings = _voice_make_settings
 
@@ -687,8 +985,12 @@ def _unpatch_read_only_text_setting() -> None:
     global _patchedAutoSettingsGetSettingMaker, _patchedAutoSettingsUpdateValueForControl, _patchedAutoSettingsOnDiscard
     global _patchedAutoSettingsRefreshGui
     global _patchedVoiceSettingsMakeSettings
+    global _readOnlyTextSettingPatchActive
     if _originalAutoSettingsGetSettingMaker is None:
         return
+    if _readOnlyTextSettingPatchActive is not None:
+        _readOnlyTextSettingPatchActive[0] = False
+        _readOnlyTextSettingPatchActive = None
     autoSettingsMixin = getattr(gui.settingsDialogs, "AutoSettingsMixin", None)
     if autoSettingsMixin is not None:
         if getattr(autoSettingsMixin, "_getSettingMaker", None) is _patchedAutoSettingsGetSettingMaker:
@@ -746,7 +1048,9 @@ def _google_auto_language_multiple_profiles_active() -> bool:
 
 
 def _show_voice_dictionary_auto_language_message() -> None:
-    gui.messageBox(
+    if is_secure_mode():
+        return
+    show_message_box(
         _(
             "Voice dictionary preferences are unavailable while automatic language profiles are enabled.\n\n"
             "Google TTS For NVDA may switch between several profile variants while speaking, so NVDA cannot "
@@ -756,7 +1060,7 @@ def _show_voice_dictionary_auto_language_message() -> None:
         ),
         _("Google TTS For NVDA"),
         wx.OK | wx.ICON_INFORMATION,
-        gui.mainFrame,
+        dialog_parent(),
     )
 
 
@@ -775,7 +1079,7 @@ def _is_voice_dictionary_dialog(dialog: Any) -> bool:
 
 
 def _patch_voice_dictionary_dialog() -> None:
-    global _originalPopupSettingsDialog, _patchedPopupSettingsDialog
+    global _originalPopupSettingsDialog, _patchedPopupSettingsDialog, _voiceDictionaryDialogPatchActive
     if _originalPopupSettingsDialog is not None:
         return
     mainFrame = getattr(gui, "mainFrame", None)
@@ -783,25 +1087,39 @@ def _patch_voice_dictionary_dialog() -> None:
         return
     _originalPopupSettingsDialog = mainFrame.popupSettingsDialog
     originalPopupSettingsDialog = _originalPopupSettingsDialog
+    patchActive = [True]
+    _voiceDictionaryDialogPatchActive = patchActive
 
     def popup_settings_dialog(dialog: Any, *args: Any, **kwargs: Any) -> Any:
         global _activeLoadedVoiceDictVariant
-        if _is_voice_dictionary_dialog(dialog):
+        if patchActive[0] and _is_voice_dictionary_dialog(dialog):
             if _google_auto_language_detection_active():
                 _show_voice_dictionary_auto_language_message()
                 return None
             _voiceDictCache.clear()
             _activeLoadedVoiceDictVariant = None
-        return originalPopupSettingsDialog(dialog, *args, **kwargs)
+            try:
+                currentSynth = synthDriverHandler.getSynth()
+                if getattr(currentSynth, "name", "") == SYNTH_NAME:
+                    voice = _current_google_tts_speaker_id(currentSynth)
+                    if voice:
+                        _load_voice_dictionary_for_voice(currentSynth, voice)
+            except Exception:
+                log.debug("Could not reload Google TTS voice dictionary before opening dialog.", exc_info=True)
+        return _call_compat(originalPopupSettingsDialog, dialog, *args, **kwargs)
 
+    _wrap_nvda_callable(popup_settings_dialog, originalPopupSettingsDialog)
     _patchedPopupSettingsDialog = popup_settings_dialog
     mainFrame.popupSettingsDialog = popup_settings_dialog
 
 
 def _unpatch_voice_dictionary_dialog() -> None:
-    global _originalPopupSettingsDialog, _patchedPopupSettingsDialog
+    global _originalPopupSettingsDialog, _patchedPopupSettingsDialog, _voiceDictionaryDialogPatchActive
     if _originalPopupSettingsDialog is None:
         return
+    if _voiceDictionaryDialogPatchActive is not None:
+        _voiceDictionaryDialogPatchActive[0] = False
+        _voiceDictionaryDialogPatchActive = None
     mainFrame = getattr(gui, "mainFrame", None)
     if mainFrame is not None and getattr(mainFrame, "popupSettingsDialog", None) is _patchedPopupSettingsDialog:
         mainFrame.popupSettingsDialog = _originalPopupSettingsDialog
@@ -817,7 +1135,7 @@ _normalize_language_key = _normalize_language
 
 
 def _language_root(language: str | None) -> str:
-    return _normalize_language(language).split("-", 1)[0]
+    return language_utils.language_root(language)
 
 
 def _language_match_keys(language: str | None) -> set[str]:
@@ -856,16 +1174,18 @@ def _google_lang_change_command(language: str | None, *, spelling: bool = False)
     return command
 
 
+def _append_google_lang_change(targetList: list[Any], language: str | None, *, spelling: bool = False) -> None:
+    targetList.append(_google_lang_change_command(language, spelling=spelling))
+    if getattr(_speakPipelineState, "depth", 0) > 0:
+        targetList.append(_GoogleTtsProfileLangCommand(language, spelling=spelling))
+
+
 def _google_lang_change_language(command: LangChangeCommand) -> object:
     return getattr(command, _GOOGLE_TTS_LANG_CHANGE_ATTR, _MISSING_GOOGLE_TTS_LANGUAGE)
 
 
 def _normalize_nvda_locale_for_language(language: str | None) -> str | None:
     return language_utils.get_nvda_locale_for_language(language) or None
-
-
-def _nvda_locale_exists(locale: str) -> bool:
-    return language_utils.nvda_locale_exists(locale)
 
 
 def _nvda_locale_for_language(language: str | None) -> str | None:
@@ -895,26 +1215,25 @@ def _auto_language_for_spelling_text(synth: Any, text: str) -> str | None:
     normalizedText = language_profiles.normalize_mathematical_alphanumeric(text)
     stripped = normalizedText.strip()
     if stripped:
-        candidateRoots: dict[str, str] = {}
-        for c in candidates:
-            candidateRoots.setdefault(synth._language_root(c), c)
-        scriptSignal = language_profiles.language_script_signal(stripped, candidateRoots)
-        prefRoot = synth._language_root(preferred)
-        isSingleGrapheme = language_profiles.is_single_grapheme_token(stripped)
-        if scriptSignal and scriptSignal != prefRoot and scriptSignal in candidateRoots:
-            if isSingleGrapheme or not any(
-                language_profiles.get_character_script(ord(ch)) == "Latin" for ch in stripped if ch.isalpha()
+        if language_profiles.is_single_grapheme_token(stripped):
+            resolved = language_detector.resolve_single_grapheme_candidate(stripped, candidates, preferred)
+            if resolved:
+                return resolved
+        else:
+            candidateRoots: dict[str, str] = {}
+            for c in candidates:
+                candidateRoots.setdefault(synth._language_root(c), c)
+            prefRoot = synth._language_root(preferred)
+            scriptSignal = language_profiles.language_script_signal(stripped, candidateRoots)
+            if (
+                scriptSignal
+                and scriptSignal != prefRoot
+                and scriptSignal in candidateRoots
+                and not any(
+                    language_profiles.get_character_script(ord(ch)) == "Latin" for ch in stripped if ch.isalpha()
+                )
             ):
                 return candidateRoots[scriptSignal]
-        if isSingleGrapheme and not stripped.isascii():
-            exemplarSignal = language_profiles.latin_exemplar_signal(stripped, candidateRoots)
-            if (
-                exemplarSignal
-                and exemplarSignal != prefRoot
-                and exemplarSignal in candidateRoots
-                and stripped.lower() not in language_profiles._LATIN_NON_ASCII_EXEMPLARS.get(prefRoot, frozenset())
-            ):
-                return candidateRoots[exemplarSignal]
     return preferred
 
 
@@ -925,7 +1244,7 @@ def _auto_language_for_process_text(synth: Any, locale: str | None, text: str) -
     if len(candidates) == 1:
         return candidates[0]
     localeCandidate = synth._auto_language_candidate_for_language(locale, candidates) if locale else ""
-    if _autoProfileSpeakDepth > 0 and localeCandidate:
+    if getattr(_speakPipelineState, "depth", 0) > 0 and localeCandidate:
         return localeCandidate
     preferred = synth._auto_language_preferred(candidates, synth.voice)
     stripped = language_profiles.normalize_mathematical_alphanumeric(text).strip()
@@ -942,18 +1261,7 @@ def _auto_profile_variant_for_language(synth: Any, language: str | None) -> str 
     candidates = synth._auto_language_candidates()
     if not language or not candidates:
         return None
-    languageKeys = _language_match_keys(language)
-    root = synth._language_root(language)
-    targetLanguage = ""
-    for candidate in candidates:
-        if _language_match_keys(candidate).intersection(languageKeys):
-            targetLanguage = candidate
-            break
-    if not targetLanguage:
-        for candidate in candidates:
-            if synth._language_root(candidate) == root:
-                targetLanguage = candidate
-                break
+    targetLanguage = synth._auto_language_candidate_for_language(language, candidates)
     if not targetLanguage:
         return None
     profile = synth._auto_language_profile_for_language(targetLanguage)
@@ -964,20 +1272,11 @@ def _auto_profile_variant_for_language(synth: Any, language: str | None) -> str 
 
 
 def _profile_int(value: Any, default: int, minimum: int = 0, maximum: int = 100) -> int:
-    if isinstance(value, bool):
-        return max(minimum, min(maximum, int(default)))
-    try:
-        return max(minimum, min(maximum, int(value)))
-    except (TypeError, ValueError):
-        return max(minimum, min(maximum, int(default)))
+    return audio_math.clamp_int(value, default, minimum, maximum)
 
 
 def _profile_bool(value: Any, default: bool = False) -> bool:
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    if value is None:
-        return default
-    return bool(value)
+    return audio_math.coerce_bool(value, default)
 
 
 def _auto_profile_character_settings_for_language(synth: Any, language: str | None) -> dict[str, Any] | None:
@@ -998,12 +1297,18 @@ def _auto_profile_character_settings_for_language(synth: Any, language: str | No
     except Exception:
         return None
     return {
-        "capPitchChange": _profile_int(profile.get("capPitchChange"), synthConfig["capPitchChange"], -100, 100),
-        "sayCapForCapitals": _profile_bool(profile.get("sayCapForCapitals"), synthConfig["sayCapForCapitals"]),
-        "beepForCapitals": _profile_bool(profile.get("beepForCapitals"), synthConfig["beepForCapitals"]),
+        "capPitchChange": _profile_int(profile.get("capPitchChange"), synthConfig.get("capPitchChange", 30), -100, 100),
+        "sayCapForCapitals": _profile_bool(
+            profile.get("sayCapForCapitals"),
+            synthConfig.get("sayCapForCapitals", False),
+        ),
+        "beepForCapitals": _profile_bool(
+            profile.get("beepForCapitals"),
+            synthConfig.get("beepForCapitals", False),
+        ),
         "useSpellingFunctionality": _profile_bool(
             profile.get("useSpellingFunctionality"),
-            synthConfig["useSpellingFunctionality"],
+            synthConfig.get("useSpellingFunctionality", True),
         ),
     }
 
@@ -1035,9 +1340,12 @@ def _single_auto_profile_character_settings() -> dict[str, Any] | None:
         if getattr(synth, "name", "") != SYNTH_NAME or not synth._auto_language_detection_enabled():
             return None
         candidates = synth._auto_language_candidates()
-        if len(candidates) != 1:
+        if not candidates:
             return None
-        return _auto_profile_character_settings_for_language(synth, candidates[0])
+        targetLanguage = (
+            candidates[0] if len(candidates) == 1 else synth._auto_language_preferred(candidates, synth.voice)
+        )
+        return _auto_profile_character_settings_for_language(synth, targetLanguage)
     except Exception:
         log.debug("Could not resolve single Google TTS auto-language character profile.", exc_info=True)
         return None
@@ -1046,7 +1354,7 @@ def _single_auto_profile_character_settings() -> dict[str, Any] | None:
 class _VoiceDictionarySynthProxy:
     """Expose a speaker variant to NVDA's voice dictionary loader without changing the live synth."""
 
-    def __init__(self, synth: Any, voice: str) -> None:
+    def __init__(self, synth: Any, voice: str, *args: Any, **kwargs: Any) -> None:
         self._synth = synth
         self.name = getattr(synth, "name", "")
         speakerVoiceInfos = getattr(synth, "_speaker_voice_infos", None)
@@ -1054,11 +1362,12 @@ class _VoiceDictionarySynthProxy:
             speakerVoiceInfos() if callable(speakerVoiceInfos) else getattr(synth, "availableVoices", {})
         )
         self.voice = voice
+        self.variant = voice
 
-    def isSupported(self, setting: str) -> bool:
+    def isSupported(self, setting: str, *args: Any, **kwargs: Any) -> bool:
         if setting == "voice":
             return self.voice in self.availableVoices
-        return self._synth.isSupported(setting)
+        return bool(_call_compat(self._synth.isSupported, setting, *args, **kwargs))
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._synth, name)
@@ -1103,43 +1412,55 @@ def _load_voice_dictionary_for_voice(synth: Any, voice: str) -> bool:
     availableVoices = speakerVoiceInfos() if callable(speakerVoiceInfos) else getattr(synth, "availableVoices", {})
     if not voice or voice not in availableVoices:
         return False
-    voiceDef, voiceDict = _resolve_nvda_voice_speech_dict()
-    cached = _voiceDictCache.get(voice)
-    if cached is not None and voiceDict is not None:
-        cachedFileName, cachedStat, cachedEntries = cached
-        if _file_stat_signature(cachedFileName) == cachedStat:
-            if _activeLoadedVoiceDictVariant != voice or getattr(voiceDict, "fileName", None) != cachedFileName:
-                voiceDict[:] = cachedEntries
-                voiceDict.fileName = cachedFileName
-                if voiceDef is not None:
-                    with contextlib.suppress(Exception):
-                        object.__setattr__(voiceDef, "path", cachedFileName)
-                _activeLoadedVoiceDictVariant = voice
-            elif voiceDict != cachedEntries:
-                _voiceDictCache[voice] = (
-                    cachedFileName,
-                    cachedStat,
-                    list(voiceDict),
-                )
+    with _voiceDictLock:
+        voiceDef, voiceDict = _resolve_nvda_voice_speech_dict()
+        cached = _voiceDictCache.get(voice)
+        if cached is not None and voiceDict is not None:
+            cachedFileName, cachedStat, cachedEntries = cached
+            currentStat = _file_stat_signature(cachedFileName)
+            if currentStat == cachedStat:
+                voiceDefPathMismatch = voiceDef is not None and getattr(voiceDef, "path", None) != cachedFileName
+                if (
+                    _activeLoadedVoiceDictVariant != voice
+                    or getattr(voiceDict, "fileName", None) != cachedFileName
+                    or voiceDefPathMismatch
+                ):
+                    voiceDict[:] = cachedEntries
+                    voiceDict.fileName = cachedFileName
+                    if voiceDef is not None:
+                        with contextlib.suppress(Exception):
+                            object.__setattr__(voiceDef, "path", cachedFileName)
+                    _activeLoadedVoiceDictVariant = voice
+                elif voiceDict != cachedEntries:
+                    _voiceDictCache[voice] = (
+                        cachedFileName,
+                        currentStat,
+                        list(voiceDict),
+                    )
+                return True
+        elif _activeLoadedVoiceDictVariant == voice:
             return True
-    elif _activeLoadedVoiceDictVariant == voice:
+        loadVoiceDict = (
+            _originalSpeechDictDefinitionsLoadVoiceDict
+            or _originalSpeechDictLoadVoiceDict
+            or getattr(getattr(speechDictHandler, "definitions", None), "loadVoiceDict", None)
+            or getattr(speechDictHandler, "loadVoiceDict", None)
+        )
+        if not callable(loadVoiceDict):
+            return False
+        _call_compat(loadVoiceDict, _VoiceDictionarySynthProxy(synth, voice))
+        _activeLoadedVoiceDictVariant = voice
+        voiceDef, voiceDict = _resolve_nvda_voice_speech_dict()
+        if voiceDict is not None:
+            loadedFileName = getattr(voiceDict, "fileName", None) or (
+                getattr(voiceDef, "path", None) if voiceDef is not None else None
+            )
+            _voiceDictCache[voice] = (
+                loadedFileName,
+                _file_stat_signature(loadedFileName),
+                list(voiceDict),
+            )
         return True
-    loadVoiceDict = _originalSpeechDictLoadVoiceDict or getattr(speechDictHandler, "loadVoiceDict", None)
-    if not callable(loadVoiceDict):
-        return False
-    loadVoiceDict(_VoiceDictionarySynthProxy(synth, voice))
-    _activeLoadedVoiceDictVariant = voice
-    voiceDef, voiceDict = _resolve_nvda_voice_speech_dict()
-    if voiceDict is not None:
-        loadedFileName = getattr(voiceDict, "fileName", None) or (
-            getattr(voiceDef, "path", None) if voiceDef is not None else None
-        )
-        _voiceDictCache[voice] = (
-            loadedFileName,
-            _file_stat_signature(loadedFileName),
-            list(voiceDict),
-        )
-    return True
 
 
 def _current_google_tts_speaker_id(synth: Any) -> str:
@@ -1147,19 +1468,30 @@ def _current_google_tts_speaker_id(synth: Any) -> str:
 
 
 def _patch_google_tts_voice_dictionary_loading() -> None:
-    global _originalSpeechDictLoadVoiceDict, _patchedSpeechDictLoadVoiceDict
-    if _originalSpeechDictLoadVoiceDict is not None:
+    global _originalSpeechDictLoadVoiceDict, _originalSpeechDictDefinitionsLoadVoiceDict
+    global _patchedSpeechDictLoadVoiceDict, _voiceDictionaryLoadingPatchActive
+    if _patchedSpeechDictLoadVoiceDict is not None:
         return
-    loadVoiceDict = getattr(speechDictHandler, "loadVoiceDict", None)
+    definitions = getattr(speechDictHandler, "definitions", None)
+    topLoadVoiceDict = getattr(speechDictHandler, "loadVoiceDict", None)
+    defsLoadVoiceDict = getattr(definitions, "loadVoiceDict", None) if definitions is not None else None
+    loadVoiceDict = defsLoadVoiceDict or topLoadVoiceDict
     if loadVoiceDict is None:
         log.debugWarning(
             "NVDA speechDictHandler.loadVoiceDict is unavailable; Google TTS voice dictionary patch disabled."
         )
         return
-    _originalSpeechDictLoadVoiceDict = loadVoiceDict
-    originalLoadVoiceDict = _originalSpeechDictLoadVoiceDict
+    _originalSpeechDictLoadVoiceDict = topLoadVoiceDict
+    _originalSpeechDictDefinitionsLoadVoiceDict = defsLoadVoiceDict
+    originalLoadVoiceDict = loadVoiceDict
+    patchActive = [True]
+    _voiceDictionaryLoadingPatchActive = patchActive
 
     def load_voice_dictionary_for_google_tts_variant(synth: Any, *args: Any, **kwargs: Any) -> None:
+        global _activeLoadedVoiceDictVariant
+        if not patchActive[0]:
+            _call_compat(originalLoadVoiceDict, synth, *args, **kwargs)
+            return
         try:
             if getattr(synth, "name", "") == SYNTH_NAME:
                 voice = _current_google_tts_speaker_id(synth)
@@ -1167,19 +1499,45 @@ def _patch_google_tts_voice_dictionary_loading() -> None:
                     return
         except Exception:
             log.debug("Could not load Google TTS voice dictionary for the selected variant.", exc_info=True)
-        originalLoadVoiceDict(synth, *args, **kwargs)
+        _activeLoadedVoiceDictVariant = None
+        _call_compat(originalLoadVoiceDict, synth, *args, **kwargs)
 
+    _wrap_nvda_callable(load_voice_dictionary_for_google_tts_variant, originalLoadVoiceDict)
     _patchedSpeechDictLoadVoiceDict = load_voice_dictionary_for_google_tts_variant
-    speechDictHandler.loadVoiceDict = load_voice_dictionary_for_google_tts_variant
+    if _originalSpeechDictLoadVoiceDict is not None:
+        speechDictHandler.loadVoiceDict = load_voice_dictionary_for_google_tts_variant
+    if definitions is not None and _originalSpeechDictDefinitionsLoadVoiceDict is not None:
+        definitions.loadVoiceDict = load_voice_dictionary_for_google_tts_variant
+    try:
+        currentSynth = synthDriverHandler.getSynth()
+        if getattr(currentSynth, "name", "") == SYNTH_NAME:
+            load_voice_dictionary_for_google_tts_variant(currentSynth)
+    except Exception:
+        log.debug("Could not load active Google TTS variant voice dictionary on patch init.", exc_info=True)
 
 
 def _unpatch_google_tts_voice_dictionary_loading() -> None:
-    global _originalSpeechDictLoadVoiceDict, _patchedSpeechDictLoadVoiceDict, _activeLoadedVoiceDictVariant
-    if _originalSpeechDictLoadVoiceDict is None:
+    global _originalSpeechDictLoadVoiceDict, _originalSpeechDictDefinitionsLoadVoiceDict
+    global _patchedSpeechDictLoadVoiceDict, _activeLoadedVoiceDictVariant, _voiceDictionaryLoadingPatchActive
+    if _patchedSpeechDictLoadVoiceDict is None:
         return
-    if getattr(speechDictHandler, "loadVoiceDict", None) is _patchedSpeechDictLoadVoiceDict:
+    if _voiceDictionaryLoadingPatchActive is not None:
+        _voiceDictionaryLoadingPatchActive[0] = False
+        _voiceDictionaryLoadingPatchActive = None
+    if (
+        _originalSpeechDictLoadVoiceDict is not None
+        and getattr(speechDictHandler, "loadVoiceDict", None) is _patchedSpeechDictLoadVoiceDict
+    ):
         speechDictHandler.loadVoiceDict = _originalSpeechDictLoadVoiceDict
+    definitions = getattr(speechDictHandler, "definitions", None)
+    if (
+        definitions is not None
+        and _originalSpeechDictDefinitionsLoadVoiceDict is not None
+        and getattr(definitions, "loadVoiceDict", None) is _patchedSpeechDictLoadVoiceDict
+    ):
+        definitions.loadVoiceDict = _originalSpeechDictDefinitionsLoadVoiceDict
     _originalSpeechDictLoadVoiceDict = None
+    _originalSpeechDictDefinitionsLoadVoiceDict = None
     _patchedSpeechDictLoadVoiceDict = None
     _activeLoadedVoiceDictVariant = None
     _voiceDictCache.clear()
@@ -1246,10 +1604,36 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any,
     currentAutoLanguage: str | None = None
     inCharacterMode = False
     inSpellingSequence = False
+    spellingSequenceLanguage: str | None = None
     nonEmptyStrCount = sum(1 for x in speechSequence if isinstance(x, str) and x.strip())
     for idx, item in enumerate(speechSequence):
         if CharacterModeCommand is not None and isinstance(item, CharacterModeCommand):
             inCharacterMode = bool(getattr(item, "state", False))
+            filtered.append(item)
+            continue
+        if SuppressUnicodeNormalizationCommand is not None and isinstance(item, SuppressUnicodeNormalizationCommand):
+            if not bool(getattr(item, "state", False)):
+                inSpellingSequence = False
+                spellingSequenceLanguage = None
+            filtered.append(item)
+            continue
+        if (EndUtteranceCommand is not None and isinstance(item, EndUtteranceCommand)) or type(
+            item
+        ).__name__ == "EndUtteranceCommand":
+            inCharacterMode = False
+            filtered.append(item)
+            continue
+        if isinstance(item, _GoogleTtsProfileLangCommand):
+            currentAutoLanguage = item.language if isinstance(item.language, str) else None
+            if item.language is None:
+                inSpellingSequence = False
+                spellingSequenceLanguage = None
+            elif item.spelling:
+                inSpellingSequence = True
+                spellingSequenceLanguage = currentAutoLanguage
+            else:
+                inSpellingSequence = False
+                spellingSequenceLanguage = None
             filtered.append(item)
             continue
         if isinstance(item, LangChangeCommand):
@@ -1259,6 +1643,10 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any,
             currentAutoLanguage = googleLanguage if isinstance(googleLanguage, str) else None
             if getattr(item, _GOOGLE_TTS_SPELLING_LANG_ATTR, False):
                 inSpellingSequence = True
+                spellingSequenceLanguage = currentAutoLanguage
+            elif googleLanguage is None:
+                inSpellingSequence = False
+                spellingSequenceLanguage = None
             filtered.append(item)
             continue
         if isinstance(item, str) and item:
@@ -1275,34 +1663,20 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any,
             # Route directly to preferred language (or matching non-preferred candidate script for a single char).
             isSingleGrapheme = language_profiles.is_single_grapheme_token(stripped)
             if preferred and (inCharacterMode or inSpellingSequence or (nonEmptyStrCount == 1 and isSingleGrapheme)):
-                candidateRoots: dict[str, str] = {}
-                for c in candidates:
-                    candidateRoots.setdefault(_language_root(c), c)
-                scriptSignal = (
-                    language_profiles.language_script_signal(stripped, candidateRoots) if isSingleGrapheme else None
-                )
-                prefRoot = _language_root(preferred)
-                exemplarSignal = (
-                    language_profiles.latin_exemplar_signal(stripped, candidateRoots)
-                    if isSingleGrapheme and scriptSignal is None and not stripped.isascii()
+                nonPreferredMatch = (
+                    language_detector.resolve_single_grapheme_candidate(stripped, candidates, preferred)
+                    if isSingleGrapheme
                     else None
                 )
-                if scriptSignal and scriptSignal != prefRoot and scriptSignal in candidateRoots:
-                    targetLang = candidateRoots[scriptSignal]
-                elif (
-                    exemplarSignal
-                    and exemplarSignal != prefRoot
-                    and exemplarSignal in candidateRoots
-                    and stripped.lower() not in language_profiles._LATIN_NON_ASCII_EXEMPLARS.get(prefRoot, frozenset())
-                ):
-                    targetLang = candidateRoots[exemplarSignal]
-                elif inSpellingSequence and currentAutoLanguage:
-                    targetLang = currentAutoLanguage
+                if nonPreferredMatch:
+                    targetLang = nonPreferredMatch
+                elif inSpellingSequence and (spellingSequenceLanguage or currentAutoLanguage):
+                    targetLang = spellingSequenceLanguage or currentAutoLanguage
                 else:
                     targetLang = preferred or baseLanguage
 
                 if targetLang is not None and not _same_language(currentAutoLanguage, targetLang):
-                    filtered.append(_google_lang_change_command(targetLang))
+                    _append_google_lang_change(filtered, targetLang)
                     currentAutoLanguage = targetLang
                 filtered.append(language_profiles.normalize_mathematical_alphanumeric(item))
                 continue
@@ -1337,7 +1711,7 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any,
                 for segText, segLang in segments:
                     targetLang = segLang or baseLanguage or preferred
                     if targetLang is not None and not _same_language(currentAutoLanguage, targetLang):
-                        filtered.append(_google_lang_change_command(targetLang))
+                        _append_google_lang_change(filtered, targetLang)
                         currentAutoLanguage = targetLang
                     filtered.append(segText)
                 continue
@@ -1350,7 +1724,7 @@ def _filter_auto_language_speech_sequence(speechSequence: list[Any], *args: Any,
             if targetLanguage is None and currentAutoLanguage is not None:
                 targetLanguage = baseLanguage
             if targetLanguage is not None and not _same_language(currentAutoLanguage, targetLanguage):
-                filtered.append(_google_lang_change_command(targetLanguage))
+                _append_google_lang_change(filtered, targetLanguage)
                 currentAutoLanguage = targetLanguage
             filtered.append(language_profiles.normalize_mathematical_alphanumeric(item))
             continue
@@ -1382,40 +1756,78 @@ def _unregister_auto_language_speech_filter() -> None:
     _autoLanguageSpeechFilterRegistered = False
 
 
+_CONFIG_MISSING = object()
+
+
+def _normalize_text_for_auto_profile(text: str) -> str:
+    if not _nvda_unicode_normalization_enabled() or unicodedata.normalize("NFKC", text) == text:
+        return language_profiles.normalize_mathematical_alphanumeric(text)
+    return text
+
+
+@contextlib.contextmanager
+def _temporary_config_override(section: Any, updates: dict[str, Any]) -> Any:
+    if section is None or not updates:
+        yield
+        return
+    cache = getattr(section, "_cache", None)
+    if isinstance(cache, dict) and hasattr(section, "profiles"):
+        savedCache = {key: cache.get(key, _CONFIG_MISSING) for key in updates}
+        cache.update(updates)
+        try:
+            yield
+        finally:
+            for key, prevValue in savedCache.items():
+                if prevValue is _CONFIG_MISSING:
+                    cache.pop(key, None)
+                else:
+                    cache[key] = prevValue
+        return
+    savedValues = {key: section.get(key, _CONFIG_MISSING) for key in updates}
+    for key, value in updates.items():
+        section[key] = value
+    try:
+        yield
+    finally:
+        for key, prevValue in savedValues.items():
+            if prevValue is _CONFIG_MISSING:
+                with contextlib.suppress(Exception):
+                    del section[key]
+            else:
+                with contextlib.suppress(Exception):
+                    section[key] = prevValue
+
+
 def _patch_auto_language_voice_dictionary() -> None:
     global _originalSpeechSpeak, _originalSpeechPackageSpeak, _originalSayAllSpeak
-    global _originalSayAllSpeakWithoutPauses
-    global _originalSpeechProcessText, _originalSpeechGetSpellingSpeech
+    global _originalSayAllSpeakWithoutPauses, _originalSayAllInitialize
+    global _originalSpeechProcessText, _originalSpeechPackageProcessText
+    global _originalSpeechGetSpellingSpeech, _originalSpeechPackageGetSpellingSpeech
+    global _originalSpeechGetSingleCharDescription, _originalSpeechPackageGetSingleCharDescription
     global _originalShortcutKeysShouldUseSpellingFunctionality
     global _originalLanguageHandlingShouldMakeLangChangeCommand
     global _originalLanguageHandlingShouldSwitchVoice
     global _originalSpeechManagerShouldSwitchVoice
     global _patchedSpeechSpeak, _patchedSpeechPackageSpeak, _patchedSayAllSpeak
-    global _patchedSayAllSpeakWithoutPauses
+    global _patchedSayAllSpeakWithoutPauses, _patchedSayAllInitialize
     global _patchedSpeechProcessText, _patchedSpeechGetSpellingSpeech
+    global _patchedSpeechGetSingleCharDescription
     global _patchedShortcutKeysShouldUseSpellingFunctionality
     global _patchedLanguageHandlingShouldMakeLangChangeCommand
     global _patchedLanguageHandlingShouldSwitchVoice
     global _patchedSpeechManagerShouldSwitchVoice
+    global _autoLanguagePatchActive
     if _originalSpeechProcessText is not None:
         return
     _originalSpeechSpeak = getattr(speechModule, "speak", None)
     _originalSpeechPackageSpeak = getattr(speech, "speak", None)
-    sayAllSpeechWithoutPauses = (
-        getattr(getattr(sayAllModule, "SayAllHandler", None), "speechWithoutPausesInstance", None)
-        if sayAllModule is not None
-        else None
-    )
-    _originalSayAllSpeak = (
-        getattr(sayAllSpeechWithoutPauses, "speak", None) if sayAllSpeechWithoutPauses is not None else None
-    )
-    _originalSayAllSpeakWithoutPauses = (
-        getattr(sayAllSpeechWithoutPauses, "speakWithoutPauses", None)
-        if sayAllSpeechWithoutPauses is not None
-        else None
-    )
+    _originalSayAllInitialize = getattr(sayAllModule, "initialize", None) if sayAllModule is not None else None
     _originalSpeechProcessText = speechModule.processText
+    _originalSpeechPackageProcessText = getattr(speech, "processText", None)
     _originalSpeechGetSpellingSpeech = speechModule.getSpellingSpeech
+    _originalSpeechPackageGetSpellingSpeech = getattr(speech, "getSpellingSpeech", None)
+    _originalSpeechGetSingleCharDescription = getattr(speechModule, "getSingleCharDescription", None)
+    _originalSpeechPackageGetSingleCharDescription = getattr(speech, "getSingleCharDescription", None)
     _originalShortcutKeysShouldUseSpellingFunctionality = getattr(
         shortcutKeysModule,
         "shouldUseSpellingFunctionality",
@@ -1433,95 +1845,113 @@ def _patch_auto_language_voice_dictionary() -> None:
         getattr(speechManagerModule, "shouldSwitchVoice", None) if speechManagerModule is not None else None
     )
     originalSpeak = _originalSpeechSpeak
-    originalSayAllSpeakWithoutPauses = _originalSayAllSpeakWithoutPauses
     originalProcessText = _originalSpeechProcessText
     originalGetSpellingSpeech = _originalSpeechGetSpellingSpeech
+    originalGetSingleCharDescription = _originalSpeechGetSingleCharDescription
     originalShouldUseSpellingFunctionality = _originalShortcutKeysShouldUseSpellingFunctionality
     originalShouldMakeLangChangeCommand = _originalLanguageHandlingShouldMakeLangChangeCommand
     originalShouldSwitchVoice = _originalLanguageHandlingShouldSwitchVoice
     originalManagerShouldSwitchVoice = _originalSpeechManagerShouldSwitchVoice
+    patchActive = [True]
+    _autoLanguagePatchActive = patchActive
 
     def make_speak_with_auto_profile(targetSpeak: Any) -> Any:
         def wrapped_speak_with_auto_profile(*args: Any, **kwargs: Any) -> Any:
             global _autoProfileSpeakDepth
             if targetSpeak is None:
                 return None
-            if not _google_auto_language_detection_active():
-                return targetSpeak(*args, **kwargs)
+            if not patchActive[0] or not _google_auto_language_detection_active():
+                return _call_compat(targetSpeak, *args, **kwargs)
             multipleProfiles = _google_auto_language_multiple_profiles_active()
-            with _speechConfigOverlayLock:
-                originalSpeechFlags: dict[str, Any] = {}
-                speechConfig: Any = None
+            with _speechConfigOverlayLock, contextlib.ExitStack() as stack:
                 try:
                     speechConfig = config.conf["speech"]
+                    speechUpdates: dict[str, Any] = {}
                     if multipleProfiles and "autoDialectSwitching" in speechConfig:
-                        originalSpeechFlags["autoDialectSwitching"] = speechConfig["autoDialectSwitching"]
-                        speechConfig["autoDialectSwitching"] = True
+                        speechUpdates["autoDialectSwitching"] = True
                     if languageHandlingModule is None and "autoLanguageSwitching" in speechConfig:
-                        originalSpeechFlags["autoLanguageSwitching"] = speechConfig["autoLanguageSwitching"]
-                        speechConfig["autoLanguageSwitching"] = multipleProfiles
+                        speechUpdates["autoLanguageSwitching"] = multipleProfiles
+                    if speechUpdates:
+                        stack.enter_context(_temporary_config_override(speechConfig, speechUpdates))
                 except Exception:
                     log.debug("Could not apply Google TTS auto-language speech flags.", exc_info=True)
                 _autoProfileSpeakDepth += 1
+                _speakPipelineState.depth = getattr(_speakPipelineState, "depth", 0) + 1
                 try:
-                    return targetSpeak(*args, **kwargs)
+                    return _call_compat(targetSpeak, *args, **kwargs)
                 finally:
+                    _speakPipelineState.depth = max(0, getattr(_speakPipelineState, "depth", 1) - 1)
                     _autoProfileSpeakDepth = max(0, _autoProfileSpeakDepth - 1)
-                    if speechConfig is not None and originalSpeechFlags:
-                        try:
-                            for flagKey, flagValue in originalSpeechFlags.items():
-                                speechConfig[flagKey] = flagValue
-                        except Exception:
-                            log.debug("Could not restore Google TTS auto-language speech flags.", exc_info=True)
 
-        return wrapped_speak_with_auto_profile
+        return _wrap_nvda_callable(wrapped_speak_with_auto_profile, targetSpeak)
 
     _defaultSpeakWithAutoProfile = make_speak_with_auto_profile(originalSpeak)
 
     def speak_with_auto_profile(*args: Any, **kwargs: Any) -> Any:
         return _defaultSpeakWithAutoProfile(*args, **kwargs)
 
+    _wrap_nvda_callable(speak_with_auto_profile, originalSpeak)
+
     package_speak_with_auto_profile = (
         speak_with_auto_profile
         if _originalSpeechPackageSpeak is originalSpeak
         else make_speak_with_auto_profile(_originalSpeechPackageSpeak)
     )
-    say_all_speak_with_auto_profile = (
-        speak_with_auto_profile
-        if _originalSayAllSpeak is originalSpeak
-        else make_speak_with_auto_profile(_originalSayAllSpeak)
-    )
 
-    def speak_without_pauses_with_auto_profile(
-        speechSequence: list[Any] | None,
-        *args: Any,
-        **kwargs: Any,
-    ) -> bool:
-        if originalSayAllSpeakWithoutPauses is None:
-            return False
-        if speechSequence is not None and _google_auto_language_detection_active():
-            try:
-                speechSequence = _strip_external_lang_changes_and_coalesce(list(speechSequence))
-            except Exception:
-                log.debug("Could not coalesce speech sequence for SayAll.", exc_info=True)
-        return bool(originalSayAllSpeakWithoutPauses(speechSequence, *args, **kwargs))
+    def make_speak_without_pauses_with_auto_profile(targetSpeakWithoutPauses: Any) -> Any:
+        def wrapped_speak_without_pauses_with_auto_profile(*args: Any, **kwargs: Any) -> bool:
+            if targetSpeakWithoutPauses is None:
+                return False
+            if not patchActive[0]:
+                return bool(_call_compat(targetSpeakWithoutPauses, *args, **kwargs))
+            speechSequence = _extract_named_arg(args, kwargs, "speechSequence", 0)
+            newArgs = args
+            newKwargs = kwargs
+            if speechSequence is not None and _google_auto_language_detection_active():
+                try:
+                    coalesced = _strip_external_lang_changes_and_coalesce(list(speechSequence))
+                    if "speechSequence" in kwargs:
+                        newKwargs = dict(kwargs, speechSequence=coalesced)
+                    elif args:
+                        argsList = list(args)
+                        argsList[0] = coalesced
+                        newArgs = tuple(argsList)
+                    else:
+                        newArgs = (coalesced,)
+                except Exception:
+                    log.debug("Could not coalesce speech sequence for SayAll.", exc_info=True)
+            return bool(_call_compat(targetSpeakWithoutPauses, *newArgs, **newKwargs))
+
+        return _wrap_nvda_callable(wrapped_speak_without_pauses_with_auto_profile, targetSpeakWithoutPauses)
+
+    def speak_without_pauses_with_auto_profile(*args: Any, **kwargs: Any) -> bool:
+        if _patchedSayAllSpeakWithoutPauses is not None:
+            return bool(_patchedSayAllSpeakWithoutPauses(*args, **kwargs))
+        return False
 
     def process_text_with_auto_voice_dictionary(*args: Any, **kwargs: Any) -> str:
-        argsList = list(args)
-        locale = kwargs.get("locale") if "locale" in kwargs else (argsList[0] if argsList else None)
-        text = kwargs.get("text") if "text" in kwargs else (argsList[1] if len(argsList) > 1 else None)
+        if not patchActive[0]:
+            return str(_call_compat(originalProcessText, *args, **kwargs))
+        locale = _extract_named_arg(args, kwargs, "locale", 0)
+        text = _extract_named_arg(args, kwargs, "text", 1)
 
-        def call_original_with_locale(effectiveLocale: str | None = None) -> str:
-            updatedArgs = list(args)
-            updatedKwargs = dict(kwargs)
-            if effectiveLocale is not None:
-                if "locale" in updatedKwargs:
-                    updatedKwargs["locale"] = effectiveLocale
-                elif updatedArgs:
-                    updatedArgs[0] = effectiveLocale
-                else:
-                    updatedKwargs["locale"] = effectiveLocale
-            return originalProcessText(*updatedArgs, **updatedKwargs)
+        def call_original_with_locale(
+            effectiveLocale: str | None = None,
+            currentArgs: tuple[Any, ...] = args,
+            currentKwargs: dict[str, Any] = kwargs,
+        ) -> str:
+            updatedArgs, updatedKwargs = (
+                _replace_text_locale(
+                    currentArgs,
+                    currentKwargs,
+                    textIndex=1,
+                    localeIndex=0,
+                    locale=effectiveLocale,
+                )
+                if effectiveLocale is not None
+                else (currentArgs, currentKwargs)
+            )
+            return str(_call_compat(originalProcessText, *updatedArgs, **updatedKwargs))
 
         try:
             if not isinstance(locale, str) or not isinstance(text, str):
@@ -1529,16 +1959,20 @@ def _patch_auto_language_voice_dictionary() -> None:
             synth = synthDriverHandler.getSynth()
             if getattr(synth, "name", "") != SYNTH_NAME:
                 return call_original_with_locale()
-            normalizedText = language_profiles.normalize_mathematical_alphanumeric(text)
+            normalizedText = _normalize_text_for_auto_profile(text)
+            effectiveArgs = args
+            effectiveKwargs = kwargs
             if normalizedText != text:
                 text = normalizedText
-                if "text" in kwargs:
-                    kwargs = dict(kwargs, text=normalizedText)
-                elif len(argsList) > 1:
-                    argsList[1] = normalizedText
-                    args = tuple(argsList)
+                effectiveArgs, effectiveKwargs = _replace_text_locale(
+                    args,
+                    kwargs,
+                    textIndex=1,
+                    localeIndex=0,
+                    text=normalizedText,
+                )
             if not synth._auto_language_detection_enabled():
-                return call_original_with_locale()
+                return call_original_with_locale(None, effectiveArgs, effectiveKwargs)
             targetLanguage = _auto_language_for_process_text(synth, locale, text)
             effectiveLocale = _nvda_locale_for_language(targetLanguage) or _nvda_locale_for_language(locale) or locale
             targetVariant = _auto_profile_variant_for_language(synth, targetLanguage or effectiveLocale)
@@ -1547,7 +1981,7 @@ def _patch_auto_language_voice_dictionary() -> None:
             try:
                 if targetVariant and targetVariant != currentVariant:
                     restoreVoiceDict = _load_voice_dictionary_for_voice(synth, targetVariant)
-                return call_original_with_locale(effectiveLocale)
+                return call_original_with_locale(effectiveLocale, effectiveArgs, effectiveKwargs)
             finally:
                 if restoreVoiceDict:
                     try:
@@ -1558,23 +1992,36 @@ def _patch_auto_language_voice_dictionary() -> None:
             log.debug("Could not apply Google TTS auto-language voice dictionary.", exc_info=True)
             return call_original_with_locale()
 
-    def get_spelling_speech_with_auto_profile(
-        text: str,
-        locale: str | None = None,
-        useCharacterDescriptions: bool = False,
+    _wrap_nvda_callable(process_text_with_auto_voice_dictionary, originalProcessText)
+
+    def _iter_spelling_or_char_desc_with_auto_profile(
+        targetFunc: Any,
+        logLabel: str,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        if targetFunc is None:
+            return
+        if not patchActive[0]:
+            yield from _call_compat(targetFunc, *args, **kwargs)
+            return
+        rawText = _extract_named_arg(args, kwargs, "text", 0)
+        rawLocale = _extract_named_arg(args, kwargs, "locale", 1)
+        text = rawText
         try:
             synth = synthDriverHandler.getSynth()
             if isinstance(text, str) and getattr(synth, "name", "") == SYNTH_NAME:
-                if not _nvda_unicode_normalization_enabled() or unicodedata.normalize("NFKC", text) == text:
-                    text = language_profiles.normalize_mathematical_alphanumeric(text)
+                text = _normalize_text_for_auto_profile(text)
         except Exception:
             synth = None
-        context = _auto_profile_character_context_for_text(locale, text)
+        rawArgs, rawKwargs = (
+            _replace_text_locale(args, kwargs, textIndex=0, localeIndex=1, text=text)
+            if isinstance(text, str) and text != rawText
+            else (args, kwargs)
+        )
+        context = _auto_profile_character_context_for_text(rawLocale, text)
         if not context:
-            yield from originalGetSpellingSpeech(text, locale, useCharacterDescriptions, *args, **kwargs)
+            yield from _call_compat(targetFunc, *rawArgs, **rawKwargs)
             return
         settings, effectiveLocale = context
         multipleProfiles = _google_auto_language_multiple_profiles_active()
@@ -1584,97 +2031,196 @@ def _patch_auto_language_voice_dictionary() -> None:
             spellingLanguage = _auto_language_for_spelling_text(synth, text) or effectiveLocale
         except Exception:
             spellingLanguage = effectiveLocale
+        effectiveArgs, effectiveKwargs = _replace_text_locale(
+            rawArgs,
+            rawKwargs,
+            textIndex=0,
+            localeIndex=1,
+            locale=effectiveLocale if effectiveLocale != rawLocale else _UNSET,
+        )
+        items: list[Any] | None = None
         with _speechConfigOverlayLock:
-            originalSpeechFlags: dict[str, Any] = {}
+            speechConfig: Any = None
+            synthConfig: Any = None
+            speechUpdates: dict[str, Any] = {}
             try:
                 speechConfig = config.conf["speech"]
                 synthConfig = speechConfig[SYNTH_NAME]
-                originalSettings = {
-                    "capPitchChange": synthConfig["capPitchChange"],
-                    "sayCapForCapitals": synthConfig["sayCapForCapitals"],
-                    "beepForCapitals": synthConfig["beepForCapitals"],
-                    "useSpellingFunctionality": synthConfig["useSpellingFunctionality"],
-                }
                 if "autoDialectSwitching" in speechConfig:
-                    originalSpeechFlags["autoDialectSwitching"] = speechConfig["autoDialectSwitching"]
-                    speechConfig["autoDialectSwitching"] = True
+                    speechUpdates["autoDialectSwitching"] = True
                 if languageHandlingModule is None and "autoLanguageSwitching" in speechConfig:
-                    originalSpeechFlags["autoLanguageSwitching"] = speechConfig["autoLanguageSwitching"]
-                    speechConfig["autoLanguageSwitching"] = multipleProfiles
+                    speechUpdates["autoLanguageSwitching"] = multipleProfiles
             except Exception:
-                log.debug("Could not apply Google TTS auto-language spelling settings.", exc_info=True)
-                yield from originalGetSpellingSpeech(text, locale, useCharacterDescriptions, *args, **kwargs)
-                return
-            for key, value in settings.items():
-                synthConfig[key] = value
-            try:
-                if multipleProfiles and spellingLanguage:
-                    yield _google_lang_change_command(spellingLanguage, spelling=True)
-                for item in originalGetSpellingSpeech(
-                    text,
-                    effectiveLocale,
-                    useCharacterDescriptions,
-                    *args,
-                    **kwargs,
+                log.debug("Could not apply Google TTS auto-language %s settings.", logLabel, exc_info=True)
+            else:
+                with (
+                    _temporary_config_override(speechConfig, speechUpdates),
+                    _temporary_config_override(synthConfig, dict(settings)),
                 ):
-                    if isinstance(item, LangChangeCommand):
-                        if multipleProfiles and spellingLanguage:
-                            yield _google_lang_change_command(spellingLanguage, spelling=True)
-                        continue
-                    yield item
-            finally:
-                for key, value in originalSettings.items():
-                    synthConfig[key] = value
-                for flagKey, flagValue in originalSpeechFlags.items():
-                    speechConfig[flagKey] = flagValue
+                    items = list(_call_compat(targetFunc, *effectiveArgs, **effectiveKwargs))
+        if items is None:
+            yield from _call_compat(targetFunc, *rawArgs, **rawKwargs)
+            return
+        trailingEndUtterances: list[Any] = []
+        while items and (
+            (EndUtteranceCommand is not None and isinstance(items[-1], EndUtteranceCommand))
+            or type(items[-1]).__name__ == "EndUtteranceCommand"
+        ):
+            trailingEndUtterances.append(items.pop())
+        trailingEndUtterances.reverse()
+        emittedLangCommand = False
+        if multipleProfiles and spellingLanguage:
+            yield _google_lang_change_command(spellingLanguage, spelling=True)
+            yield _GoogleTtsProfileLangCommand(spellingLanguage, spelling=True)
+            emittedLangCommand = True
+        for item in items:
+            if isinstance(item, LangChangeCommand):
+                if multipleProfiles and spellingLanguage and not emittedLangCommand:
+                    yield _google_lang_change_command(spellingLanguage, spelling=True)
+                    yield _GoogleTtsProfileLangCommand(spellingLanguage, spelling=True)
+                    emittedLangCommand = True
+                continue
+            yield item
+        if emittedLangCommand:
+            yield _google_lang_change_command(None)
+            yield _GoogleTtsProfileLangCommand(None)
+        yield from trailingEndUtterances
+
+    def get_spelling_speech_with_auto_profile(*args: Any, **kwargs: Any) -> Any:
+        yield from _iter_spelling_or_char_desc_with_auto_profile(
+            originalGetSpellingSpeech,
+            "spelling",
+            *args,
+            **kwargs,
+        )
+
+    _wrap_nvda_callable(get_spelling_speech_with_auto_profile, originalGetSpellingSpeech)
+
+    def get_single_char_description_with_auto_profile(*args: Any, **kwargs: Any) -> Any:
+        yield from _iter_spelling_or_char_desc_with_auto_profile(
+            originalGetSingleCharDescription,
+            "character description",
+            *args,
+            **kwargs,
+        )
+
+    _wrap_nvda_callable(get_single_char_description_with_auto_profile, originalGetSingleCharDescription)
 
     def should_use_spelling_functionality_with_auto_profile(*args: Any, **kwargs: Any) -> bool:
-        settings = _single_auto_profile_character_settings()
+        settings = _single_auto_profile_character_settings() if patchActive[0] else None
         if settings is not None:
+            if CharacterModeCommand is not None:
+                try:
+                    synth = synthDriverHandler.getSynth()
+                    supportedCommands = getattr(synth, "supportedCommands", None)
+                    if supportedCommands is not None and CharacterModeCommand not in supportedCommands:
+                        return False
+                except Exception:
+                    pass
             return bool(settings.get("useSpellingFunctionality", True))
         if originalShouldUseSpellingFunctionality is not None:
-            return bool(originalShouldUseSpellingFunctionality(*args, **kwargs))
+            return bool(_call_compat(originalShouldUseSpellingFunctionality, *args, **kwargs))
         return True
 
+    _wrap_nvda_callable(
+        should_use_spelling_functionality_with_auto_profile,
+        originalShouldUseSpellingFunctionality,
+    )
+
     def should_make_lang_change_command_with_auto_profile(*args: Any, **kwargs: Any) -> bool:
-        if _google_auto_language_detection_active():
-            return _autoProfileSpeakDepth > 0 and _google_auto_language_multiple_profiles_active()
+        if patchActive[0] and _google_auto_language_detection_active():
+            return getattr(_speakPipelineState, "depth", 0) > 0 and _google_auto_language_multiple_profiles_active()
         if originalShouldMakeLangChangeCommand is not None:
-            return bool(originalShouldMakeLangChangeCommand(*args, **kwargs))
+            return bool(_call_compat(originalShouldMakeLangChangeCommand, *args, **kwargs))
         return False
 
+    _wrap_nvda_callable(
+        should_make_lang_change_command_with_auto_profile,
+        originalShouldMakeLangChangeCommand,
+    )
+
     def should_switch_voice_with_auto_profile(*args: Any, **kwargs: Any) -> bool:
-        if _google_auto_language_detection_active():
+        if patchActive[0] and _google_auto_language_detection_active():
             return _google_auto_language_multiple_profiles_active()
         if originalShouldSwitchVoice is not None:
-            return bool(originalShouldSwitchVoice(*args, **kwargs))
+            return bool(_call_compat(originalShouldSwitchVoice, *args, **kwargs))
         if originalManagerShouldSwitchVoice is not None:
-            return bool(originalManagerShouldSwitchVoice(*args, **kwargs))
+            return bool(_call_compat(originalManagerShouldSwitchVoice, *args, **kwargs))
         return False
+
+    _wrap_nvda_callable(
+        should_switch_voice_with_auto_profile,
+        originalShouldSwitchVoice or originalManagerShouldSwitchVoice,
+    )
+    if originalManagerShouldSwitchVoice is None or originalManagerShouldSwitchVoice is originalShouldSwitchVoice:
+        manager_should_switch_voice_with_auto_profile = should_switch_voice_with_auto_profile
+    else:
+
+        def manager_should_switch_voice_with_auto_profile(*args: Any, **kwargs: Any) -> bool:
+            if patchActive[0] and _google_auto_language_detection_active():
+                return _google_auto_language_multiple_profiles_active()
+            return bool(_call_compat(originalManagerShouldSwitchVoice, *args, **kwargs))
+
+        _wrap_nvda_callable(manager_should_switch_voice_with_auto_profile, originalManagerShouldSwitchVoice)
+
+    def _patch_say_all_handler() -> None:
+        global _originalSayAllSpeak, _originalSayAllSpeakWithoutPauses
+        global _patchedSayAllSpeak, _patchedSayAllSpeakWithoutPauses
+        sayAllSpeechWithoutPauses = (
+            getattr(getattr(sayAllModule, "SayAllHandler", None), "speechWithoutPausesInstance", None)
+            if sayAllModule is not None
+            else None
+        )
+        if sayAllSpeechWithoutPauses is None:
+            return
+        currentSpeak = getattr(sayAllSpeechWithoutPauses, "speak", None)
+        if currentSpeak is not None and currentSpeak is not _patchedSayAllSpeak:
+            _originalSayAllSpeak = currentSpeak
+            _patchedSayAllSpeak = (
+                speak_with_auto_profile if currentSpeak is originalSpeak else make_speak_with_auto_profile(currentSpeak)
+            )
+            sayAllSpeechWithoutPauses.speak = _patchedSayAllSpeak
+        currentSwp = getattr(sayAllSpeechWithoutPauses, "speakWithoutPauses", None)
+        if currentSwp is not None and currentSwp is not _patchedSayAllSpeakWithoutPauses:
+            _originalSayAllSpeakWithoutPauses = currentSwp
+            _patchedSayAllSpeakWithoutPauses = make_speak_without_pauses_with_auto_profile(currentSwp)
+            sayAllSpeechWithoutPauses.speakWithoutPauses = _patchedSayAllSpeakWithoutPauses
 
     _patchedSpeechSpeak = speak_with_auto_profile
     _patchedSpeechPackageSpeak = package_speak_with_auto_profile
-    _patchedSayAllSpeak = say_all_speak_with_auto_profile
-    _patchedSayAllSpeakWithoutPauses = speak_without_pauses_with_auto_profile
+    _patch_say_all_handler()
     _patchedSpeechProcessText = process_text_with_auto_voice_dictionary
     _patchedSpeechGetSpellingSpeech = get_spelling_speech_with_auto_profile
+    _patchedSpeechGetSingleCharDescription = get_single_char_description_with_auto_profile
     _patchedShortcutKeysShouldUseSpellingFunctionality = should_use_spelling_functionality_with_auto_profile
     _patchedLanguageHandlingShouldMakeLangChangeCommand = should_make_lang_change_command_with_auto_profile
     _patchedLanguageHandlingShouldSwitchVoice = should_switch_voice_with_auto_profile
-    _patchedSpeechManagerShouldSwitchVoice = should_switch_voice_with_auto_profile
+    _patchedSpeechManagerShouldSwitchVoice = manager_should_switch_voice_with_auto_profile
     if originalSpeak is not None:
         speechModule.speak = speak_with_auto_profile
     if _originalSpeechPackageSpeak is not None:
         speech.speak = package_speak_with_auto_profile
-    if sayAllSpeechWithoutPauses is not None and _originalSayAllSpeak is not None:
-        if _originalSayAllSpeak is originalSpeak:
-            sayAllSpeechWithoutPauses.speak = speak_with_auto_profile
-        else:
-            sayAllSpeechWithoutPauses.speak = say_all_speak_with_auto_profile
-    if sayAllSpeechWithoutPauses is not None and _originalSayAllSpeakWithoutPauses is not None:
-        sayAllSpeechWithoutPauses.speakWithoutPauses = speak_without_pauses_with_auto_profile
+    if sayAllModule is not None and _originalSayAllInitialize is not None:
+
+        def initialize_say_all_with_auto_profile(*args: Any, **kwargs: Any) -> Any:
+            result = _call_compat(_originalSayAllInitialize, *args, **kwargs)
+            if patchActive[0]:
+                _patch_say_all_handler()
+            return result
+
+        _wrap_nvda_callable(initialize_say_all_with_auto_profile, _originalSayAllInitialize)
+        _patchedSayAllInitialize = initialize_say_all_with_auto_profile
+        sayAllModule.initialize = initialize_say_all_with_auto_profile
     speechModule.processText = process_text_with_auto_voice_dictionary
+    if _originalSpeechPackageProcessText is not None:
+        speech.processText = process_text_with_auto_voice_dictionary
     speechModule.getSpellingSpeech = get_spelling_speech_with_auto_profile
+    if _originalSpeechPackageGetSpellingSpeech is not None:
+        speech.getSpellingSpeech = get_spelling_speech_with_auto_profile
+    if originalGetSingleCharDescription is not None:
+        speechModule.getSingleCharDescription = get_single_char_description_with_auto_profile
+    if _originalSpeechPackageGetSingleCharDescription is not None:
+        speech.getSingleCharDescription = get_single_char_description_with_auto_profile
     if originalShouldUseSpellingFunctionality is not None:
         shortcutKeysModule.shouldUseSpellingFunctionality = should_use_spelling_functionality_with_auto_profile
     if languageHandlingModule is not None:
@@ -1683,26 +2229,33 @@ def _patch_auto_language_voice_dictionary() -> None:
         if originalShouldSwitchVoice is not None:
             languageHandlingModule.shouldSwitchVoice = should_switch_voice_with_auto_profile
     if speechManagerModule is not None and originalManagerShouldSwitchVoice is not None:
-        speechManagerModule.shouldSwitchVoice = should_switch_voice_with_auto_profile
+        speechManagerModule.shouldSwitchVoice = manager_should_switch_voice_with_auto_profile
 
 
 def _unpatch_auto_language_voice_dictionary() -> None:
     global _originalSpeechSpeak, _originalSpeechPackageSpeak, _originalSayAllSpeak
-    global _originalSayAllSpeakWithoutPauses
-    global _originalSpeechProcessText, _originalSpeechGetSpellingSpeech
+    global _originalSayAllSpeakWithoutPauses, _originalSayAllInitialize
+    global _originalSpeechProcessText, _originalSpeechPackageProcessText
+    global _originalSpeechGetSpellingSpeech, _originalSpeechPackageGetSpellingSpeech
+    global _originalSpeechGetSingleCharDescription, _originalSpeechPackageGetSingleCharDescription
     global _originalShortcutKeysShouldUseSpellingFunctionality
     global _originalLanguageHandlingShouldMakeLangChangeCommand
     global _originalLanguageHandlingShouldSwitchVoice
     global _originalSpeechManagerShouldSwitchVoice
     global _patchedSpeechSpeak, _patchedSpeechPackageSpeak, _patchedSayAllSpeak
-    global _patchedSayAllSpeakWithoutPauses
+    global _patchedSayAllSpeakWithoutPauses, _patchedSayAllInitialize
     global _patchedSpeechProcessText, _patchedSpeechGetSpellingSpeech
+    global _patchedSpeechGetSingleCharDescription
     global _patchedShortcutKeysShouldUseSpellingFunctionality
     global _patchedLanguageHandlingShouldMakeLangChangeCommand
     global _patchedLanguageHandlingShouldSwitchVoice
     global _patchedSpeechManagerShouldSwitchVoice
+    global _autoLanguagePatchActive
     if _originalSpeechProcessText is None:
         return
+    if _autoLanguagePatchActive is not None:
+        _autoLanguagePatchActive[0] = False
+        _autoLanguagePatchActive = None
     if _originalSpeechSpeak is not None and getattr(speechModule, "speak", None) is _patchedSpeechSpeak:
         speechModule.speak = _originalSpeechSpeak
     if _originalSpeechPackageSpeak is not None and getattr(speech, "speak", None) is _patchedSpeechPackageSpeak:
@@ -1724,10 +2277,36 @@ def _unpatch_auto_language_voice_dictionary() -> None:
         and getattr(sayAllSpeechWithoutPauses, "speakWithoutPauses", None) is _patchedSayAllSpeakWithoutPauses
     ):
         sayAllSpeechWithoutPauses.speakWithoutPauses = _originalSayAllSpeakWithoutPauses
+    if (
+        sayAllModule is not None
+        and _originalSayAllInitialize is not None
+        and getattr(sayAllModule, "initialize", None) is _patchedSayAllInitialize
+    ):
+        sayAllModule.initialize = _originalSayAllInitialize
     if getattr(speechModule, "processText", None) is _patchedSpeechProcessText:
         speechModule.processText = _originalSpeechProcessText
+    if (
+        _originalSpeechPackageProcessText is not None
+        and getattr(speech, "processText", None) is _patchedSpeechProcessText
+    ):
+        speech.processText = _originalSpeechPackageProcessText
     if getattr(speechModule, "getSpellingSpeech", None) is _patchedSpeechGetSpellingSpeech:
         speechModule.getSpellingSpeech = _originalSpeechGetSpellingSpeech
+    if (
+        _originalSpeechPackageGetSpellingSpeech is not None
+        and getattr(speech, "getSpellingSpeech", None) is _patchedSpeechGetSpellingSpeech
+    ):
+        speech.getSpellingSpeech = _originalSpeechPackageGetSpellingSpeech
+    if (
+        _originalSpeechGetSingleCharDescription is not None
+        and getattr(speechModule, "getSingleCharDescription", None) is _patchedSpeechGetSingleCharDescription
+    ):
+        speechModule.getSingleCharDescription = _originalSpeechGetSingleCharDescription
+    if (
+        _originalSpeechPackageGetSingleCharDescription is not None
+        and getattr(speech, "getSingleCharDescription", None) is _patchedSpeechGetSingleCharDescription
+    ):
+        speech.getSingleCharDescription = _originalSpeechPackageGetSingleCharDescription
     if (
         _originalShortcutKeysShouldUseSpellingFunctionality is not None
         and getattr(shortcutKeysModule, "shouldUseSpellingFunctionality", None)
@@ -1756,8 +2335,13 @@ def _unpatch_auto_language_voice_dictionary() -> None:
     _originalSpeechPackageSpeak = None
     _originalSayAllSpeak = None
     _originalSayAllSpeakWithoutPauses = None
+    _originalSayAllInitialize = None
     _originalSpeechProcessText = None
+    _originalSpeechPackageProcessText = None
     _originalSpeechGetSpellingSpeech = None
+    _originalSpeechPackageGetSpellingSpeech = None
+    _originalSpeechGetSingleCharDescription = None
+    _originalSpeechPackageGetSingleCharDescription = None
     _originalShortcutKeysShouldUseSpellingFunctionality = None
     _originalLanguageHandlingShouldMakeLangChangeCommand = None
     _originalLanguageHandlingShouldSwitchVoice = None
@@ -1766,8 +2350,10 @@ def _unpatch_auto_language_voice_dictionary() -> None:
     _patchedSpeechPackageSpeak = None
     _patchedSayAllSpeak = None
     _patchedSayAllSpeakWithoutPauses = None
+    _patchedSayAllInitialize = None
     _patchedSpeechProcessText = None
     _patchedSpeechGetSpellingSpeech = None
+    _patchedSpeechGetSingleCharDescription = None
     _patchedShortcutKeysShouldUseSpellingFunctionality = None
     _patchedLanguageHandlingShouldMakeLangChangeCommand = None
     _patchedLanguageHandlingShouldSwitchVoice = None
@@ -1779,6 +2365,9 @@ def _close_voice_manager() -> None:
     if _dialog is None:
         return
     try:
+        prepare = getattr(_dialog, "prepare_for_shutdown", None)
+        if callable(prepare):
+            prepare()
         _dialog.Destroy()
     except RuntimeError:
         pass
@@ -1787,7 +2376,16 @@ def _close_voice_manager() -> None:
 
 
 def _open_google_tts_settings() -> None:
-    gui.mainFrame.popupSettingsDialog(gui.settingsDialogs.NVDASettingsDialog, GoogleTtsSettingsPanel)
+    if is_secure_mode():
+        return
+    mainFrame = getattr(gui, "mainFrame", None)
+    settingsDialogCls = getattr(getattr(gui, "settingsDialogs", None), "NVDASettingsDialog", None)
+    if (
+        mainFrame is not None
+        and callable(getattr(mainFrame, "popupSettingsDialog", None))
+        and settingsDialogCls is not None
+    ):
+        mainFrame.popupSettingsDialog(settingsDialogCls, GoogleTtsSettingsPanel)
 
 
 def _refresh_standby_runtime(reason: str) -> None:
@@ -1802,11 +2400,12 @@ def _refresh_standby_runtime(reason: str) -> None:
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     scriptCategory = _("Google TTS For NVDA")
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        _call_compat(super().__init__, *args, **kwargs)
+        ensure_config_spec()
         self.voiceManagerMenuItem: wx.MenuItem | None = None
         self._startupUpdateCheckRegistered = False
-        if not globalVars.appArgs.secure:
+        if not is_secure_mode():
             standby.initialize()
             _patch_synth_selection()
             _patch_read_only_text_setting()
@@ -1825,14 +2424,22 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
                 self._startupUpdateCheckRegistered = True
             except Exception:
                 log.debug("Could not register Google TTS For NVDA automatic update check.", exc_info=True)
-            if GoogleTtsSettingsPanel not in gui.settingsDialogs.NVDASettingsDialog.categoryClasses:
-                gui.settingsDialogs.NVDASettingsDialog.categoryClasses.append(GoogleTtsSettingsPanel)
-            self.voiceManagerMenuItem = gui.mainFrame.sysTrayIcon.toolsMenu.Append(
-                wx.ID_ANY,
-                _("Google TTS Voice Manager..."),
-                _("Download or remove Google TTS For NVDA voice packages"),
-            )
-            gui.mainFrame.sysTrayIcon.Bind(wx.EVT_MENU, self.on_open_voice_manager, self.voiceManagerMenuItem)
+            settingsDialogCls = getattr(getattr(gui, "settingsDialogs", None), "NVDASettingsDialog", None)
+            categoryClasses = getattr(settingsDialogCls, "categoryClasses", None)
+            if isinstance(categoryClasses, list) and GoogleTtsSettingsPanel not in categoryClasses:
+                categoryClasses.append(GoogleTtsSettingsPanel)
+            mainFrame = getattr(gui, "mainFrame", None)
+            sysTrayIcon = getattr(mainFrame, "sysTrayIcon", None) if mainFrame is not None else None
+            toolsMenu = getattr(sysTrayIcon, "toolsMenu", None) if sysTrayIcon is not None else None
+            if sysTrayIcon is not None and toolsMenu is not None:
+                with contextlib.suppress(RuntimeError, AttributeError, TypeError):
+                    self.voiceManagerMenuItem = toolsMenu.Append(
+                        wx.ID_ANY,
+                        _("Google TTS Voice Manager..."),
+                        _("Download or remove Google TTS For NVDA voice packages"),
+                    )
+                    if self.voiceManagerMenuItem is not None:
+                        sysTrayIcon.Bind(wx.EVT_MENU, self.on_open_voice_manager, self.voiceManagerMenuItem)
 
     def _on_post_nvda_startup(self, *args: Any, **kwargs: Any) -> None:
         try:
@@ -1843,6 +2450,8 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     def terminate(self, *args: Any, **kwargs: Any) -> None:
         _close_voice_manager()
+        with contextlib.suppress(Exception):
+            settingsModule.cancel_pending_runtime_change()
         try:
             standby.terminate()
         except Exception:
@@ -1855,30 +2464,47 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             except Exception:
                 log.debug("Could not unregister Google TTS For NVDA automatic update check.", exc_info=True)
             self._startupUpdateCheckRegistered = False
-        with contextlib.suppress(ValueError):
-            gui.settingsDialogs.NVDASettingsDialog.categoryClasses.remove(GoogleTtsSettingsPanel)
+        settingsDialogCls = getattr(getattr(gui, "settingsDialogs", None), "NVDASettingsDialog", None)
+        categoryClasses = getattr(settingsDialogCls, "categoryClasses", None)
+        if isinstance(categoryClasses, list):
+            with contextlib.suppress(ValueError):
+                categoryClasses.remove(GoogleTtsSettingsPanel)
         if self.voiceManagerMenuItem is not None:
-            with contextlib.suppress(RuntimeError):
-                gui.mainFrame.sysTrayIcon.Unbind(wx.EVT_MENU, source=self.voiceManagerMenuItem)
-            with contextlib.suppress(RuntimeError):
-                gui.mainFrame.sysTrayIcon.toolsMenu.Remove(self.voiceManagerMenuItem.Id)
+            mainFrame = getattr(gui, "mainFrame", None)
+            sysTrayIcon = getattr(mainFrame, "sysTrayIcon", None) if mainFrame is not None else None
+            toolsMenu = getattr(sysTrayIcon, "toolsMenu", None) if sysTrayIcon is not None else None
+            getId = getattr(self.voiceManagerMenuItem, "GetId", None)
+            menuItemId = getId() if callable(getId) else getattr(self.voiceManagerMenuItem, "Id", None)
+            if sysTrayIcon is not None:
+                with contextlib.suppress(RuntimeError, AttributeError, TypeError):
+                    sysTrayIcon.Unbind(wx.EVT_MENU, source=self.voiceManagerMenuItem)
+            if menuItemId is not None and toolsMenu is not None:
+                with contextlib.suppress(RuntimeError, AttributeError, TypeError):
+                    findItem = getattr(toolsMenu, "FindItemById", None)
+                    if not callable(findItem) or findItem(menuItemId) is not None:
+                        destroyItem = getattr(toolsMenu, "DestroyItem", None)
+                        if callable(destroyItem):
+                            destroyItem(self.voiceManagerMenuItem)
+                        else:
+                            toolsMenu.Remove(menuItemId)
+            self.voiceManagerMenuItem = None
         _unpatch_synth_selection()
         _unpatch_read_only_text_setting()
         _unpatch_voice_dictionary_dialog()
         _unpatch_google_tts_voice_dictionary_loading()
         _unregister_auto_language_speech_filter()
         _unpatch_auto_language_voice_dictionary()
-        super().terminate(*args, **kwargs)
+        _call_compat(super().terminate, *args, **kwargs)
 
-    def on_open_voice_manager(self, evt: Any, *args: Any, **kwargs: Any) -> None:
+    def on_open_voice_manager(self, evt: Any = None, *args: Any, **kwargs: Any) -> None:
         _open_voice_manager()
 
-    def script_openVoiceManager(self, gesture: Any, *args: Any, **kwargs: Any) -> None:
+    def script_openVoiceManager(self, gesture: Any = None, *args: Any, **kwargs: Any) -> None:
         _open_voice_manager()
 
     script_openVoiceManager.__doc__ = _("Opens the Google TTS Voice Manager.")
 
-    def script_openSettings(self, gesture: Any, *args: Any, **kwargs: Any) -> None:
+    def script_openSettings(self, gesture: Any = None, *args: Any, **kwargs: Any) -> None:
         _open_google_tts_settings()
 
     script_openSettings.__doc__ = _("Opens the Google TTS For NVDA settings.")

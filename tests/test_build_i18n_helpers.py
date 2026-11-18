@@ -6,13 +6,36 @@ string formatting utilities, and manifest value extraction.
 
 from __future__ import annotations
 
+import gettext
 import html
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 import build_i18n
+from tests.test_support import (
+    interactive_options_for,
+    patched_i18n_cli,
+    temporary_doc_tree,
+    temporary_manifest_file,
+    temporary_po_file,
+)
+
+
+def _write_po(tmpdir: Path, content: str) -> Path:
+    po_path = tmpdir / "test.po"
+    po_path.write_text(content, encoding="utf-8")
+    return po_path
+
+
+def _html_to_markdown(html_input: str) -> str:
+    conv = build_i18n._DocHtmlToMarkdown()
+    conv.feed(html_input)
+    conv.close()
+    return conv.get_markdown()
+
 
 # ---------------------------------------------------------------------------
 # _parse_po
@@ -22,24 +45,19 @@ import build_i18n
 class ParsePoTests(unittest.TestCase):
     """Verify PO file parsing handles standard and edge-case files."""
 
-    def _write_po(self, tmpdir: Path, content: str) -> Path:
-        po_path = tmpdir / "test.po"
-        po_path.write_text(content, encoding="utf-8")
-        return po_path
-
     def test_simple_po(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            po_path = self._write_po(
+            po_path = _write_po(
                 Path(td),
                 'msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "Привіт"\n',
             )
             catalog = build_i18n._parse_po(po_path)
             self.assertIn("Hello", catalog)
-            self.assertTrue(catalog["Hello"])
+            self.assertEqual("Привіт", catalog["Hello"])
 
     def test_multiline_msgstr(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            po_path = self._write_po(
+            po_path = _write_po(
                 Path(td),
                 'msgid ""\nmsgstr ""\n\nmsgid "Multi"\nmsgstr ""\n"line1\\n"\n"line2"\n',
             )
@@ -48,7 +66,7 @@ class ParsePoTests(unittest.TestCase):
 
     def test_empty_msgstr_not_included(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            po_path = self._write_po(
+            po_path = _write_po(
                 Path(td),
                 'msgid ""\nmsgstr ""\n\nmsgid "Untranslated"\nmsgstr ""\n',
             )
@@ -57,7 +75,7 @@ class ParsePoTests(unittest.TestCase):
 
     def test_include_untranslated(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            po_path = self._write_po(
+            po_path = _write_po(
                 Path(td),
                 'msgid ""\nmsgstr ""\n\nmsgid "Untranslated"\nmsgstr ""\n',
             )
@@ -66,7 +84,7 @@ class ParsePoTests(unittest.TestCase):
 
     def test_msgctxt_is_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            po_path = self._write_po(
+            po_path = _write_po(
                 Path(td),
                 'msgid ""\nmsgstr ""\n\nmsgctxt "ctx"\nmsgid "Key"\nmsgstr "Val"\n',
             )
@@ -155,6 +173,50 @@ class PoEscapeTests(unittest.TestCase):
         result = build_i18n._po_quoted_lines("")
         self.assertEqual(['""'], result)
 
+    def test_po_escape_control_characters_and_unicode_line_separators(self) -> None:
+        escaped = build_i18n._po_escape("a\x07b\x08c\x0cd\x0be")
+        self.assertEqual(r"a\ab\bc\fd\ve", escaped)
+
+        msg = "Line1\u2028Line2\u2029End"
+        quoted = "\n".join(build_i18n._po_quoted_lines(msg))
+        with temporary_po_file(f'msgid ""\nmsgstr ""\n\nmsgid {quoted}\nmsgstr "Val"\n', "u2028.po") as po_path:
+            catalog = build_i18n._parse_po(po_path)
+            self.assertEqual("Val", catalog[msg])
+
+    def test_po_parser_strict_validation_fuzzy_reset_and_header_comments(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            po_path = Path(td) / "strict.po"
+            po_path.write_text(
+                "# File comment\n"
+                "#, fuzzy\n"
+                'msgid ""\n'
+                'msgstr "Language: vi\\n"\n\n'
+                '#~ msgid "Old"\n'
+                '#~ msgstr "Cũ"\n\n'
+                'msgid"Compact"\n'
+                'msgstr "Gọn"\n',
+                encoding="utf-8",
+            )
+            catalog = build_i18n._parse_po(po_path, include_fuzzy=True)
+            self.assertIn("", catalog)
+            self.assertEqual("Gọn", catalog["Compact"])
+            self.assertEqual(set(), build_i18n._po_fuzzy_msgids(po_path))
+            self.assertEqual(["# File comment"], build_i18n._extract_po_header_comments(po_path))
+
+            no_hdr = Path(td) / "no_header.po"
+            no_hdr.write_text('# First entry comment\nmsgid "First"\nmsgstr "Đầu"\n', encoding="utf-8")
+            self.assertEqual([], build_i18n._extract_po_header_comments(no_hdr))
+
+            bad_po = Path(td) / "bad.po"
+            bad_po.write_text('msgid ""\nmsgstr ""\n\nunknown_directive "x"\n', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                build_i18n._iter_po_entries(bad_po)
+
+            bad_str_po = Path(td) / "bad_str.po"
+            bad_str_po.write_text('msgid ""\nmsgstr ""\n\nmsgid """triple"""\nmsgstr "x"\n', encoding="utf-8")
+            with self.assertRaises(ValueError):
+                build_i18n._iter_po_entries(bad_str_po)
+
 
 # ---------------------------------------------------------------------------
 # _purge_obsolete_po_entries
@@ -167,19 +229,32 @@ class PurgeObsoleteTests(unittest.TestCase):
     def test_removes_obsolete_entries(self) -> None:
         text = (
             '# Header\n\nmsgid ""\nmsgstr "Language: uk\\n"\n\n'
+            "#: current.py:1\n"
             'msgid "Current"\nmsgstr "Поточний"\n\n'
-            '#~ msgid "Old"\n#~ msgstr "Старий"\n'
+            '#, python-brace-format\n#~ msgid "Old {name}"\n#~ msgstr "Старий {name}"\n\n'
+            '#~\tmsgid "OldTab"\n#~\tmsgstr "Cũ"\n\n'
+            '#~   msgid "OldSpace"\n#~   msgstr "Cũ 2"\n'
         )
         updated, removed = build_i18n._purge_obsolete_po_entries(text)
-        self.assertEqual(1, removed)
+        self.assertEqual(3, removed)
         self.assertIn('msgid "Current"', updated)
-        self.assertNotIn("Old", updated)
+        self.assertNotIn("Old {name}", updated)
+        self.assertNotIn("OldTab", updated)
+        self.assertNotIn("OldSpace", updated)
 
     def test_no_obsolete(self) -> None:
         text = 'msgid ""\nmsgstr ""\n\nmsgid "Key"\nmsgstr "Val"\n'
         updated, removed = build_i18n._purge_obsolete_po_entries(text)
         self.assertEqual(0, removed)
         self.assertIn('msgid "Key"', updated)
+
+    def test_purge_obsolete_preserves_unicode_line_separator_entries(self) -> None:
+        text = (
+            'msgid ""\nmsgstr ""\n\nmsgid "Line\u2028Break"\nmsgstr "Val\u2028Out"\n\n#~ msgid "Old"\n#~ msgstr "Cũ"\n'
+        )
+        updated, removed = build_i18n._purge_obsolete_po_entries(text)
+        self.assertEqual(1, removed)
+        self.assertIn("Line\u2028Break", updated)
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +271,19 @@ class ManifestValuesTests(unittest.TestCase):
         self.assertIn("description", values)
         self.assertTrue(values["summary"])
         self.assertTrue(values["description"])
+
+    def test_manifest_values_unescapes_single_and_escaped_triple_quotes(self) -> None:
+        with temporary_manifest_file(
+            build_i18n,
+            'summary = "Google \\"TTS\\"\\nLine\\\\Path"\n'
+            'description = """Multi \\"\\"\\"quoted\\"\\"\\" block"""\n'
+            "changelog = \n"
+            'other = """Not changelog"""\n',
+        ):
+            values = build_i18n._manifest_values()
+        self.assertEqual('Google "TTS"\nLine\\Path', values["summary"])
+        self.assertEqual('Multi """quoted""" block', values["description"])
+        self.assertNotIn("changelog", values)
 
 
 # ---------------------------------------------------------------------------
@@ -339,11 +427,6 @@ class FormatInterpolationTests(unittest.TestCase):
 class FuzzyPoTests(unittest.TestCase):
     """Verify handling of fuzzy (#, fuzzy) translation entries."""
 
-    def _write_po(self, tmpdir: Path, content: str) -> Path:
-        po_path = tmpdir / "test.po"
-        po_path.write_text(content, encoding="utf-8")
-        return po_path
-
     def test_fuzzy_excluded_when_flag_false(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             content = (
@@ -351,7 +434,7 @@ class FuzzyPoTests(unittest.TestCase):
                 'msgid "Accepted"\nmsgstr "Прийнято"\n\n'
                 '#, fuzzy\nmsgid "Draft"\nmsgstr "Чернетка"\n'
             )
-            po_path = self._write_po(Path(td), content)
+            po_path = _write_po(Path(td), content)
             catalog = build_i18n._parse_po(po_path, include_fuzzy=False)
             self.assertIn("Accepted", catalog)
             self.assertNotIn("Draft", catalog)
@@ -359,7 +442,7 @@ class FuzzyPoTests(unittest.TestCase):
     def test_fuzzy_included_when_flag_true(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             content = 'msgid ""\nmsgstr ""\n\n#, fuzzy\nmsgid "Draft"\nmsgstr "Чернетка"\n'
-            po_path = self._write_po(Path(td), content)
+            po_path = _write_po(Path(td), content)
             catalog = build_i18n._parse_po(po_path, include_fuzzy=True)
             self.assertIn("Draft", catalog)
             self.assertEqual("Чернетка", catalog["Draft"])
@@ -371,7 +454,7 @@ class FuzzyPoTests(unittest.TestCase):
                 'msgid "Normal"\nmsgstr "Звичайний"\n\n'
                 '#, fuzzy, python-format\nmsgid "Fuzzy %s"\nmsgstr "Нечіткий %s"\n'
             )
-            po_path = self._write_po(Path(td), content)
+            po_path = _write_po(Path(td), content)
             fuzzy_ids = build_i18n._po_fuzzy_msgids(po_path)
             self.assertEqual({"Fuzzy %s"}, fuzzy_ids)
 
@@ -398,6 +481,9 @@ class DocumentationAndRtlTests(unittest.TestCase):
             "he-IL",
             "ckb",
             "ckb-IQ",
+            "ps",
+            "sd",
+            "sd_PK",
             "ug",
             "yi",
         ):
@@ -406,36 +492,20 @@ class DocumentationAndRtlTests(unittest.TestCase):
             self.assertFalse(build_i18n._is_rtl_language(code), f"Expected LTR for {code}")
 
     def test_check_doc_language_rtl_check_only_vs_build(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            doc_dir = root / "doc" / "ar"
-            doc_dir.mkdir(parents=True)
-            po_file = doc_dir / "readme.po"
-            po_file.write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "مرحبا"\n',
-                encoding="utf-8",
-            )
-            # Stale html without dir="rtl"
-            html_file = doc_dir / "readme.html"
-            html_file.write_text(
-                "<html><head><title>Old</title></head><body><p>Old</p></body></html>", encoding="utf-8"
-            )
-            en_html = root / "doc" / "en" / "readme.html"
-            en_html.parent.mkdir(parents=True)
-            en_html.write_text("<p>Hello</p>", encoding="utf-8")
+        with temporary_doc_tree(
+            build_i18n,
+            en_html="<p>Hello</p>",
+            lang="ar",
+            po_text='msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "مرحبا"\n',
+            html_text="<html><head><title>Old</title></head><body><p>Old</p></body></html>",
+        ):
+            # When check_only=True, reports error about stale HTML
+            errors_check = build_i18n._check_doc_language("ar", check_only=True)
+            self.assertTrue(any('missing dir="rtl"' in e for e in errors_check))
 
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_html),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-            ):
-                # When check_only=True, reports error about stale HTML
-                errors_check = build_i18n._check_doc_language("ar", check_only=True)
-                self.assertTrue(any('missing dir="rtl"' in e for e in errors_check))
-
-                # When check_only=False (build mode), stale HTML is ignored because po_file exists and will overwrite it
-                errors_build = build_i18n._check_doc_language("ar", check_only=False)
-                self.assertFalse(any('missing dir="rtl"' in e for e in errors_build))
+            # When check_only=False (build mode), stale HTML is ignored because po_file exists and will overwrite it
+            errors_build = build_i18n._check_doc_language("ar", check_only=False)
+            self.assertFalse(any('missing dir="rtl"' in e for e in errors_build))
 
     def test_build_doc_from_po_handles_malformed_po_gracefully(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -455,61 +525,36 @@ class DocumentationAndRtlTests(unittest.TestCase):
                 self.assertIn("could not parse", msg)
 
     def test_build_doc_for_language_creates_html_with_rtl(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            doc_root = Path(td)
-            en_doc = doc_root / "en"
-            en_doc.mkdir(parents=True)
-            (en_doc / "readme.html").write_text(
-                '<!DOCTYPE html><html lang="en"><head><title>Guide</title></head><body><p>Content</p></body></html>',
-                encoding="utf-8",
-            )
-            ar_doc = doc_root / "ar"
-            ar_doc.mkdir(parents=True)
-            (ar_doc / "readme.po").write_text(
+        with temporary_doc_tree(
+            build_i18n,
+            en_html='<!DOCTYPE html><html lang="en"><head><title>Guide</title></head><body><p>Content</p></body></html>',
+            lang="ar",
+            po_text=(
                 'msgid ""\nmsgstr ""\n\nmsgid "Guide"\nmsgstr "دليل المستخدم"\n\n'
-                'msgid "Content"\nmsgstr "محتوى التجربة."\n',
-                encoding="utf-8",
-            )
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", doc_root),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_doc / "readme.html"),
-                mock.patch.object(build_i18n, "ADDON_DIR", doc_root),
-            ):
-                success, msg = build_i18n._build_doc_for_language("ar")
-                self.assertTrue(success)
-                self.assertIn("Generated", msg)
-                html_file = ar_doc / "readme.html"
-                self.assertTrue(html_file.is_file())
-                content = html_file.read_text(encoding="utf-8")
-                self.assertIn('dir="rtl"', content)
-                self.assertIn('lang="ar"', content)
-                self.assertIn("<title>دليل المستخدم</title>", content)
+                'msgid "Content"\nmsgstr "محتوى التجربة."\n'
+            ),
+        ) as env:
+            success, msg = build_i18n._build_doc_for_language("ar")
+            self.assertTrue(success)
+            self.assertIn("Generated", msg)
+            self.assertTrue(env.html_file.is_file())
+            content = env.html_file.read_text(encoding="utf-8")
+            self.assertIn('dir="rtl"', content)
+            self.assertIn('lang="ar"', content)
+            self.assertIn("<title>دليل المستخدم</title>", content)
 
     def test_build_doc_for_language_cleans_stale_mo_files(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            doc_root = Path(td)
-            en_doc = doc_root / "en"
-            en_doc.mkdir(parents=True)
-            (en_doc / "readme.html").write_text(
-                '<!DOCTYPE html><html lang="en"><head><title>Title</title></head><body><p>Text</p></body></html>',
-                encoding="utf-8",
-            )
-            vi_doc = doc_root / "vi"
-            vi_doc.mkdir(parents=True)
-            stray_mo = vi_doc / "readme.mo"
+        with temporary_doc_tree(
+            build_i18n,
+            en_html='<!DOCTYPE html><html lang="en"><head><title>Title</title></head><body><p>Text</p></body></html>',
+            lang="vi",
+            po_text='msgid ""\nmsgstr ""\n\nmsgid "Title"\nmsgstr "Tiêu đề"\n',
+        ) as env:
+            stray_mo = env.lang_dir / "readme.mo"
             stray_mo.write_bytes(b"\xde\x12\x04\x95")
-            (vi_doc / "readme.po").write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "Title"\nmsgstr "Tiêu đề"\n',
-                encoding="utf-8",
-            )
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", doc_root),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_doc / "readme.html"),
-                mock.patch.object(build_i18n, "ADDON_DIR", doc_root),
-            ):
-                success, _ = build_i18n._build_doc_for_language("vi")
-                self.assertTrue(success)
-                self.assertFalse(stray_mo.exists())
+            success, _ = build_i18n._build_doc_for_language("vi")
+            self.assertTrue(success)
+            self.assertFalse(stray_mo.exists())
 
     def test_doc_html_extractor_and_rebuilder_roundtrip(self) -> None:
         sample_html = (
@@ -818,21 +863,39 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
             )
             self.assertEqual("", catalog.get("Added middle paragraph."))
 
-    def test_write_translated_manifest_falls_back_on_empty(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            manifest_source = root / "manifest.ini"
-            manifest_source.write_text(
-                'summary = "English summary"\ndescription = """English desc"""\n', encoding="utf-8"
-            )
-            lang_dir = root / "vi"
+    def test_write_translated_manifest_falls_back_on_empty_or_whitespace(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as td,
+            temporary_manifest_file(
+                build_i18n,
+                'summary = "English summary"\ndescription = """English desc"""\nchangelog = """English changes"""\n',
+            ),
+        ):
+            lang_dir = Path(td) / "vi"
             lang_dir.mkdir(parents=True)
-            with mock.patch.object(build_i18n, "MANIFEST_SOURCE", manifest_source):
-                # Pass catalog where summary is empty string
-                build_i18n._write_translated_manifest(lang_dir, {"English summary": "", "English desc": "Mô tả"})
-                result = (lang_dir / "manifest.ini").read_text(encoding="utf-8")
-                self.assertIn('summary = "English summary"', result)
-                self.assertIn('description = """Mô tả"""', result)
+            # Empty summary falls back while valid description translates
+            build_i18n._write_translated_manifest(
+                lang_dir,
+                {"English summary": "", "English desc": "Mô tả", "English changes": "Thay đổi"},
+            )
+            result = (lang_dir / "manifest.ini").read_text(encoding="utf-8")
+            self.assertIn('summary = "English summary"', result)
+            self.assertIn('description = """Mô tả"""', result)
+            self.assertIn('changelog = """Thay đổi"""', result)
+
+            # Whitespace-only values also fall back to English source strings
+            build_i18n._write_translated_manifest(
+                lang_dir,
+                {
+                    "English summary": "   \t  ",
+                    "English desc": "\n  \n",
+                    "English changes": "  ",
+                },
+            )
+            result_ws = (lang_dir / "manifest.ini").read_text(encoding="utf-8")
+            self.assertIn('summary = "English summary"', result_ws)
+            self.assertIn('description = """English desc"""', result_ws)
+            self.assertIn('changelog = """English changes"""', result_ws)
 
     def test_inline_style_attribute_detected(self) -> None:
         msgid = "<b>Bold</b>"
@@ -893,65 +956,30 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
                 self.assertTrue((root / "doc" / "fr").is_dir())
 
     def test_check_catalog_detects_html_issues_in_ui(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            lang_dir = root / "vi"
-            lang_dir.mkdir(parents=True)
-            cat = {
-                "Hello <kbd>Ctrl+C</kbd>": "Xin chào <kbd>Ctrl+C",  # unclosed kbd
-            }
-            errors = build_i18n._check_catalog(
-                lang_dir,
-                cat,
-                checks={build_i18n.CHECK_PLACEHOLDERS},
-            )
-            self.assertTrue(any("HTML tag issue" in e for e in errors))
+        cat = {"Hello <kbd>Ctrl+C</kbd>": "Xin chào <kbd>Ctrl+C"}  # unclosed kbd
+        errors = build_i18n._check_catalog(Path("vi"), cat, checks={build_i18n.CHECK_PLACEHOLDERS})
+        self.assertTrue(any("HTML tag issue" in e for e in errors))
 
     def test_check_doc_language_detects_placeholders_and_missing_source(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            doc_dir = root / "doc" / "vi"
-            doc_dir.mkdir(parents=True)
-            po_file = doc_dir / "readme.po"
-            po_file.write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "Version %s"\nmsgstr "Phiên bản"\n',
-                encoding="utf-8",
-            )
-            en_html = root / "doc" / "en" / "readme.html"
-            en_html.parent.mkdir(parents=True)
-            en_html.write_text("<p>Version %s</p>", encoding="utf-8")
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_html),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-            ):
-                errors = build_i18n._check_doc_language("vi")
-                self.assertTrue(any("placeholder mismatch in readme.po" in e for e in errors))
+        with temporary_doc_tree(
+            build_i18n,
+            en_html="<p>Version %s</p>",
+            lang="vi",
+            po_text='msgid ""\nmsgstr ""\n\nmsgid "Version %s"\nmsgstr "Phiên bản"\n',
+        ) as env:
+            errors = build_i18n._check_doc_language("vi")
+            self.assertTrue(any("placeholder mismatch in readme.po" in e for e in errors))
 
             # Missing en source file
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", root / "nonexistent" / "readme.html"),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-            ):
+            with mock.patch.object(build_i18n, "DOC_EN_PATH", env.root / "nonexistent" / "readme.html"):
                 errors = build_i18n._check_doc_language("vi")
                 self.assertTrue(any("English source document missing" in e for e in errors))
 
     def test_check_catalog_detects_injected_html_tags_in_plain_msgid(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            lang_dir = root / "vi"
-            lang_dir.mkdir(parents=True)
-            cat = {
-                "Plain English without tags": "Bản dịch có <script>alert(1)</script>",
-            }
-            errors = build_i18n._check_catalog(
-                lang_dir,
-                cat,
-                checks={build_i18n.CHECK_PLACEHOLDERS},
-            )
-            self.assertTrue(any("HTML tag issue" in e for e in errors))
-            self.assertTrue(any("disallowed HTML tag: <script>" in e for e in errors))
+        cat = {"Plain English without tags": "Bản dịch có <script>alert(1)</script>"}
+        errors = build_i18n._check_catalog(Path("vi"), cat, checks={build_i18n.CHECK_PLACEHOLDERS})
+        self.assertTrue(any("HTML tag issue" in e for e in errors))
+        self.assertTrue(any("disallowed HTML tag: <script>" in e for e in errors))
 
     def test_language_dirs_deduplicates_repeated_locales(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -985,67 +1013,48 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
         self.assertIn("Hết", output)
 
     def test_check_doc_language_separates_docs_and_placeholders(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            doc_dir = root / "doc" / "vi"
-            doc_dir.mkdir(parents=True)
-            po_file = doc_dir / "readme.po"
+        with temporary_doc_tree(
+            build_i18n,
+            en_html="<p>Hello</p>",
+            lang="vi",
             # Valid translated string but with bad HTML tag
-            po_file.write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "Xin chào <script>alert(1)</script>"\n',
-                encoding="utf-8",
-            )
-            en_html = root / "doc" / "en" / "readme.html"
-            en_html.parent.mkdir(parents=True)
-            en_html.write_text("<p>Hello</p>", encoding="utf-8")
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_html),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-            ):
-                # When checking only CHECK_DOCS (translation completeness), placeholder/tag check is not run
-                errors_docs_only = build_i18n._check_doc_language("vi", checks={build_i18n.CHECK_DOCS})
-                self.assertEqual(errors_docs_only, [])
+            po_text='msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "Xin chào <script>alert(1)</script>"\n',
+        ):
+            # When checking only CHECK_DOCS (translation completeness), placeholder/tag check is not run
+            errors_docs_only = build_i18n._check_doc_language("vi", checks={build_i18n.CHECK_DOCS})
+            self.assertEqual(errors_docs_only, [])
 
-                # When checking CHECK_PLACEHOLDERS, the bad HTML tag is detected
-                errors_placeholders = build_i18n._check_doc_language("vi", checks={build_i18n.CHECK_PLACEHOLDERS})
-                self.assertTrue(any("HTML tag issue" in e for e in errors_placeholders))
+            # When checking CHECK_PLACEHOLDERS, the bad HTML tag is detected
+            errors_placeholders = build_i18n._check_doc_language("vi", checks={build_i18n.CHECK_PLACEHOLDERS})
+            self.assertTrue(any("HTML tag issue" in e for e in errors_placeholders))
 
     def test_check_catalog_formats_long_msgid_with_preview(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            lang_dir = root / "vi"
-            lang_dir.mkdir(parents=True)
-            long_msgid = "Start of message " + ("very long text " * 20) + "{code} end"
-            bad_msgstr = "Bắt đầu thông điệp " + ("rất dài " * 20) + "không có biến"
-            cat = {long_msgid: bad_msgstr}
-            errors = build_i18n._check_catalog(
-                lang_dir,
-                cat,
-                checks={build_i18n.CHECK_PLACEHOLDERS},
-            )
-            self.assertTrue(any("placeholder mismatch for 'Start of message" in e for e in errors))
-            self.assertTrue(any("..." in e for e in errors))
+        long_msgid = "Start of message " + ("very long text " * 20) + "{code} end"
+        bad_msgstr = "Bắt đầu thông điệp " + ("rất dài " * 20) + "không có biến"
+        errors = build_i18n._check_catalog(
+            Path("vi"),
+            {long_msgid: bad_msgstr},
+            checks={build_i18n.CHECK_PLACEHOLDERS},
+        )
+        self.assertTrue(any("placeholder mismatch for 'Start of message" in e for e in errors))
+        self.assertTrue(any("..." in e for e in errors))
 
     def test_describe_checks_empty_returns_none(self) -> None:
         self.assertEqual(build_i18n._describe_checks(set()), "none")
         self.assertEqual(build_i18n._describe_doc_checks(set()), "none")
 
     def test_obsolete_and_context_do_not_leak_fuzzy_in_parse_po(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            po_file = Path(td) / "test.po"
-            po_file.write_text(
-                'msgid ""\nmsgstr ""\n\n'
-                'msgid "prev"\nmsgstr "trước"\n\n'
-                "#, fuzzy\n"
-                '#~ msgid "obsolete"\n'
-                '#~ msgstr "cũ"\n\n'
-                'msgctxt "button"\n'
-                '"label"\n'
-                'msgid "valid"\n'
-                'msgstr "hợp lệ"\n',
-                encoding="utf-8",
-            )
+        with temporary_po_file(
+            'msgid ""\nmsgstr ""\n\n'
+            'msgid "prev"\nmsgstr "trước"\n\n'
+            "#, fuzzy\n"
+            '#~ msgid "obsolete"\n'
+            '#~ msgstr "cũ"\n\n'
+            'msgctxt "button"\n'
+            '"label"\n'
+            'msgid "valid"\n'
+            'msgstr "hợp lệ"\n'
+        ) as po_file:
             # Fuzzy should NOT include 'valid' because fuzzy belonged to the obsolete entry
             non_fuzzy_catalog = build_i18n._parse_po(po_file, include_fuzzy=False)
             self.assertEqual(non_fuzzy_catalog.get("prev"), "trước")
@@ -1072,26 +1081,25 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
         self.assertNotIn("\n", quoted)
         self.assertNotIn("\r", quoted)
 
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            lang_dir = root / "vi"
-            lang_dir.mkdir(parents=True)
-            manifest_file = root / "manifest.ini"
-            manifest_file.write_text(
+        with (
+            tempfile.TemporaryDirectory() as td,
+            temporary_manifest_file(
+                build_i18n,
                 'name = googleTts\nsummary = "Add-on Summary"\ndescription = """Add-on Description"""\n',
-                encoding="utf-8",
-            )
-            with mock.patch.object(build_i18n, "MANIFEST_SOURCE", manifest_file):
-                # Translation description ends with quote "
-                cat = {
-                    "Add-on Summary": 'Mô tả "ngắn"',
-                    "Add-on Description": 'Chi tiết với "ngoặc kép"',
-                }
-                build_i18n._write_translated_manifest(lang_dir, cat)
-                written = (lang_dir / "manifest.ini").read_text(encoding="utf-8")
-                self.assertIn('summary = "Mô tả \\"ngắn\\""', written)
-                # Must not end with 4 quotes """"
-                self.assertNotIn('""""', written)
+            ),
+        ):
+            lang_dir = Path(td) / "vi"
+            lang_dir.mkdir(parents=True)
+            # Translation description ends with quote "
+            cat = {
+                "Add-on Summary": 'Mô tả "ngắn"',
+                "Add-on Description": 'Chi tiết với "ngoặc kép"',
+            }
+            build_i18n._write_translated_manifest(lang_dir, cat)
+            written = (lang_dir / "manifest.ini").read_text(encoding="utf-8")
+            self.assertIn('summary = "Mô tả \\"ngắn\\""', written)
+            # Must not end with 4 quotes """"
+            self.assertNotIn('""""', written)
 
     def test_language_dirs_rejects_en_and_filters_addon_languages(self) -> None:
         dirs, errors = build_i18n._language_dirs(["en"])
@@ -1268,40 +1276,37 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
             self.assertIsInstance(cat_errors, list)
 
     def test_manifest_values_single_quotes(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            manifest = Path(td) / "manifest.ini"
-            manifest.write_text(
-                "summary = 'Single Quoted Summary'\n"
-                "description = '''Triple single quoted\ndescription.'''\n"
-                "changelog = '''Single changelog.'''\n",
-                encoding="utf-8",
-            )
-            with mock.patch.object(build_i18n, "MANIFEST_SOURCE", manifest):
-                values = build_i18n._manifest_values()
-                self.assertEqual("Single Quoted Summary", values.get("summary"))
-                self.assertEqual("Triple single quoted\ndescription.", values.get("description"))
-                self.assertEqual("Single changelog.", values.get("changelog"))
+        with temporary_manifest_file(
+            build_i18n,
+            "summary = 'Single Quoted Summary'\n"
+            "description = '''Triple single quoted\ndescription.'''\n"
+            "changelog = '''Single changelog.'''\n",
+        ):
+            values = build_i18n._manifest_values()
+        self.assertEqual("Single Quoted Summary", values.get("summary"))
+        self.assertEqual("Triple single quoted\ndescription.", values.get("description"))
+        self.assertEqual("Single changelog.", values.get("changelog"))
 
     def test_write_translated_manifest_creates_directory_and_normalizes_newlines(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            manifest_src = Path(td) / "source_manifest.ini"
-            manifest_src.write_text(
+        with (
+            tempfile.TemporaryDirectory() as td,
+            temporary_manifest_file(
+                build_i18n,
                 'summary = "Summary"\ndescription = """Desc"""\nchangelog = """Change"""\n',
-                encoding="utf-8",
-            )
+            ),
+        ):
             non_existent_dir = Path(td) / "new_lang"
             catalog = {
                 "Summary": "Resumen",
                 "Desc": "Línea 1\r\nLínea 2",
                 "Change": "Notas\r\nVersión 1.0",
             }
-            with mock.patch.object(build_i18n, "MANIFEST_SOURCE", manifest_src):
-                build_i18n._write_translated_manifest(non_existent_dir, catalog)
-                self.assertTrue(non_existent_dir.is_dir())
-                written = (non_existent_dir / "manifest.ini").read_text(encoding="utf-8")
-                self.assertIn('summary = "Resumen"', written)
-                self.assertNotIn("\r\n", written)
-                self.assertIn("Línea 1\nLínea 2", written)
+            build_i18n._write_translated_manifest(non_existent_dir, catalog)
+            self.assertTrue(non_existent_dir.is_dir())
+            written = (non_existent_dir / "manifest.ini").read_text(encoding="utf-8")
+            self.assertIn('summary = "Resumen"', written)
+            self.assertNotIn("\r\n", written)
+            self.assertIn("Línea 1\nLínea 2", written)
 
     def test_comma_separated_language_requests(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1430,44 +1435,35 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
             self.assertTrue(any("could not create documentation folder" in e for e in doc_errs))
 
     def test_check_doc_language_flags_missing_en_doc(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", root / "doc" / "en" / "readme.html"),
-            ):
-                errs = build_i18n._check_doc_language("en")
-                self.assertTrue(any("missing English source document" in e for e in errs))
+        with temporary_doc_tree(build_i18n, patch_addon_dir=False):
+            errs = build_i18n._check_doc_language("en")
+            self.assertTrue(any("missing English source document" in e for e in errs))
 
     def test_check_doc_and_files_rtl_read_oserror(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            ar_dir = root / "locale" / "ar"
-            (ar_dir / "LC_MESSAGES").mkdir(parents=True)
-            (ar_dir / "LC_MESSAGES" / "nvda.po").write_text('msgid ""\nmsgstr ""\n', encoding="utf-8")
-            (ar_dir / "manifest.ini").write_text("summary = Test\n", encoding="utf-8")
-            doc_ar = root / "doc" / "ar"
-            doc_ar.mkdir(parents=True)
-            (doc_ar / "readme.html").write_text("placeholder", encoding="utf-8")
+        with (
+            temporary_doc_tree(
+                build_i18n,
+                lang="ar",
+                html_text="placeholder",
+                locale_po_text='msgid ""\nmsgstr ""\n',
+                manifest_text="summary = Test\n",
+                patch_en_path=False,
+            ) as env,
+            mock.patch("pathlib.Path.read_text", side_effect=OSError("File locked")),
+        ):
+            doc_errs = build_i18n._check_doc_language(
+                "ar",
+                checks={build_i18n.CHECK_DOCS},
+                check_only=True,
+            )
+            self.assertTrue(any("could not read" in e for e in doc_errs))
 
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-                mock.patch("pathlib.Path.read_text", side_effect=OSError("File locked")),
-            ):
-                doc_errs = build_i18n._check_doc_language(
-                    "ar",
-                    checks={build_i18n.CHECK_DOCS},
-                    check_only=True,
-                )
-                self.assertTrue(any("could not read" in e for e in doc_errs))
-
-                file_errs = build_i18n._check_language_files(
-                    ar_dir,
-                    checks={build_i18n.CHECK_DOCS},
-                    check_only=True,
-                )
-                self.assertTrue(any("could not read" in e for e in file_errs))
+            file_errs = build_i18n._check_language_files(
+                env.locale_lang_dir,
+                checks={build_i18n.CHECK_DOCS},
+                check_only=True,
+            )
+            self.assertTrue(any("could not read" in e for e in file_errs))
 
     def test_atomic_write_text_and_bytes_creates_target_and_parents(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1496,16 +1492,15 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
             self.assertEqual([], tmp_files)
 
     def test_compile_mo_and_manifest_atomic_writes(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            lang_dir = root / "vi"
+        with (
+            tempfile.TemporaryDirectory() as td,
+            temporary_manifest_file(build_i18n, 'summary = "Test"\ndescription = """Desc"""\n'),
+        ):
+            lang_dir = Path(td) / "vi"
             mo_path = lang_dir / "LC_MESSAGES" / "nvda.mo"
             catalog = {"Hello": "Xin chào"}
-
-            with mock.patch.object(build_i18n, "MANIFEST_SOURCE", root / "manifest.ini"):
-                (root / "manifest.ini").write_text('summary = "Test"\ndescription = """Desc"""\n', encoding="utf-8")
-                build_i18n._compile_mo(catalog, mo_path)
-                build_i18n._write_translated_manifest(lang_dir, catalog)
+            build_i18n._compile_mo(catalog, mo_path)
+            build_i18n._write_translated_manifest(lang_dir, catalog)
 
             self.assertTrue(mo_path.is_file())
             self.assertGreater(mo_path.stat().st_size, 28)
@@ -1516,32 +1511,30 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
 
     def test_main_build_docs_catches_write_doc_pot_error(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--build-docs", "-l", "vi"]),
+            patched_i18n_cli(build_i18n, ["--build-docs", "-l", "vi"]) as cli,
             mock.patch.object(build_i18n, "DOC_EN_PATH", Path("non_existent/readme.html")),
             mock.patch.object(build_i18n.Path, "is_file", return_value=True),
             mock.patch.object(build_i18n, "_write_doc_pot", side_effect=RuntimeError("Doc POT error")),
-            mock.patch("builtins.print") as print_mock,
         ):
             res = build_i18n.main()
             self.assertEqual(1, res)
-            print_mock.assert_any_call("[ERROR] Doc POT error")
+            cli.print_mock.assert_any_call("[ERROR] Doc POT error")
 
     def test_main_build_ui_catches_write_pot_error(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--build", "-l", "vi"]),
+            patched_i18n_cli(build_i18n, ["--build", "-l", "vi"]) as cli,
             mock.patch.object(build_i18n, "_language_dirs", return_value=([Path("locale/vi")], [])),
             mock.patch.object(build_i18n, "_check_language_files", return_value=[]),
             mock.patch.object(build_i18n, "_check_catalog", return_value=[]),
             mock.patch.object(build_i18n, "_write_pot", side_effect=OSError("Cannot write POT")),
-            mock.patch("builtins.print") as print_mock,
         ):
             res = build_i18n.main()
             self.assertEqual(1, res)
-            print_mock.assert_any_call("[ERROR] Cannot write POT")
+            cli.print_mock.assert_any_call("[ERROR] Cannot write POT")
 
     def test_main_build_ui_catches_compile_mo_error(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--build", "-l", "vi"]),
+            patched_i18n_cli(build_i18n, ["--build", "-l", "vi"]) as cli,
             mock.patch.object(build_i18n, "_language_dirs", return_value=([Path("locale/vi")], [])),
             mock.patch.object(build_i18n, "_check_language_files", return_value=[]),
             mock.patch.object(build_i18n, "_check_catalog", return_value=[]),
@@ -1549,66 +1542,55 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
             mock.patch.object(build_i18n, "_parse_po", return_value={"test": "dịch"}),
             mock.patch.object(build_i18n, "_po_fuzzy_msgids", return_value=set()),
             mock.patch.object(build_i18n, "_compile_mo", side_effect=OSError("Permission denied")),
-            mock.patch("builtins.print") as print_mock,
         ):
             res = build_i18n.main()
             self.assertEqual(1, res)
-            print_mock.assert_any_call("[ERROR] vi: failed to write generated files: Permission denied")
+            cli.print_mock.assert_any_call("[ERROR] vi: failed to write generated files: Permission denied")
 
     def test_check_doc_language_en_detects_html_issues(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            doc_en = root / "doc" / "en"
-            doc_en.mkdir(parents=True)
-            bad_html = doc_en / "readme.html"
-            bad_html.write_text("<p>Hello <script>alert(1)</script></p>", encoding="utf-8")
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", bad_html),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-            ):
-                errs = build_i18n._check_doc_language("en", checks={build_i18n.CHECK_PLACEHOLDERS})
-                self.assertTrue(any("disallowed HTML tag: <script>" in e for e in errs))
+        with temporary_doc_tree(
+            build_i18n,
+            en_html="<p>Hello <script>alert(1)</script></p>",
+        ):
+            errs = build_i18n._check_doc_language("en", checks={build_i18n.CHECK_PLACEHOLDERS})
+            self.assertTrue(any("disallowed HTML tag: <script>" in e for e in errs))
 
     def test_main_check_docs_with_en(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--check-docs", "-l", "en"]),
+            patched_i18n_cli(build_i18n, ["--check-docs", "-l", "en"]) as cli,
             mock.patch.object(build_i18n, "DOC_EN_PATH", Path("doc/en/readme.html")),
             mock.patch.object(build_i18n.Path, "is_file", return_value=True),
             mock.patch.object(build_i18n, "_check_doc_language", return_value=[]) as check_mock,
-            mock.patch("builtins.print") as print_mock,
         ):
             res = build_i18n.main()
             self.assertEqual(0, res)
             check_mock.assert_called_once_with("en", supported_languages=mock.ANY, checks=mock.ANY, check_only=True)
-            print_mock.assert_any_call("  Passed: English source document")
+            cli.print_mock.assert_any_call("  Passed: English source document")
 
     def test_main_check_docs_all_includes_en(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--check-docs"]),
+            patched_i18n_cli(build_i18n, ["--check-docs"]) as cli,
             mock.patch.object(build_i18n, "_addon_doc_languages", return_value=["vi"]),
             mock.patch.object(build_i18n, "DOC_EN_PATH", Path("doc/en/readme.html")),
             mock.patch.object(build_i18n.Path, "is_file", return_value=True),
             mock.patch.object(build_i18n, "_check_doc_language", return_value=[]),
-            mock.patch("builtins.print") as print_mock,
         ):
             res = build_i18n.main()
             self.assertEqual(0, res)
-            print_mock.assert_any_call("  Passed: English source document")
+            cli.print_mock.assert_any_call("  Passed: English source document")
 
     def test_main_build_docs_catches_build_error(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--build-docs", "-l", "vi"]),
+            patched_i18n_cli(build_i18n, ["--build-docs", "-l", "vi"]) as cli,
             mock.patch.object(build_i18n, "DOC_EN_PATH", Path("doc/en/readme.html")),
             mock.patch.object(build_i18n.Path, "is_file", return_value=True),
             mock.patch.object(build_i18n, "_write_doc_pot", return_value=build_i18n.DOC_POT_PATH),
             mock.patch.object(build_i18n, "_check_doc_language", return_value=[]),
             mock.patch.object(build_i18n, "_build_doc_for_language", side_effect=OSError("Disk full")),
-            mock.patch("builtins.print") as print_mock,
         ):
             res = build_i18n.main()
             self.assertEqual(1, res)
-            print_mock.assert_any_call("[ERROR] vi: failed to build documentation: Disk full")
+            cli.print_mock.assert_any_call("[ERROR] vi: failed to build documentation: Disk full")
 
     def test_translatable_source_messages_wraps_syntax_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -1624,6 +1606,51 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
                     build_i18n._translatable_source_messages()
                 self.assertIn("Could not parse", str(ctx.exception))
 
+    def test_percent_format_ignores_plus_minus_and_url_percent_encoding(self) -> None:
+        self.assertEqual(
+            [],
+            build_i18n._check_format_interpolations(
+                "Up to 50%+a at https://example.com/a%2F%20b",
+                "Lên đến 50%+a tại https://example.com/a%2F%20b",
+            ),
+        )
+        alerts = build_i18n._check_format_interpolations("100%d items", "items")
+        self.assertTrue(any("unnamed percent interpolations differ" in a for a in alerts))
+
+    def test_void_html_tags_checked_for_missing_or_extra(self) -> None:
+        missing_errs = build_i18n._check_html_tag_interpolations("Line 1<br>Line 2", "Dòng 1 Dòng 2")
+        self.assertTrue(any("missing HTML tag: ['br']" in e for e in missing_errs))
+        extra_errs = build_i18n._check_html_tag_interpolations("Plain text", "Plain<hr>text")
+        self.assertTrue(any("unexpected HTML tag: ['hr']" in e for e in extra_errs))
+        self.assertEqual([], build_i18n._check_html_tag_interpolations("A<br>B", "A<br/>B"))
+
+    def test_extractor_and_rebuilder_void_and_optional_close_tags(self) -> None:
+        html_doc = (
+            "<html><body>"
+            "<p>Word<wbr/>break<p>Next"
+            "<dl><dt>Term<dd>Def</dl>"
+            "<ul><li>Outer<ul><li>Inner</ul>Tail</li></ul>"
+            "</body></html>"
+        )
+        segs = [s for _, s in build_i18n._extract_doc_segments(html_doc)]
+        self.assertEqual(["Word<wbr>break", "Next", "Term", "Def", "Outer", "Inner", "Tail"], segs)
+
+        catalog = {
+            "Word<wbr>break": "Từ<wbr>ngắt",
+            "Next": "Tiếp",
+            "Term": "Thuật ngữ",
+            "Def": "Định nghĩa",
+            "Outer": "Ngoài",
+            "Inner": "Trong",
+            "Tail": "Đuôi",
+        }
+        rebuilder = build_i18n._DocHtmlRebuilder(catalog, target_lang="vi", is_rtl=False)
+        rebuilder.feed(html_doc)
+        rebuilder.close()
+        rebuilt = "".join(rebuilder.output)
+        for translated in catalog.values():
+            self.assertIn(translated, rebuilt)
+
 
 # ---------------------------------------------------------------------------
 # Markdown <-> HTML conversion tests
@@ -1632,24 +1659,16 @@ class CheckHtmlTagInterpolationsTests(unittest.TestCase):
 
 class DocHtmlToMarkdownTests(unittest.TestCase):
     def test_headings_conversion(self) -> None:
-        html_input = "<h1>Title</h1><h2>Section</h2><h3>Sub</h3>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_input)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<h1>Title</h1><h2>Section</h2><h3>Sub</h3>")
         self.assertIn("# Title", md)
         self.assertIn("## Section", md)
         self.assertIn("### Sub", md)
 
     def test_paragraphs_and_inline_formatting(self) -> None:
-        html_input = (
+        md = _html_to_markdown(
             "<p>A paragraph with <strong>bold</strong>, <em>italic</em>, "
             '<code>code</code>, <kbd>Ctrl+S</kbd>, and <a href="https://example.com">link</a>.</p>'
         )
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_input)
-        conv.close()
-        md = conv.get_markdown()
         self.assertIn("**bold**", md)
         self.assertIn("*italic*", md)
         self.assertIn("`code`", md)
@@ -1657,49 +1676,72 @@ class DocHtmlToMarkdownTests(unittest.TestCase):
         self.assertIn("[link](https://example.com)", md)
 
     def test_lists_and_nested_lists(self) -> None:
-        html_input = "<ul><li>Item 1</li><li>Item 2<ul><li>Sub 2.1</li><li>Sub 2.2</li></ul></li></ul>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_input)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<ul><li>Item 1</li><li>Item 2<ul><li>Sub 2.1</li><li>Sub 2.2</li></ul></li></ul>")
         self.assertIn("* Item 1", md)
         self.assertIn("* Item 2", md)
         self.assertIn("  * Sub 2.1", md)
         self.assertIn("  * Sub 2.2", md)
 
     def test_ordered_list(self) -> None:
-        html_input = "<ol><li>First</li><li>Second</li></ol>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_input)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<ol><li>First</li><li>Second</li></ol>")
         self.assertIn("1. First", md)
         self.assertIn("2. Second", md)
 
     def test_blockquote_and_hr(self) -> None:
-        html_input = "<blockquote><p>Quote text</p></blockquote><hr><p>After hr</p>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_input)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<blockquote><p>Quote text</p></blockquote><hr><p>After hr</p>")
         self.assertIn("> Quote text", md)
         self.assertIn("---", md)
         self.assertIn("After hr", md)
 
+    def test_anchor_without_href_table_cell_blocks_and_li_headings(self) -> None:
+        md = _html_to_markdown(
+            '<h1><a id="top"></a>Top Section</h1>'
+            "<table><tr><th>Col</th></tr><tr><td><p>One</p><p>Two</p></td></tr></table>"
+            "<ul><li><h2>Subhead</h2></li></ul>"
+        )
+        self.assertIn("# Top Section", md)
+        self.assertNotIn("[]()", md)
+        self.assertIn("| One Two |", md)
+        self.assertIn("* ## Subhead", md)
+
+    def test_pre_code_br_entities_backticks_and_blank_lines(self) -> None:
+        md = _html_to_markdown(
+            "<pre><code>line1<br>A &rarr; B\n\n\n```nested```</code></pre>"
+            "<p>Inline <code>X &rarr; Y</code> and prose A &rarr; B.</p>"
+        )
+        self.assertIn("````\nline1\nA \u2192 B\n\n\n```nested```\n````", md)
+        self.assertIn("`X \u2192 Y`", md)
+        self.assertIn("A &rarr; B.", md)
+
+    def test_close_flushes_table_with_alignments(self) -> None:
+        md = _html_to_markdown('<table><tr><th align="center">Head</th></tr><tr><td>Val</td></tr>')
+        self.assertIn("| Head |", md)
+        self.assertIn("| :---: |", md)
+        self.assertIn("| Val |", md)
+
+    def test_sanitize_href_no_double_escape_and_nested_emphasis_and_title_entities(self) -> None:
+        self.assertEqual(
+            "https://example.com/?a=1&amp;b=2&amp;copy=3",
+            build_i18n._sanitize_href("https://example.com/?a=1&amp;b=2&copy=3"),
+        )
+        inline = build_i18n._format_inline_markdown("**bold *italic* bold** and __strong _em_ strong__")
+        self.assertIn("<strong>bold <em>italic</em> bold</strong>", inline)
+        self.assertIn("<strong>strong <em>em</em> strong</strong>", inline)
+
+        md_with_code_comment = "```python\n# not title\n```\n\n# Real &copy; Title\n\nBody.\n"
+        self.assertEqual("Real &copy; Title", build_i18n._get_title_from_markdown(md_with_code_comment))
+        doc_html = build_i18n._markdown_to_doc_html(md_with_code_comment, language="en")
+        self.assertIn("<title>Real &copy; Title</title>", doc_html)
+        with mock.patch.object(build_i18n, "_NH3_AVAILABLE", False):
+            fallback_html = build_i18n._generate_doc_html_body("**hello**")
+        self.assertIn("<p><strong>hello</strong></p>", fallback_html)
+
     def test_code_fence(self) -> None:
-        html_input = "<pre><code>def foo():\n    return 42\n</code></pre>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_input)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<pre><code>def foo():\n    return 42\n</code></pre>")
         self.assertIn("```\ndef foo():\n    return 42\n```", md)
 
     def test_entities_preserved(self) -> None:
-        html_input = "<p>Menu &rarr; Settings &copy; 2026</p>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_input)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<p>Menu &rarr; Settings &copy; 2026</p>")
         self.assertIn("&rarr;", md)
         self.assertIn("&copy;", md)
 
@@ -1757,9 +1799,9 @@ class FormatInlineMarkdownTests(unittest.TestCase):
         self.assertIn('&lt;kbd onclick="bad()"&gt;', formatted)
 
     def test_link_sanitization(self) -> None:
-        text = "Good [Link](https://google.com) and bad [XSS](javascript:alert(1))."
+        text = "Good [Link](https://example.org) and bad [XSS](javascript:alert(1))."
         formatted = build_i18n._format_inline_markdown(text)
-        self.assertIn('<a href="https://google.com">Link</a>', formatted)
+        self.assertIn('<a href="https://example.org">Link</a>', formatted)
         self.assertIn('<a href="#">XSS</a>', formatted)
 
 
@@ -1819,10 +1861,7 @@ class ConvertHtmlAndMdFilesTests(unittest.TestCase):
             "</tbody>\n"
             "</table>"
         )
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_input)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown(html_input)
         self.assertIn("| Key | Description |", md)
         self.assertIn("| --- | --- |", md)
         self.assertIn("| <kbd>NVDA+S</kbd> | Synthesizer dialog |", md)
@@ -1836,8 +1875,7 @@ class ConvertHtmlAndMdFilesTests(unittest.TestCase):
 
     def test_roundtrip_english_doc(self) -> None:
         en_html_path = build_i18n.DOC_EN_PATH
-        if not en_html_path.is_file():
-            self.skipTest("English readme.html not available")
+        self.assertTrue(en_html_path.is_file(), f"Missing English documentation file: {en_html_path}")
         with tempfile.TemporaryDirectory() as td:
             temp_dir = Path(td)
             md_path = temp_dir / "readme.md"
@@ -1873,10 +1911,7 @@ class ConvertHtmlAndMdFilesTests(unittest.TestCase):
         self.assertIn("Markdown file not found", msg2)
 
     def test_doc_html_to_markdown_flushes_unclosed_buffer_at_eof(self) -> None:
-        p = build_i18n._DocHtmlToMarkdown()
-        p.feed("<p>Unclosed paragraph")
-        p.close()
-        md = p.get_markdown()
+        md = _html_to_markdown("<p>Unclosed paragraph")
         self.assertIn("Unclosed paragraph", md)
 
     def test_format_inline_markdown_supports_image(self) -> None:
@@ -1899,10 +1934,7 @@ class ConvertHtmlAndMdFilesTests(unittest.TestCase):
             "<tbody><tr><td>1</td><td>2</td><td>3</td></tr></tbody>\n"
             "</table>"
         )
-        converter = build_i18n._DocHtmlToMarkdown()
-        converter.feed(html_input)
-        converter.close()
-        md = converter.get_markdown()
+        md = _html_to_markdown(html_input)
         self.assertIn("| :--- | :---: | ---: |", md)
 
     def test_fallback_markdown_to_html_body_flushes_unclosed_code_block(self) -> None:
@@ -1974,30 +2006,44 @@ class BuildDocForLanguageMarkdownTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("English source document", msg)
 
+    def test_update_doc_po_from_template_skips_stale_html_when_md_fails_and_counts_new(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            doc_en = root / "doc" / "en" / "readme.html"
+            doc_en.parent.mkdir(parents=True)
+            doc_en.write_text("<html><head><title>T</title></head><body><p>Body</p></body></html>", encoding="utf-8")
+            doc_pot = root / "doc" / "readme.pot"
+            vi_dir = root / "doc" / "vi"
+            vi_dir.mkdir(parents=True)
+            (vi_dir / "readme.md").write_text("# Broken\n", encoding="utf-8")
+            (vi_dir / "readme.html").write_text(
+                "<html><head><title>Cũ</title></head><body><p>Thân</p></body></html>",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(build_i18n, "DOC_EN_PATH", doc_en),
+                mock.patch.object(build_i18n, "DOC_POT_PATH", doc_pot),
+                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
+                mock.patch.object(build_i18n, "ADDON_DIR", root),
+                mock.patch.object(build_i18n, "_convert_md_file_to_html", return_value=(False, "md fail")),
+            ):
+                preserved, added, removed = build_i18n._update_doc_po_from_template("vi", msgmerge_path=None)
+            self.assertEqual((0, 2, 0), (preserved, added, removed))
+            catalog = build_i18n._parse_po(vi_dir / "readme.po", include_untranslated=True)
+            self.assertEqual("", catalog.get("T"))
+
 
 class CheckDocLanguageMarkdownTests(unittest.TestCase):
     def test_check_doc_language_recognizes_readme_md(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            en_doc_dir = root / "doc" / "en"
-            en_doc_dir.mkdir(parents=True)
-            en_html = en_doc_dir / "readme.html"
-            en_html.write_text(
-                "<!DOCTYPE html><html><head><title>Title</title></head><body><h1>Title</h1><p>Content</p></body></html>",
-                encoding="utf-8",
-            )
-
-            vi_doc_dir = root / "doc" / "vi"
-            vi_doc_dir.mkdir(parents=True)
-            vi_md = vi_doc_dir / "readme.md"
-            vi_md.write_text("# Tiêu đề\n\nNội dung\n", encoding="utf-8")
-
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_html),
-            ):
-                errors = build_i18n._check_doc_language("vi", check_only=True)
-                self.assertEqual([], errors)
+        with temporary_doc_tree(
+            build_i18n,
+            en_html="<!DOCTYPE html><html><head><title>Title</title></head><body><h1>Title</h1><p>Content</p></body></html>",
+            lang="vi",
+            md_text="# Tiêu đề\n\nNội dung\n",
+            patch_addon_dir=False,
+        ):
+            errors = build_i18n._check_doc_language("vi", check_only=True)
+            self.assertEqual([], errors)
 
     def test_check_language_files_recognizes_readme_md(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -2021,36 +2067,25 @@ class CheckDocLanguageMarkdownTests(unittest.TestCase):
 
 class InteractiveOptionsMarkdownTests(unittest.TestCase):
     def test_interactive_task_7_html_to_md(self) -> None:
-        with (
-            mock.patch.object(build_i18n, "_addon_doc_languages", return_value=["vi"]),
-            mock.patch("builtins.input", side_effect=["7", "1"]),
-            mock.patch("builtins.print"),
-        ):
-            options = build_i18n._interactive_options(build_i18n.DEFAULT_CHECKS)
-            self.assertIsNone(options[0])  # all locales
-            self.assertTrue(options[9])  # html_to_md
-            self.assertFalse(options[10])  # md_to_html
+        options = interactive_options_for(build_i18n, ["7", "1"], doc_languages=["vi"])
+        self.assertIsNone(options[0])  # all locales
+        self.assertTrue(options[9])  # html_to_md
+        self.assertFalse(options[10])  # md_to_html
 
     def test_interactive_task_8_md_to_html(self) -> None:
-        with (
-            mock.patch.object(build_i18n, "_addon_doc_languages", return_value=["vi"]),
-            mock.patch("builtins.input", side_effect=["8", "1"]),
-            mock.patch("builtins.print"),
-        ):
-            options = build_i18n._interactive_options(build_i18n.DEFAULT_CHECKS)
-            self.assertIsNone(options[0])  # all locales
-            self.assertFalse(options[9])  # html_to_md
-            self.assertTrue(options[10])  # md_to_html
+        options = interactive_options_for(build_i18n, ["8", "1"], doc_languages=["vi"])
+        self.assertIsNone(options[0])  # all locales
+        self.assertFalse(options[9])  # html_to_md
+        self.assertTrue(options[10])  # md_to_html
 
 
 class MainCliMarkdownTests(unittest.TestCase):
     def test_html_to_md_flag(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--html-to-md", "-l", "vi"]),
+            patched_i18n_cli(build_i18n, ["--html-to-md", "-l", "vi"]),
             mock.patch.object(build_i18n, "_doc_target_languages", return_value=(["vi"], [])),
             mock.patch.object(build_i18n, "_convert_html_file_to_md", return_value=(True, "Converted")) as conv_mock,
             mock.patch.object(build_i18n.Path, "is_file", return_value=True),
-            mock.patch("builtins.print"),
         ):
             res = build_i18n.main()
             self.assertEqual(0, res)
@@ -2058,11 +2093,10 @@ class MainCliMarkdownTests(unittest.TestCase):
 
     def test_md_to_html_flag(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--md-to-html", "-l", "vi"]),
+            patched_i18n_cli(build_i18n, ["--md-to-html", "-l", "vi"]),
             mock.patch.object(build_i18n, "_doc_target_languages", return_value=(["vi"], [])),
             mock.patch.object(build_i18n, "_convert_md_file_to_html", return_value=(True, "Converted")) as conv_mock,
             mock.patch.object(build_i18n.Path, "is_file", return_value=True),
-            mock.patch("builtins.print"),
         ):
             res = build_i18n.main()
             self.assertEqual(0, res)
@@ -2070,21 +2104,64 @@ class MainCliMarkdownTests(unittest.TestCase):
 
     def test_conflicting_flags_rejected(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--html-to-md", "--md-to-html", "-l", "vi"]),
-            mock.patch("builtins.print"),
+            patched_i18n_cli(build_i18n, ["--html-to-md", "--md-to-html", "-l", "vi"], capture_stderr=True) as cli,
+            self.assertRaises(SystemExit) as ctx,
         ):
-            with self.assertRaises(SystemExit) as ctx:
-                build_i18n.main()
-            self.assertEqual(2, ctx.exception.code)
+            build_i18n.main()
+        self.assertEqual(2, ctx.exception.code)
+        self.assertTrue(cli.stderr.getvalue())
 
     def test_html_to_md_requires_language_or_all(self) -> None:
         with (
-            mock.patch.object(build_i18n.sys, "argv", ["build_i18n.py", "--html-to-md"]),
-            mock.patch("builtins.print"),
+            patched_i18n_cli(build_i18n, ["--html-to-md"], capture_stderr=True) as cli,
+            self.assertRaises(SystemExit) as ctx,
         ):
-            with self.assertRaises(SystemExit) as ctx:
-                build_i18n.main()
-            self.assertEqual(2, ctx.exception.code)
+            build_i18n.main()
+        self.assertEqual(2, ctx.exception.code)
+        self.assertTrue(cli.stderr.getvalue())
+
+    def test_main_build_docs_reports_error_when_source_exists_with_stale_html(self) -> None:
+        with (
+            temporary_doc_tree(
+                build_i18n,
+                en_html="<html><body><p>Hi</p></body></html>",
+                lang="vi",
+                po_text='msgid ""\nmsgstr ""\n',
+                html_text="<html><body><p>Stale</p></body></html>",
+                patch_doc_pot=True,
+            ) as env,
+            patched_i18n_cli(build_i18n, ["--build-docs", "-l", "vi"]) as cli,
+            mock.patch.object(build_i18n, "_write_doc_pot", return_value=env.doc_pot),
+            mock.patch.object(build_i18n, "_check_doc_language", return_value=[]),
+            mock.patch.object(build_i18n, "_build_doc_for_language", return_value=(False, "vi: rebuild failed")),
+        ):
+            res = build_i18n.main()
+        self.assertEqual(1, res)
+        cli.print_mock.assert_any_call("[ERROR] vi: rebuild failed")
+
+    def test_main_menu_resets_cli_build_ui_flag(self) -> None:
+        menu_ret = (["vi"], {"docs"}, False, False, False, False, False, False, True, False, False)
+        with (
+            patched_i18n_cli(build_i18n, ["--build-ui", "--menu"]),
+            mock.patch.object(build_i18n, "_interactive_options", return_value=menu_ret),
+            mock.patch.object(build_i18n, "DOC_EN_PATH", Path("doc/en/readme.html")),
+            mock.patch.object(build_i18n.Path, "is_file", return_value=True),
+            mock.patch.object(build_i18n, "_doc_target_languages", return_value=(["vi"], [])),
+            mock.patch.object(build_i18n, "_check_doc_language", return_value=[]),
+        ):
+            res = build_i18n.main()
+        self.assertEqual(0, res)
+
+    def test_parse_checks_rejects_empty_and_doc_prompt_rejects_ui_only(self) -> None:
+        with self.assertRaises(ValueError):
+            build_i18n._parse_checks([" , "], strict=False)
+        with (
+            mock.patch("builtins.input", side_effect=["7", "ui", "docs"]),
+            mock.patch("builtins.print") as print_mock,
+        ):
+            selected = build_i18n._prompt_doc_checks(build_i18n.DEFAULT_DOC_CHECKS, allow_back=True)
+        self.assertEqual({"docs"}, selected)
+        self.assertTrue(any("unknown check 'ui'" in str(call) for call in print_mock.call_args_list))
 
 
 class DocBuildIntegrationTests(unittest.TestCase):
@@ -2192,6 +2269,11 @@ class FallbackMarkdownTableTests(unittest.TestCase):
         cells = build_i18n._split_table_row(row)
         self.assertEqual(["Key", "Symbol | Description"], cells)
 
+        even_bs = build_i18n._split_table_row(r"| Path\\ | A\|B | End\\|")
+        self.assertEqual([r"Path\\", "A|B", r"End\\"], even_bs)
+        trailing_escaped = build_i18n._split_table_row(r"| A | B\|")
+        self.assertEqual(["A", "B|"], trailing_escaped)
+
     def test_table_parsing_with_alignments_and_formatting(self) -> None:
         md = (
             "| Command | Key | Description |\n"
@@ -2232,97 +2314,104 @@ class DefinitionListTests(unittest.TestCase):
 
     def test_doc_html_to_markdown_definition_list(self) -> None:
         html_in = "<dl>\n<dt>Term 1</dt>\n<dd>Definition 1</dd>\n<dt>Term 2</dt>\n<dd><p>Definition 2</p></dd>\n</dl>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_in)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown(html_in)
         self.assertIn("Term 1\n:   Definition 1", md)
         self.assertIn("Term 2\n:   Definition 2", md)
+
+    def test_fallback_markdown_dl_list_dedent_fence_and_continuation(self) -> None:
+        md = (
+            "````markdown\n"
+            "```python\n"
+            "x = 1\n"
+            "```\n"
+            "````\n\n"
+            "* outer\n"
+            "  two-space continuation\n"
+            "  * level2\n"
+            "    * level4\n"
+            " * level1\n\n"
+            "Term 1\n"
+            ":   Def 1\n"
+            "Following paragraph.\n"
+        )
+        html_out = build_i18n._fallback_markdown_to_html_body(md)
+        self.assertIn('<pre><code class="language-markdown">```python\nx = 1\n```</code></pre>', html_out)
+        self.assertIn("<li>outer two-space continuation", html_out)
+        self.assertIn("<ul>\n\t\t\t<li>level1", html_out)
+        self.assertLess(html_out.index("</dl>"), html_out.index("<p>Following paragraph.</p>"))
 
 
 class PoSyntaxFallbackTests(unittest.TestCase):
     def test_check_po_syntax_fallback_detects_duplicate_msgid(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            po_file = Path(td) / "duplicate.po"
-            po_file.write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "Xin chào"\n\nmsgid "Hello"\nmsgstr "Chào bạn"\n',
-                encoding="utf-8",
-            )
+        with temporary_po_file(
+            'msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "Xin chào"\n\nmsgid "Hello"\nmsgstr "Chào bạn"\n',
+            "duplicate.po",
+        ) as po_file:
             errs = build_i18n._check_po_syntax_fallback(po_file)
             self.assertTrue(len(errs) > 0)
             self.assertTrue(any("duplicate message definition" in e for e in errs))
             self.assertTrue(any("Hello" in e for e in errs))
 
     def test_check_po_syntax_fallback_valid_po_no_errors(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            po_file = Path(td) / "valid.po"
-            po_file.write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "One"\nmsgstr "Một"\n\nmsgid "Two"\nmsgstr "Hai"\n',
-                encoding="utf-8",
-            )
+        with temporary_po_file(
+            'msgid ""\nmsgstr ""\n\nmsgid "One"\nmsgstr "Một"\n\nmsgid "Two"\nmsgstr "Hai"\n',
+            "valid.po",
+        ) as po_file:
             errs = build_i18n._check_po_syntax_fallback(po_file)
             self.assertEqual([], errs)
 
     def test_check_language_files_detects_duplicate_msgid_without_msgfmt(self) -> None:
+        with (
+            temporary_doc_tree(
+                build_i18n,
+                lang="vi",
+                create_lang_dir=False,
+                locale_po_text='msgid ""\nmsgstr ""\n\nmsgid "Same"\nmsgstr "A"\n\nmsgid "Same"\nmsgstr "B"\n',
+                patch_en_path=False,
+            ) as env,
+            mock.patch.object(build_i18n, "_find_msgfmt", return_value=None),
+        ):
+            errs = build_i18n._check_language_files(env.locale_lang_dir, check_only=False, msgfmt_path=None)
+            self.assertTrue(any("duplicate message definition" in e for e in errs))
+
+    def test_check_po_syntax_uses_fallback_when_charset_missing_even_with_msgfmt(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            lang_dir = root / "vi"
-            (lang_dir / "LC_MESSAGES").mkdir(parents=True)
-            po_file = lang_dir / "LC_MESSAGES" / "nvda.po"
+            po_file = root / "dup.po"
             po_file.write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "Same"\nmsgstr "A"\n\nmsgid "Same"\nmsgstr "B"\n',
+                'msgid ""\nmsgstr ""\n\nmsgid "Dup"\nmsgstr "A"\n\nmsgid "Dup"\nmsgstr "B"\n',
                 encoding="utf-8",
             )
-            with mock.patch.object(build_i18n, "_find_msgfmt", return_value=None):
-                errs = build_i18n._check_language_files(lang_dir, check_only=False, msgfmt_path=None)
-                self.assertTrue(any("duplicate message definition" in e for e in errs))
+            fake_msgfmt = root / "msgfmt.exe"
+            fake_msgfmt.write_text("stub", encoding="utf-8")
+            errs = build_i18n._check_po_syntax(po_file, msgfmt_path=fake_msgfmt)
+            self.assertTrue(any("duplicate message definition" in e for e in errs))
 
     def test_check_doc_language_detects_duplicate_msgid_without_msgfmt(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            doc_dir = root / "doc" / "vi"
-            doc_dir.mkdir(parents=True)
-            po_file = doc_dir / "readme.po"
-            po_file.write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "Same"\nmsgstr "A"\n\nmsgid "Same"\nmsgstr "B"\n',
-                encoding="utf-8",
-            )
-            en_html = root / "doc" / "en" / "readme.html"
-            en_html.parent.mkdir(parents=True)
-            en_html.write_text("<p>Same</p>", encoding="utf-8")
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_html),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-                mock.patch.object(build_i18n, "_find_msgfmt", return_value=None),
-            ):
-                errs = build_i18n._check_doc_language("vi", msgfmt_path=None)
-                self.assertTrue(any("duplicate message definition" in e for e in errs))
+        with (
+            temporary_doc_tree(
+                build_i18n,
+                en_html="<p>Same</p>",
+                lang="vi",
+                po_text='msgid ""\nmsgstr ""\n\nmsgid "Same"\nmsgstr "A"\n\nmsgid "Same"\nmsgstr "B"\n',
+            ),
+            mock.patch.object(build_i18n, "_find_msgfmt", return_value=None),
+        ):
+            errs = build_i18n._check_doc_language("vi", msgfmt_path=None)
+            self.assertTrue(any("duplicate message definition" in e for e in errs))
 
 
 class DocListAndCheckImprovementsTests(unittest.TestCase):
     def test_doc_html_to_markdown_loose_lists_with_p(self) -> None:
-        html_in = "<ul><li><p>Item 1</p></li><li><p>Item 2</p></li></ul>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_in)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<ul><li><p>Item 1</p></li><li><p>Item 2</p></li></ul>")
         self.assertEqual("* Item 1\n* Item 2\n", md)
 
     def test_doc_html_to_markdown_ordered_loose_list(self) -> None:
-        html_in = "<ol><li><p>First</p></li><li><p>Second</p></li></ol>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_in)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<ol><li><p>First</p></li><li><p>Second</p></li></ol>")
         self.assertEqual("1. First\n2. Second\n", md)
 
     def test_doc_html_to_markdown_nested_list_with_p(self) -> None:
-        html_in = "<ul><li><p>Parent</p><ul><li>Child</li></ul></li></ul>"
-        conv = build_i18n._DocHtmlToMarkdown()
-        conv.feed(html_in)
-        conv.close()
-        md = conv.get_markdown()
+        md = _html_to_markdown("<ul><li><p>Parent</p><ul><li>Child</li></ul></li></ul>")
         self.assertEqual("* Parent\n  * Child\n", md)
         self.assertNotIn("* \n", md)
 
@@ -2347,46 +2436,30 @@ class DocListAndCheckImprovementsTests(unittest.TestCase):
         self.assertEqual([], errs)
 
     def test_check_doc_language_prioritizes_markdown_over_html(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            doc_dir = root / "doc" / "vi"
-            doc_dir.mkdir(parents=True)
+        with temporary_doc_tree(
+            build_i18n,
+            en_html="<h1>Title</h1>\n<p>New content</p>",
+            lang="vi",
             # readme.md has new content, readme.html has stale content
-            (doc_dir / "readme.md").write_text("# Tiêu đề\n\nNội dung mới", encoding="utf-8")
-            (doc_dir / "readme.html").write_text("<p>Nội dung cũ</p>", encoding="utf-8")
-            en_html = root / "doc" / "en" / "readme.html"
-            en_html.parent.mkdir(parents=True)
-            en_html.write_text("<h1>Title</h1>\n<p>New content</p>", encoding="utf-8")
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_html),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-            ):
-                errs = build_i18n._check_doc_language("vi", checks={"docs"})
-                # Should not raise missing/syntax error for readme.md
-                self.assertFalse(any("could not validate" in e for e in errs))
+            md_text="# Tiêu đề\n\nNội dung mới",
+            html_text="<p>Nội dung cũ</p>",
+        ):
+            errs = build_i18n._check_doc_language("vi", checks={"docs"})
+            # Should not raise missing/syntax error for readme.md
+            self.assertFalse(any("could not validate" in e for e in errs))
 
     def test_check_doc_language_detects_whitespace_untranslated(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            doc_dir = root / "doc" / "vi"
-            doc_dir.mkdir(parents=True)
-            po_file = doc_dir / "readme.po"
-            po_file.write_text(
-                'msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "   "\n',
-                encoding="utf-8",
-            )
-            en_html = root / "doc" / "en" / "readme.html"
-            en_html.parent.mkdir(parents=True)
-            en_html.write_text("<p>Hello</p>", encoding="utf-8")
-            with (
-                mock.patch.object(build_i18n, "DOC_DIR", root / "doc"),
-                mock.patch.object(build_i18n, "DOC_EN_PATH", en_html),
-                mock.patch.object(build_i18n, "ADDON_DIR", root),
-                mock.patch.object(build_i18n, "_find_msgfmt", return_value=None),
-            ):
-                errs = build_i18n._check_doc_language("vi", checks={"docs"})
-                self.assertTrue(any("untranslated documentation string" in e for e in errs))
+        with (
+            temporary_doc_tree(
+                build_i18n,
+                en_html="<p>Hello</p>",
+                lang="vi",
+                po_text='msgid ""\nmsgstr ""\n\nmsgid "Hello"\nmsgstr "   "\n',
+            ),
+            mock.patch.object(build_i18n, "_find_msgfmt", return_value=None),
+        ):
+            errs = build_i18n._check_doc_language("vi", checks={"docs"})
+            self.assertTrue(any("untranslated documentation string" in e for e in errs))
 
     def test_doc_html_rebuilder_whitespace_translation_fallbacks_to_source(self) -> None:
         catalog = {"Hello": "   "}
@@ -2403,63 +2476,23 @@ class DocListAndCheckImprovementsTests(unittest.TestCase):
         self.assertIn('"Language: vi\\n"', header_text)
 
     def test_iter_po_entries_with_tabs_and_extra_spaces(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            po_file = Path(td) / "test.po"
-            po_file.write_text(
-                'msgid\t""\nmsgstr\t""\n\n'
-                'msgctxt\t"ctx"\n'
-                'msgid\t"TabKey"\n'
-                'msgstr\t"TabVal"\n\n'
-                'msgid   "SpaceKey"\n'
-                'msgstr   "SpaceVal"\n\n'
-                "msgid\n"
-                '"NewlineKey"\n'
-                "msgstr\n"
-                '"NewlineVal"\n',
-                encoding="utf-8",
-            )
+        with temporary_po_file(
+            'msgid\t""\nmsgstr\t""\n\n'
+            'msgctxt\t"ctx"\n'
+            'msgid\t"TabKey"\n'
+            'msgstr\t"TabVal"\n\n'
+            'msgid   "SpaceKey"\n'
+            'msgstr   "SpaceVal"\n\n'
+            "msgid\n"
+            '"NewlineKey"\n'
+            "msgstr\n"
+            '"NewlineVal"\n',
+        ) as po_file:
             entries = build_i18n._iter_po_entries(po_file)
             entries_dict = {m: s for m, s, _ in entries}
             self.assertEqual("TabVal", entries_dict.get("TabKey"))
             self.assertEqual("SpaceVal", entries_dict.get("SpaceKey"))
             self.assertEqual("NewlineVal", entries_dict.get("NewlineKey"))
-
-    def test_purge_obsolete_po_entries_with_tabs(self) -> None:
-        content = (
-            'msgid ""\nmsgstr ""\n\n'
-            'msgid "Active"\nmsgstr "Đang dùng"\n\n'
-            '#~\tmsgid "OldTab"\n#~\tmsgstr "Cũ"\n\n'
-            '#~   msgid "OldSpace"\n#~   msgstr "Cũ 2"\n'
-        )
-        purged, count = build_i18n._purge_obsolete_po_entries(content)
-        self.assertEqual(2, count)
-        self.assertIn("Active", purged)
-        self.assertNotIn("OldTab", purged)
-        self.assertNotIn("OldSpace", purged)
-
-    def test_write_translated_manifest_falls_back_on_whitespace_only(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            manifest_source = root / "manifest.ini"
-            manifest_source.write_text(
-                'summary = "English summary"\ndescription = """English desc"""\nchangelog = """English changes"""\n',
-                encoding="utf-8",
-            )
-            lang_dir = root / "vi"
-            lang_dir.mkdir(parents=True)
-            with mock.patch.object(build_i18n, "MANIFEST_SOURCE", manifest_source):
-                build_i18n._write_translated_manifest(
-                    lang_dir,
-                    {
-                        "English summary": "   \t  ",
-                        "English desc": "\n  \n",
-                        "English changes": "  ",
-                    },
-                )
-                result = (lang_dir / "manifest.ini").read_text(encoding="utf-8")
-                self.assertIn('summary = "English summary"', result)
-                self.assertIn('description = """English desc"""', result)
-                self.assertIn('changelog = """English changes"""', result)
 
     def test_merge_po_header_with_doc_default_comments(self) -> None:
         doc_comments = [
@@ -2499,35 +2532,33 @@ class DocListAndCheckImprovementsTests(unittest.TestCase):
             self.assertFalse(tmp_file.is_file())
             self.assertTrue(mo_file.is_file())
 
-    def test_rtl_language_codes_contains_ps_and_sd(self) -> None:
-        self.assertTrue(build_i18n._is_rtl_language("ps"))
-        self.assertTrue(build_i18n._is_rtl_language("sd"))
-        self.assertTrue(build_i18n._is_rtl_language("sd_PK"))
-        self.assertFalse(build_i18n._is_rtl_language("en"))
-
     def test_main_rejects_nonexistent_msgfmt_path(self) -> None:
         with (
-            mock.patch.object(
-                build_i18n.sys,
-                "argv",
-                ["build_i18n.py", "--check", "--msgfmt", "C:/nonexistent/msgfmt.exe"],
-            ),
+            patched_i18n_cli(
+                build_i18n,
+                ["--check", "--msgfmt", "C:/nonexistent/msgfmt.exe"],
+                capture_print=False,
+                capture_stderr=True,
+            ) as cli,
             self.assertRaises(SystemExit) as cm,
         ):
             build_i18n.main()
         self.assertEqual(2, cm.exception.code)
+        self.assertIn("msgfmt", cli.stderr.getvalue())
 
     def test_main_rejects_nonexistent_msgmerge_path(self) -> None:
         with (
-            mock.patch.object(
-                build_i18n.sys,
-                "argv",
-                ["build_i18n.py", "--update-po", "-l", "vi", "--msgmerge", "C:/nonexistent/msgmerge.exe"],
-            ),
+            patched_i18n_cli(
+                build_i18n,
+                ["--update-po", "-l", "vi", "--msgmerge", "C:/nonexistent/msgmerge.exe"],
+                capture_print=False,
+                capture_stderr=True,
+            ) as cli,
             self.assertRaises(SystemExit) as cm,
         ):
             build_i18n.main()
         self.assertEqual(2, cm.exception.code)
+        self.assertIn("msgmerge", cli.stderr.getvalue())
 
     def test_check_format_interpolations_whitespace_only_msgstr(self) -> None:
         alerts = build_i18n._check_format_interpolations("Hello {name}, count: %d", "   \t\n  ")
@@ -2576,10 +2607,7 @@ class DocListAndCheckImprovementsTests(unittest.TestCase):
         html_body = build_i18n._fallback_markdown_to_html_body(md_input)
         self.assertIn('<pre><code class="language-python">', html_body)
 
-        converter = build_i18n._DocHtmlToMarkdown()
-        converter.feed(html_body)
-        converter.close()
-        md_output = converter.get_markdown()
+        md_output = _html_to_markdown(html_body)
         self.assertIn("```python", md_output)
         self.assertIn("def greet():", md_output)
 
@@ -2655,6 +2683,198 @@ class DocListAndCheckImprovementsTests(unittest.TestCase):
             )
         self.assertEqual({build_i18n.CHECK_FUZZY}, checks)
         self.assertTrue(any("Error: unknown check 'invalid_check'" in str(c) for c in print_mock.call_args_list))
+
+
+class BuildI18nAuditRegressionTests(unittest.TestCase):
+    def test_po_missing_msgstr_plurals_msgctxt_and_compile_mo_charset(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            missing_msgstr_po = root / "missing_msgstr.po"
+            missing_msgstr_po.write_text('msgid "Orphan"\n', encoding="utf-8")
+            with self.assertRaises(ValueError) as ctx:
+                build_i18n._parse_po(missing_msgstr_po)
+            self.assertIn("missing msgstr", str(ctx.exception))
+
+            plural_po = root / "plural.po"
+            plural_po.write_text(
+                'msgid "1 file"\nmsgid_plural "%d files"\nmsgstr[0] "1 tep"\nmsgstr[1] "%d tep"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(build_i18n._parse_po(plural_po), {"1 file": "1 tep"})
+
+            msgctxt_po = root / "ctx.po"
+            msgctxt_po.write_text(
+                'msgctxt "Menu"\nmsgid "Open"\nmsgstr "Mo menu"\n\n'
+                'msgctxt "Dialog"\nmsgid "Open"\nmsgstr "Mo hop thoai"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(build_i18n._check_po_syntax_fallback(msgctxt_po), [])
+
+            mo_path = root / "out.mo"
+            build_i18n._compile_mo({"Xin chao": "Xin chào"}, mo_path)
+            translations = gettext.GNUTranslations(io.BytesIO(mo_path.read_bytes()))
+            self.assertEqual(translations.gettext("Xin chao"), "Xin chào")
+
+            hdr_po = root / "hdr.po"
+            hdr_po.write_text('# Header comment\nmsgid\t""\nmsgstr\t""\n', encoding="utf-8")
+            self.assertIn("# Header comment", build_i18n._extract_po_header_comments(hdr_po))
+
+            single_nl_obsolete = 'msgid "Keep"\nmsgstr "Giu"\n#~ msgid "Old"\n#~ msgstr "Cu"\n'
+            cleaned, removed = build_i18n._purge_obsolete_po_entries(single_nl_obsolete)
+            self.assertEqual(removed, 1)
+            self.assertIn('msgid "Keep"', cleaned)
+            self.assertNotIn('#~ msgid "Old"', cleaned)
+
+    def test_manifest_backslash_interpolations_and_target_dir_validation(self) -> None:
+        raw_desc = 'C:\\NVDA\\"""test\\'
+        with (
+            temporary_manifest_file(
+                build_i18n,
+                'summary = "Sum"\ndescription = ' + build_i18n._format_multiline_manifest_value(raw_desc) + "\n",
+            ),
+            tempfile.TemporaryDirectory() as td,
+        ):
+            root = Path(td)
+            parsed = build_i18n._manifest_values()
+            self.assertEqual(parsed["description"], raw_desc)
+
+            for bad_code in ("con", "NUL", "a b", "bad:lang"):
+                targets, errs = build_i18n._resolve_target_directories([bad_code], root, "locale", "en")
+                self.assertEqual(targets, [])
+                self.assertTrue(errs, f"Expected error for {bad_code!r}")
+
+            _targets, errs = build_i18n._resolve_target_directories(
+                ["fr", "../bad"], root, "locale", "en", allow_create=True
+            )
+            self.assertTrue(errs)
+            self.assertFalse((root / "fr").exists())
+
+        self.assertEqual(
+            build_i18n._get_interpolations("Val: {val:{width}.{prec}f} https://example.com/(a%20b)"),
+            ([], set(), {"{val}", "{prec}", "{width}"}, 0),
+        )
+
+    def test_doc_segmentation_mathml_code_class_and_table_align(self) -> None:
+        html_with_wrappers = (
+            "<ul><li><div><p>Item one</p></div></li></ul><blockquote><div><p>Quoted</p></div></blockquote>"
+        )
+        segs = [seg for _line, seg in build_i18n._extract_doc_segments(html_with_wrappers)]
+        self.assertFalse(any("<div" in seg or "</div>" in seg for seg in segs), segs)
+
+        if build_i18n._MARKDOWN_AVAILABLE and build_i18n._NH3_AVAILABLE:
+            md_doc = "| H1 | H2 |\n| :---: | ---: |\n| A | B |\n"
+            rendered = build_i18n._generate_doc_html_body(md_doc)
+            self.assertIn('align="center"', rendered)
+            self.assertIn('align="right"', rendered)
+
+            clean_code = build_i18n._generate_doc_html_body('<pre><code class="language-python">x = 1</code></pre>')
+            self.assertIn('class="language-python"', clean_code)
+
+            clean_mathml = build_i18n._generate_doc_html_body(
+                "<math><msup><mi>x</mi><mn>2</mn></msup><msqrt><mi>y</mi></msqrt></math>"
+            )
+            self.assertIn("<msup>", clean_mathml)
+            self.assertIn("<msqrt>", clean_mathml)
+
+    def test_doc_html_to_md_optional_close_pre_entities_and_inline_edges(self) -> None:
+        html_sample = (
+            "<html><head><title>Title --&gt; Test</title></head><body>\n"
+            '<ul><li>Intro<div><p>Inside</p></div><pre><code class="language-python">'
+            "x = 1\n<b>bold</b>\n&lt;b&gt;lit&lt;/b&gt;</code></pre></li></ul>\n"
+            "<p>First<p>Second</p>\n"
+            "<table><tr><th style='text-align: center;'>H1<th>H2</tr>"
+            "<tr><td><code>a | b</code><td>Use &lt;script&gt;</td></tr></table>\n"
+            "<p>Inline <code>`tick`</code> and <code>a`b</code></p>\n"
+            "</body></html>"
+        )
+        parser = build_i18n._DocHtmlToMarkdown()
+        parser.feed(html_sample)
+        parser.close()
+        md = parser.get_markdown()
+        self.assertEqual(md.splitlines()[0], "<!-- title: Title --&gt; Test -->")
+        self.assertNotIn("<div>", md)
+        self.assertIn("* Intro", md)
+        self.assertIn("Inside", md)
+        self.assertIn("```python", md)
+        self.assertIn("<b>lit</b>", md)
+        self.assertNotIn("**bold**", md)
+        self.assertIn("| H1 | H2 |", md)
+        self.assertIn("| :---: | --- |", md)
+        self.assertIn("&lt;script&gt;", md)
+        roundtrip_html = build_i18n._markdown_to_doc_html(md, language="en")
+        self.assertIn("&lt;script&gt;", roundtrip_html)
+
+        self.assertEqual(build_i18n._get_title_from_markdown("Use ```inline``` here\n\n# Real Heading"), "Real Heading")
+        self.assertNotIn("href", build_i18n._fallback_markdown_to_html_body("<kbd>[Ctrl](url)</kbd>"))
+        self.assertNotIn("<em>", build_i18n._fallback_markdown_to_html_body("3 * 4 * 5"))
+        self.assertNotIn("<strong>", build_i18n._fallback_markdown_to_html_body("my__var__name"))
+        self.assertIn("<hr>", build_i18n._fallback_markdown_to_html_body("----"))
+        self.assertIn("<hr>", build_i18n._fallback_markdown_to_html_body("- - -"))
+        if build_i18n._LXML_AVAILABLE:
+            self.assertEqual(
+                build_i18n._check_html_content_with_lxml(
+                    build_i18n._fallback_markdown_to_html_body("***a** b*"),
+                    "t.html",
+                ),
+                [],
+            )
+            self.assertEqual(
+                build_i18n._check_html_content_with_lxml(
+                    build_i18n._fallback_markdown_to_html_body("**Click [here** now](https://example.com)"),
+                    "t.html",
+                ),
+                [],
+            )
+
+    def test_cli_doc_checks_bom_and_atomic_pot_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            vi_dir = root / "vi"
+            vi_dir.mkdir()
+            (vi_dir / "languageSort.json").write_bytes(b'\xef\xbb\xbf{"letterOrder": ["a"]}')
+            bom_errors = build_i18n._check_language_sort_file(vi_dir)
+            self.assertTrue(any("BOM" in err for err in bom_errors), bom_errors)
+
+            with temporary_doc_tree(
+                build_i18n,
+                en_html="<html><body><p>Hello</p></body></html>",
+                lang="vi",
+                patch_locale_dir=True,
+            ) as env:
+                missing_doc_errs = build_i18n._check_doc_language("vi", checks={build_i18n.CHECK_PLACEHOLDERS})
+                self.assertTrue(any("missing documentation file" in err for err in missing_doc_errs), missing_doc_errs)
+
+                env.po_file.write_text('msgid "Orphan"\n', encoding="utf-8")
+                syntax_errs = build_i18n._check_doc_language("vi", msgfmt_path=None)
+                self.assertEqual(len(syntax_errs), 1)
+                self.assertIn("missing msgstr", syntax_errs[0])
+
+                with (
+                    patched_i18n_cli(
+                        build_i18n, ["--check-docs", "--checks", "ui"], capture_print=False, capture_stderr=True
+                    ),
+                    self.assertRaises(SystemExit) as bad_check_exit,
+                ):
+                    build_i18n.main()
+                self.assertEqual(bad_check_exit.exception.code, 2)
+
+                with patched_i18n_cli(build_i18n, ["--md-to-html", "-l", "missing"]):
+                    self.assertEqual(build_i18n.main(), 1)
+                self.assertFalse((env.doc_root / "missing").exists())
+
+                with (
+                    mock.patch.object(build_i18n, "_write_doc_pot") as write_doc_pot_mock,
+                    patched_i18n_cli(build_i18n, ["--build-docs", "-l", "missing"]),
+                ):
+                    self.assertEqual(build_i18n.main(), 1)
+                write_doc_pot_mock.assert_not_called()
+
+                with (
+                    mock.patch.object(build_i18n, "_write_pot") as write_pot_mock,
+                    patched_i18n_cli(build_i18n, ["--build-ui", "-l", "missing"]),
+                ):
+                    self.assertEqual(build_i18n.main(), 1)
+                write_pot_mock.assert_not_called()
 
 
 if __name__ == "__main__":

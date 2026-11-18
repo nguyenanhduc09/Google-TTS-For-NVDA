@@ -11,11 +11,7 @@ cd /d "%~dp0"
 
 :: --------------- Read version from manifest.ini ---------------
 set "VERSION="
-for /f "tokens=1,* delims==" %%A in ('findstr /b "version" googleTtsForNvda\manifest.ini') do (
-    set "VERSION=%%B"
-)
-:: Trim leading/trailing spaces
-for /f "tokens=*" %%V in ("!VERSION!") do set "VERSION=%%V"
+for /f "usebackq delims=" %%V in (`python -B -c "import re; m = re.search(r'(?m)^version\s*=\s*([^\r\n#]+)', open(r'googleTtsForNvda\manifest.ini', encoding='utf-8-sig').read()); print(m.group(1).strip().strip('\"\'') if m else '')"`) do set "VERSION=%%V"
 
 if "!VERSION!"=="" (
     echo [ERROR] Could not read version from manifest.ini.
@@ -30,6 +26,10 @@ echo [1/6] Cleaning build artifacts...
 if exist "__pycache__" (
     rmdir /s /q "__pycache__" 2>nul
     echo       Removed __pycache__
+)
+if exist "tests\__pycache__" (
+    rmdir /s /q "tests\__pycache__" 2>nul
+    echo       Removed tests\__pycache__
 )
 for /d /r "googleTtsForNvda" %%D in (__pycache__) do (
     if exist "%%D" (
@@ -99,7 +99,7 @@ echo.
 
 :: --------------- Package the add-on ---------------
 set "OUTPUT=dist\googleTtsForNvda-!VERSION!.nvda-addon"
-echo [6/6] Packaging add-on to %OUTPUT% ...
+echo [6/6] Packaging add-on to !OUTPUT! ...
 
 if not exist "dist" mkdir dist
 
@@ -108,8 +108,8 @@ if exist "!OUTPUT!" del /f /q "!OUTPUT!"
 
 :: Package the contents of googleTtsForNvda/ at the archive root (manifest.ini
 :: must land at the top level) using Python's standard zipfile with DEFLATE
-:: level 9 compression, excluding dotfiles/dotdirs.
-python -B -c "import pathlib, sys, zipfile; root = pathlib.Path('googleTtsForNvda'); zf = zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED, compresslevel=9); [zf.write(p, p.relative_to(root).as_posix()) for p in sorted(root.rglob('*')) if p.is_file() and not any(part.startswith('.') for part in p.relative_to(root).parts)]; zf.close()" "!OUTPUT!"
+:: level 9 compression, excluding dotfiles/dotdirs and transient build junk.
+python -B -c "import pathlib, sys, zipfile; root = pathlib.Path('googleTtsForNvda'); skip_names = {'thumbs.db', 'ehthumbs.db', 'desktop.ini'}; skip_suffixes = {'.pyc', '.pyo', '.zvoice'}; doc_skip = {'.mo', '.po', '.md'}; zf = zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED, compresslevel=9); [zf.write(p, p.relative_to(root).as_posix()) for p in sorted(root.rglob('*')) if p.is_file() and (rel := p.relative_to(root)) and not any(part.startswith('.') or part == '__pycache__' for part in rel.parts) and p.suffix.lower() not in skip_suffixes and p.name.lower() not in skip_names and not p.name.endswith('~') and not (len(rel.parts) > 1 and rel.parts[0] == 'doc' and p.suffix.lower() in doc_skip)]; zf.close()" "!OUTPUT!"
 if errorlevel 1 (
     echo [ERROR] Packaging failed.
     set "EXIT_CODE=1"
@@ -133,6 +133,7 @@ exit /b 0
 echo.
 echo Cleaning __pycache__ before exit...
 if exist "__pycache__" rmdir /s /q "__pycache__" 2>nul
+if exist "tests\__pycache__" rmdir /s /q "tests\__pycache__" 2>nul
 for /d /r "googleTtsForNvda" %%D in (__pycache__) do (
     if exist "%%D" rmdir /s /q "%%D" 2>nul
 )

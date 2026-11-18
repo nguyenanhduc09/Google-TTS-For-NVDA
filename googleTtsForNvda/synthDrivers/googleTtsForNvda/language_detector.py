@@ -7,28 +7,46 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from .language_utils import language_root as _language_root
+from .language_utils import normalize_language as _normalize_language
+
 try:
     from logHandler import log
 except Exception:  # pragma: no cover - NVDA is not available in local unit checks.
     log = None
 
-# Shared sentinel and attribute name used by both the synth driver and the
-# global plugin to attach / retrieve a Google TTS language tag on NVDA
-# LangChangeCommand objects.  Defined once here so both modules use the
-# same object identity for ``is`` checks.
+# Shared sentinel, command class, and attribute name used by both the synth
+# driver and the global plugin to attach / retrieve a Google TTS language tag
+# across NVDA's speech pipeline.  Defined once here so both modules use the
+# same object identity for ``is`` / ``isinstance`` checks.
 GOOGLE_TTS_LANG_CHANGE_ATTR: str = "googleTtsForNvdaLanguage"
 MISSING_GOOGLE_TTS_LANGUAGE: object = object()
 
+try:
+    from speech.commands import SpeechCommand as _SpeechCommandBase
+except Exception:  # pragma: no cover - NVDA is not available in local unit checks.
+    _SpeechCommandBase = object  # type: ignore[misc,assignment]
+
+
+class GoogleTtsProfileLangCommand(_SpeechCommandBase):  # type: ignore[valid-type,misc]
+    def __init__(self, language: str | None, *, spelling: bool = False) -> None:
+        self.language = language
+        self.spelling = bool(spelling)
+
+    def __repr__(self) -> str:
+        return f"GoogleTtsProfileLangCommand({self.language!r}, spelling={self.spelling!r})"
+
 
 _DLL_DIR = Path(__file__).with_name("cld2")
-_DLL_NAMES = ("cld2_x64.dll", "cld2.dll") if ctypes.sizeof(ctypes.c_void_p) == 8 else ("cld2_x86.dll", "cld2.dll")
+_DLL_NAMES = ("cld2_x64.dll", "cld2.dll") if ctypes.sizeof(ctypes.c_void_p) == 8 else ("cld2_x86.dll",)
 _MIN_RELIABLE_PERCENT = 30
+_MAX_CLD2_INPUT_CHARS = 65536
 _LANGUAGE_ALIASES = {
     "ar": {"ar-xa"},
     "ar-xa": {"ar"},
     "cmn": {"zh"},
     "cmn-cn": {"zh-cn", "zh-hans"},
-    "cmn-tw": {"zh-hant", "zh-tw"},
+    "cmn-tw": {"zh-tw"},
     "fil": {"tl", "fil-ph"},
     "fil-ph": {"fil", "tl"},
     "gom": {"kok", "kok-in"},
@@ -59,15 +77,15 @@ _LANGUAGE_ALIASES = {
     "sr-latn": {"sr", "sr-rs"},
     "tl": {"fil", "fil-ph"},
     "yue": {"yue-hk"},
-    "yue-hk": {"yue", "zh-hant", "zh-hk"},
-    "zh": {"cmn-cn", "cmn-tw", "yue-hk"},
+    "yue-hk": {"yue", "zh-hk"},
+    "zh": {"cmn-cn", "cmn-tw"},
     "zh-cn": {"cmn-cn", "zh-hans"},
     "zh-hans": {"cmn-cn", "zh-cn"},
     "zh-hant": {"cmn-tw", "yue-hk", "zh-hk", "zh-tw"},
     "zh-hk": {"yue-hk", "zh-hant"},
     "zh-tw": {"cmn-tw", "zh-hant"},
 }
-_CHINESE_LANGUAGE_ROOTS = {"cmn", "yue", "zh"}
+_CHINESE_LANGUAGE_ROOTS = {"cmn", "zh"}
 # Specific dialect → best supported dialect redirects.
 # Only dialects that are commonly requested but not always available need entries.
 _LANGUAGE_REDIRECTS: dict[str, str] = {
@@ -108,17 +126,28 @@ def redirect_language(language: str | None, available_languages: set[str]) -> st
     if not language:
         return None
     key = language.strip().replace("_", "-").lower()
-    if key in available_languages:
+    availableByKey = {
+        normalized: available
+        for available in sorted(available_languages)
+        if available and (normalized := _normalize_language(available))
+    }
+    if key in availableByKey:
         return None
     # Check explicit redirects first.
     redirect = _LANGUAGE_REDIRECTS.get(key)
-    if redirect and redirect in available_languages:
-        return redirect
-    # Try root language match (e.g., fr-CA → fr-FR).
+    if redirect and redirect in availableByKey:
+        return availableByKey[redirect]
+    # Try alias matches deterministically (e.g., zh-CN -> cmn-CN, iw-IL -> he-IL).
+    for alias in sorted(_language_aliases(key)):
+        if alias in availableByKey:
+            return availableByKey[alias]
+    # Try root and alias-root matches deterministically (e.g., fr-CA -> fr-FR, tl-PH -> fil-PH).
     root = key.split("-", 1)[0]
-    for available in available_languages:
-        if available.split("-", 1)[0] == root:
-            return available
+    rootMatches = [root, *sorted(_language_aliases(root))]
+    for targetRoot in rootMatches:
+        for availableKey in sorted(availableByKey):
+            if availableKey.split("-", 1)[0] == targetRoot:
+                return availableByKey[availableKey]
     return None
 
 
@@ -131,10 +160,12 @@ class DetectionResult:
 
 
 class _Cld2Detector:
+    _MAX_LOAD_ATTEMPTS = 3
+
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._library: ctypes.CDLL | None = None
-        self._loadAttempted = False
+        self._loadAttempts = 0
         self._loadErrorLogged = False
 
     def detect(self, text: str) -> DetectionResult | None:
@@ -143,6 +174,8 @@ class _Cld2Detector:
         library = self._load_library()
         if library is None:
             return None
+        if len(text) > _MAX_CLD2_INPUT_CHARS:
+            text = text[:_MAX_CLD2_INPUT_CHARS]
         if not text.isascii():
             text = unicodedata.normalize("NFC", text)
         encodedText = text.encode("utf-8", "replace")
@@ -182,12 +215,14 @@ class _Cld2Detector:
         with self._lock:
             if self._library is not None:
                 return self._library
-            if self._loadAttempted:
+            if self._loadAttempts >= self._MAX_LOAD_ATTEMPTS:
                 return None
-            self._loadAttempted = True
+            self._loadAttempts += 1
             try:
                 for dllName in _DLL_NAMES:
                     dllPath = _DLL_DIR / dllName
+                    if not dllPath.is_file():
+                        continue
                     try:
                         library = ctypes.CDLL(str(dllPath))
                         library.cld2_detect_language.argtypes = [
@@ -214,6 +249,34 @@ class _Cld2Detector:
 _detector = _Cld2Detector()
 
 
+def _preferred_candidate(preferredLanguage: str | None, candidateLanguages: list[str]) -> str | None:
+    if not preferredLanguage:
+        return None
+    if candidateLanguages:
+        return _candidate_for_language(preferredLanguage, candidateLanguages)
+    return preferredLanguage
+
+
+def resolve_single_grapheme_candidate(
+    stripped: str,
+    candidateLanguages: list[str],
+    preferredLanguage: str | None = None,
+) -> str | None:
+    """Return a non-preferred candidate language when a single grapheme matches its script or non-ASCII Latin exemplar."""
+    if not stripped or not candidateLanguages:
+        return None
+    from .language_profiles import single_grapheme_candidate_root
+
+    candidateRoots = list(dict.fromkeys(_language_root(candidate) for candidate in candidateLanguages))
+    prefRoot = _language_root(preferredLanguage) if preferredLanguage else ""
+    matchedRoot = single_grapheme_candidate_root(stripped, candidateRoots, prefRoot or None)
+    if matchedRoot:
+        matched = _candidate_for_language(matchedRoot, candidateLanguages)
+        if matched:
+            return matched
+    return None
+
+
 def detect_language(
     text: str,
     candidateLanguages: list[str],
@@ -227,7 +290,6 @@ def detect_language(
     if not text:
         return None
     from .language_profiles import (
-        _LATIN_NON_ASCII_EXEMPLARS,
         get_character_script,
         has_language_words,
         is_single_grapheme_token,
@@ -248,27 +310,18 @@ def detect_language(
     # Single character reading and alphabet spelling clauses route to preferred language
     if preferredLanguage:
         if is_single_grapheme_token(stripped):
-            scriptSignal = language_script_signal(stripped, candidateRoots)
-            prefRoot = _language_root(preferredLanguage)
-            if scriptSignal and scriptSignal != prefRoot:
-                return _candidate_for_language(scriptSignal, candidateLanguages)
-            if not stripped.isascii():
-                exemplarSignal = latin_exemplar_signal(stripped, candidateRoots)
-                if (
-                    exemplarSignal
-                    and exemplarSignal != prefRoot
-                    and stripped.lower() not in _LATIN_NON_ASCII_EXEMPLARS.get(prefRoot, frozenset())
-                ):
-                    return _candidate_for_language(exemplarSignal, candidateLanguages)
-            return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+            matchedCandidate = resolve_single_grapheme_candidate(stripped, candidateLanguages, preferredLanguage)
+            if matchedCandidate:
+                return matchedCandidate
+            return _preferred_candidate(preferredLanguage, candidateLanguages)
         if is_spelling_only_text(stripped):
-            return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+            return _preferred_candidate(preferredLanguage, candidateLanguages)
 
     # Text without language words (e.g. pure numbers, units, currencies, times, symbols, or emojis)
     # has no intrinsic language signal: return preferredLanguage fallback if provided, or None.
     if not has_language_words(stripped):
         if preferredLanguage:
-            return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+            return _preferred_candidate(preferredLanguage, candidateLanguages)
         return None
 
     # CLD2 statistical detection
@@ -280,9 +333,8 @@ def detect_language(
         # Language hint recovery: CLD2 predicted a language outside the candidate list
         # (e.g. ceb, gl, id, ms, la, pt on short Latin text without diacritics).
         # Restrict the prior to the candidate language space.
-        cldRoot = _language_root(result.language)
         hasLatinChars = any(get_character_script(ord(c)) == "Latin" for c in normalizedText if c.isalpha())
-        if hasLatinChars or "Latin" in SUPPORTED_LANGUAGE_SCRIPTS.get(cldRoot, ()):
+        if hasLatinChars:
             exemplarWinner = latin_exemplar_signal(normalizedText, candidateRoots)
             if exemplarWinner:
                 return _candidate_for_language(exemplarWinner, candidateLanguages)
@@ -313,7 +365,7 @@ def detect_language(
         return latinCandidates[0]
 
     if preferredLanguage:
-        return _candidate_for_language(preferredLanguage, candidateLanguages) or preferredLanguage
+        return _preferred_candidate(preferredLanguage, candidateLanguages)
 
     return None
 
@@ -370,14 +422,6 @@ def _language_family(language: str | None) -> str:
     if root in _CHINESE_LANGUAGE_ROOTS:
         return "zh"
     return root
-
-
-def _language_root(language: str | None) -> str:
-    return _normalize_language(language).split("-", 1)[0]
-
-
-def _normalize_language(language: str | None) -> str:
-    return str(language or "").strip().replace("_", "-").lower()
 
 
 def language_matches(left: str | None, right: str | None) -> bool:

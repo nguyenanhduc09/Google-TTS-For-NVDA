@@ -25,6 +25,7 @@
 
 # Binary files
 *.wasm binary
+*.mo binary
 *.png binary
 *.jpg binary
 *.ico binary

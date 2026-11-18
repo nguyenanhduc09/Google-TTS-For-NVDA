@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+_WINDLL_TYPE = ctypes.WinDLL if isinstance(getattr(ctypes, "WinDLL", None), type) else ctypes.CDLL
 
 
 class DirectoryChangeWatcher:
@@ -61,20 +62,23 @@ class DirectoryChangeWatcher:
         self._thread: threading.Thread | None = None
         self._stopRequested = threading.Event()
         self._stopHandle: int | None = None
+        self._kernel32: Any = None
 
     def start(self) -> None:
         """Start the watcher thread (no-op if already running)."""
         with self._lock:
-            if self._thread is not None and self._thread.is_alive():
+            if self._thread is not None and self._thread.is_alive() and not self._stopRequested.is_set():
                 return
-            self._stopRequested.clear()
+            stopEvent = threading.Event()
+            self._stopRequested = stopEvent
             thread = threading.Thread(
                 name="googleTtsForNvda.standbyWatcher",
                 target=self._run,
+                args=(stopEvent,),
                 daemon=True,
             )
             self._thread = thread
-            thread.start()
+        thread.start()
 
     def signal_stop(self) -> None:
         """Signal the watcher thread to stop without waiting for it to exit."""
@@ -96,25 +100,13 @@ class DirectoryChangeWatcher:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _signal_stop_locked(self) -> None:
-        stopHandle = self._stopHandle
-        if not stopHandle:
-            return
-        try:
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel32.SetEvent.argtypes = (wintypes.HANDLE,)
-            kernel32.SetEvent.restype = wintypes.BOOL
-            kernel32.SetEvent(stopHandle)
-        except Exception:
-            pass
-
-    # ------------------------------------------------------------------
-    # Watch thread
-    # ------------------------------------------------------------------
-
-    def _run(self) -> None:
-        try:
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    def _ensure_kernel32(self) -> Any:
+        if self._kernel32 is not None:
+            return self._kernel32
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        # Configure prototypes only when testing/mocking non-WinDLL objects;
+        # for real WinDLL singletons, avoid mutating shared global .argtypes/.restype.
+        if not isinstance(kernel32, _WINDLL_TYPE):
             kernel32.CreateEventW.argtypes = (
                 wintypes.LPVOID,
                 wintypes.BOOL,
@@ -122,6 +114,8 @@ class DirectoryChangeWatcher:
                 wintypes.LPCWSTR,
             )
             kernel32.CreateEventW.restype = wintypes.HANDLE
+            kernel32.SetEvent.argtypes = (wintypes.HANDLE,)
+            kernel32.SetEvent.restype = wintypes.BOOL
             kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
             kernel32.CloseHandle.restype = wintypes.BOOL
             kernel32.FindFirstChangeNotificationW.argtypes = (
@@ -130,6 +124,8 @@ class DirectoryChangeWatcher:
                 wintypes.DWORD,
             )
             kernel32.FindFirstChangeNotificationW.restype = wintypes.HANDLE
+            kernel32.FindNextChangeNotification.argtypes = (wintypes.HANDLE,)
+            kernel32.FindNextChangeNotification.restype = wintypes.BOOL
             kernel32.FindCloseChangeNotification.argtypes = (wintypes.HANDLE,)
             kernel32.FindCloseChangeNotification.restype = wintypes.BOOL
             kernel32.WaitForMultipleObjects.argtypes = (
@@ -139,76 +135,160 @@ class DirectoryChangeWatcher:
                 wintypes.DWORD,
             )
             kernel32.WaitForMultipleObjects.restype = wintypes.DWORD
-        except Exception:
-            log.debug(
-                "Could not initialize Google TTS standby directory watcher.",
-                exc_info=True,
-            )
-            return
+            self._kernel32 = kernel32
+            return kernel32
 
-        stopHandle = kernel32.CreateEventW(None, True, False, None)
+        class _Kernel32View:
+            CreateEventW = ctypes.WINFUNCTYPE(
+                wintypes.HANDLE,
+                wintypes.LPVOID,
+                wintypes.BOOL,
+                wintypes.BOOL,
+                wintypes.LPCWSTR,
+            )(("CreateEventW", kernel32))
+            SetEvent = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE)(("SetEvent", kernel32))
+            CloseHandle = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE)(("CloseHandle", kernel32))
+            FindFirstChangeNotificationW = ctypes.WINFUNCTYPE(
+                wintypes.HANDLE,
+                wintypes.LPCWSTR,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            )(("FindFirstChangeNotificationW", kernel32))
+            FindNextChangeNotification = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE)(
+                ("FindNextChangeNotification", kernel32)
+            )
+            FindCloseChangeNotification = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE)(
+                ("FindCloseChangeNotification", kernel32)
+            )
+            WaitForMultipleObjects = ctypes.WINFUNCTYPE(
+                wintypes.DWORD,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.HANDLE),
+                wintypes.BOOL,
+                wintypes.DWORD,
+            )(("WaitForMultipleObjects", kernel32))
+
+        self._kernel32 = _Kernel32View()
+        return self._kernel32
+
+    def _signal_stop_locked(self) -> None:
+        stopHandle = self._stopHandle
         if not stopHandle:
-            log.debug("Could not create Google TTS standby watcher stop event.")
             return
-        with self._lock:
-            self._stopHandle = stopHandle
         try:
-            while not self._stopRequested.is_set():
+            kernel32 = self._ensure_kernel32()
+            kernel32.SetEvent(stopHandle)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Watch thread
+    # ------------------------------------------------------------------
+
+    def _run(self, stopEvent: threading.Event | None = None) -> None:
+        if stopEvent is None:
+            stopEvent = self._stopRequested
+        kernel32: Any = None
+        stopHandle = 0
+        try:
+            try:
+                kernel32 = self._ensure_kernel32()
+            except Exception:
+                log.debug(
+                    "Could not initialize Google TTS standby directory watcher.",
+                    exc_info=True,
+                )
+                return
+
+            stopHandle = kernel32.CreateEventW(None, True, False, None)
+            if not stopHandle:
+                log.debug("Could not create Google TTS standby watcher stop event.")
+                return
+            with self._lock:
+                if stopEvent.is_set() or (self._thread is not None and self._thread is not threading.current_thread()):
+                    kernel32.CloseHandle(stopHandle)
+                    stopHandle = 0
+                    return
+                self._stopHandle = stopHandle
+            try:
                 notificationHandles: list[int] = []
                 notificationPaths: list[Path] = []
                 try:
-                    for path in self._paths():
-                        handle = self._watch_path(kernel32, path)
-                        if not handle:
-                            continue
-                        notificationHandles.append(handle)
-                        notificationPaths.append(path)
-                    if not notificationHandles:
-                        log.debug("Google TTS standby watcher has nothing to watch.")
-                        return
-                    waitHandles = [stopHandle] + notificationHandles
-                    handleArray = (wintypes.HANDLE * len(waitHandles))(*waitHandles)
-                    result = kernel32.WaitForMultipleObjects(
-                        len(waitHandles),
-                        handleArray,
-                        False,
-                        self._INFINITE,
-                    )
-                    if result == self._WAIT_FAILED:
-                        log.debug(
-                            "Google TTS standby watcher wait failed: %s.",
-                            ctypes.get_last_error(),
+                    while not stopEvent.is_set():
+                        desiredPaths = [path for path in self._paths() if self._path_is_dir(path)][:63]
+                        if desiredPaths != notificationPaths:
+                            for handle in notificationHandles:
+                                kernel32.FindCloseChangeNotification(handle)
+                            notificationHandles = []
+                            notificationPaths = []
+                            for path in desiredPaths:
+                                handle = self._watch_path(kernel32, path)
+                                if not handle:
+                                    continue
+                                notificationHandles.append(handle)
+                                notificationPaths.append(path)
+                        if not notificationHandles:
+                            log.debug("Google TTS standby watcher has nothing to watch.")
+                            return
+                        waitHandles = [stopHandle] + notificationHandles
+                        handleArray = (wintypes.HANDLE * len(waitHandles))(*waitHandles)
+                        result = kernel32.WaitForMultipleObjects(
+                            len(waitHandles),
+                            handleArray,
+                            False,
+                            self._INFINITE,
                         )
-                        return
-                    signaledIndex = int(result - self._WAIT_OBJECT_0)
-                    if signaledIndex < 0 or signaledIndex >= len(waitHandles):
-                        log.debug(
-                            "Google TTS standby watcher returned an unexpected wait result: %s.",
-                            result,
-                        )
-                        return
-                    if signaledIndex == 0 or self._stopRequested.is_set():
-                        return
-                    pathIndex = signaledIndex - 1
-                    reason = "watched directory changed"
-                    if 0 <= pathIndex < len(notificationPaths):
-                        reason = f"watched directory changed: {notificationPaths[pathIndex]}"
+                        if result == self._WAIT_FAILED:
+                            log.debug(
+                                "Google TTS standby watcher wait failed: %s.",
+                                ctypes.get_last_error(),
+                            )
+                            return
+                        signaledIndex = int(result - self._WAIT_OBJECT_0)
+                        if signaledIndex < 0 or signaledIndex >= len(waitHandles):
+                            log.debug(
+                                "Google TTS standby watcher returned an unexpected wait result: %s.",
+                                result,
+                            )
+                            return
+                        if signaledIndex == 0 or stopEvent.is_set():
+                            return
+                        pathIndex = signaledIndex - 1
+                        reason = "watched directory changed"
+                        if 0 <= pathIndex < len(notificationPaths):
+                            reason = f"watched directory changed: {notificationPaths[pathIndex]}"
+                            if not kernel32.FindNextChangeNotification(notificationHandles[pathIndex]):
+                                # Force re-creation of handles on next iteration if re-arming failed.
+                                notificationPaths = []
+                        if not stopEvent.is_set():
+                            try:
+                                self._callback(reason)
+                            except Exception:
+                                log.debug("Google TTS standby directory watcher callback failed.", exc_info=True)
                 finally:
                     for handle in notificationHandles:
                         kernel32.FindCloseChangeNotification(handle)
-                if not self._stopRequested.is_set():
-                    self._callback(reason)
+            finally:
+                with self._lock:
+                    if self._stopHandle == stopHandle:
+                        self._stopHandle = None
+                        self._kernel32 = None
+                kernel32.CloseHandle(stopHandle)
+                stopHandle = 0
         finally:
             with self._lock:
-                self._stopHandle = None
-                self._thread = None
-            kernel32.CloseHandle(stopHandle)
+                if self._thread is threading.current_thread():
+                    self._thread = None
+
+    @staticmethod
+    def _path_is_dir(path: Path) -> bool:
+        try:
+            return path.is_dir()
+        except OSError:
+            return False
 
     def _watch_path(self, kernel32: Any, path: Path) -> int | None:
-        try:
-            if not path.is_dir():
-                return None
-        except OSError:
+        if not self._path_is_dir(path):
             return None
         handle = kernel32.FindFirstChangeNotificationW(
             str(path),

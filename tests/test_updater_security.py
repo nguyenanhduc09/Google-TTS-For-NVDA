@@ -11,33 +11,32 @@ Covers:
 
 from __future__ import annotations
 
-import importlib.util
-import sys
+import hashlib
+import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
-from types import ModuleType
+from unittest import mock
+
+from tests.test_support import ROOT, FakeHttpResponse, load_module_from_path
 
 # Load updater module directly to avoid NVDA dependency chain.
-_UPDATER_PATH = (
-    Path(__file__).resolve().parents[1] / "googleTtsForNvda" / "globalPlugins" / "googleTtsForNvda" / "updater.py"
-)
+_UPDATER_PATH = ROOT / "googleTtsForNvda" / "globalPlugins" / "googleTtsForNvda" / "updater.py"
+_updater = load_module_from_path("test_updater_security._updater", _UPDATER_PATH)
 
 
-def _load_updater() -> ModuleType:
-    qualname = "test_updater_security._updater"
-    existing = sys.modules.get(qualname)
-    if existing is not None:
-        return existing
-    spec = importlib.util.spec_from_file_location(qualname, _UPDATER_PATH)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not load {_UPDATER_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[qualname] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_updater = _load_updater()
+def _make_update_info(**kwargs: object) -> _updater.UpdateInfo:
+    defaults: dict[str, object] = {
+        "version": "1.0",
+        "url": "https://example.com/update.nvda-addon",
+        "size": 1024,
+        "sha256": "a" * 64,
+        "minimumNVDAVersion": "2024.1",
+        "lastTestedNVDAVersion": "2026.2",
+        "releaseNotes": "Test update",
+    }
+    defaults.update(kwargs)
+    return _updater.UpdateInfo(**defaults)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +171,22 @@ class PathTraversalTests(unittest.TestCase):
         with self.assertRaises(_updater.UpdateError):
             _updater._safe_update_file_name("sub/evil.nvda-addon")
 
+    def test_rejects_colon_control_chars_trailing_dot_and_reserved_device_names(self) -> None:
+        for bad_name in (
+            "C:evil.nvda-addon",
+            "evil:stream.nvda-addon",
+            "evil\x00.nvda-addon",
+            "evil .nvda-addon",
+            "evil..nvda-addon",
+            ".nvda-addon",
+            "CON.nvda-addon",
+            "nul.1.nvda-addon",
+            "COM1.nvda-addon",
+            "LPT9.nvda-addon",
+        ):
+            with self.subTest(bad_name=bad_name), self.assertRaises(_updater.UpdateError):
+                _updater._safe_update_file_name(bad_name)
+
 
 # ---------------------------------------------------------------------------
 # Test 4: HTTPS-only enforcement
@@ -179,42 +194,56 @@ class PathTraversalTests(unittest.TestCase):
 
 
 class HttpsOnlyTests(unittest.TestCase):
-    """Verify download_update() enforces HTTPS."""
+    """Verify download_update() and redirect handling enforce HTTPS."""
 
-    def _make_update(self, url: str = "https://example.com/update.nvda-addon") -> _updater.UpdateInfo:
-        return _updater.UpdateInfo(
-            version="1.0",
-            url=url,
-            size=1024,
-            sha256="a" * 64,
-            minimumNVDAVersion="2024.1",
-            lastTestedNVDAVersion="2026.2",
-            releaseNotes="Test update",
+    def test_https_url_passes_validation_and_downloads(self) -> None:
+        payload = b"valid-addon-archive-bytes"
+        expected_sha256 = hashlib.sha256(payload).hexdigest()
+        update = _make_update_info(
+            url="https://example.com/update.nvda-addon",
+            size=len(payload),
+            sha256=expected_sha256,
         )
 
-    def test_https_url_passes_validation(self) -> None:
-        """HTTPS URL should pass URL scheme validation (network may fail)."""
-        from urllib.parse import urlparse
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dest_dir = Path(tmpdir)
+            with (
+                mock.patch.object(_updater, "_update_download_dir", return_value=dest_dir),
+                mock.patch.object(
+                    _updater.urllib.request,
+                    "urlopen",
+                    return_value=FakeHttpResponse(payload),
+                ) as urlopen_mock,
+            ):
+                downloaded = _updater.download_update(update)
+            self.assertTrue(urlopen_mock.called)
+            self.assertEqual("https://example.com/update.nvda-addon", urlopen_mock.call_args.args[0].full_url)
+            self.assertTrue(downloaded.path.is_file())
+            self.assertEqual(payload, downloaded.path.read_bytes())
 
-        update = self._make_update(url="https://example.com/update.nvda-addon")
-        parsed = urlparse(update.url)
-        self.assertEqual("https", parsed.scheme.lower())
+    def test_non_https_urls_are_rejected(self) -> None:
+        for url in (
+            "http://example.com/update.nvda-addon",
+            "ftp://example.com/update.nvda-addon",
+            "data:text/html,<script>alert(1)</script>",
+        ):
+            with self.subTest(url=url):
+                update = _make_update_info(url=url)
+                with self.assertRaises(_updater.UpdateError):
+                    _updater.download_update(update)
 
-    def test_http_url_is_rejected(self) -> None:
-        update = self._make_update(url="http://example.com/update.nvda-addon")
-        with self.assertRaises(_updater.UpdateError) as ctx:
-            _updater.download_update(update)
-        self.assertIn("HTTPS", str(ctx.exception))
-
-    def test_ftp_url_is_rejected(self) -> None:
-        update = self._make_update(url="ftp://example.com/update.nvda-addon")
+    def test_https_redirect_handler_blocks_downgrade_to_http(self) -> None:
+        handler = _updater._HttpsOnlyRedirectHandler()
+        req = urllib.request.Request("https://example.com/update.nvda-addon")
         with self.assertRaises(_updater.UpdateError):
-            _updater.download_update(update)
-
-    def test_data_url_is_rejected(self) -> None:
-        update = self._make_update(url="data:text/html,<script>alert(1)</script>")
-        with self.assertRaises(_updater.UpdateError):
-            _updater.download_update(update)
+            handler.redirect_request(
+                req,
+                None,
+                302,
+                "Found",
+                {},  # type: ignore[arg-type]
+                "http://example.com/downgrade.nvda-addon",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -300,15 +329,7 @@ class UpdateSizeLimitTests(unittest.TestCase):
         self.assertEqual(256 * 1024, _updater.MAX_UPDATE_MANIFEST_BYTES)
 
     def test_oversized_package_is_rejected(self) -> None:
-        update = _updater.UpdateInfo(
-            version="1.0",
-            url="https://example.com/update.nvda-addon",
-            size=_updater.MAX_UPDATE_PACKAGE_BYTES + 1,
-            sha256="a" * 64,
-            minimumNVDAVersion="2024.1",
-            lastTestedNVDAVersion="2026.2",
-            releaseNotes="Test",
-        )
+        update = _make_update_info(size=_updater.MAX_UPDATE_PACKAGE_BYTES + 1)
         with self.assertRaises(_updater.UpdateError) as ctx:
             _updater.download_update(update)
         self.assertIn("too large", str(ctx.exception))
@@ -395,37 +416,24 @@ class VersionPartsTests(unittest.TestCase):
 class UpdateAvailabilityTests(unittest.TestCase):
     """Verify _is_update_available compares versions and build numbers."""
 
-    def _make_update(self, **kwargs: object) -> _updater.UpdateInfo:
-        defaults = dict(
-            version="2.0",
-            url="https://example.com/update.nvda-addon",
-            size=1024,
-            sha256="a" * 64,
-            minimumNVDAVersion="2024.1",
-            lastTestedNVDAVersion="2026.2",
-            releaseNotes="Test",
-        )
-        defaults.update(kwargs)
-        return _updater.UpdateInfo(**defaults)  # type: ignore[arg-type]
-
     def test_newer_version_is_available(self) -> None:
-        update = self._make_update(version="2.0")
+        update = _make_update_info(version="2.0")
         self.assertTrue(_updater._is_update_available(update, "1.0", 0))
 
     def test_same_version_no_update(self) -> None:
-        update = self._make_update(version="1.0")
+        update = _make_update_info(version="1.0")
         self.assertFalse(_updater._is_update_available(update, "1.0", 0))
 
     def test_same_version_higher_build_is_available(self) -> None:
-        update = self._make_update(version="1.0", updateBuild=5)
+        update = _make_update_info(version="1.0", updateBuild=5)
         self.assertTrue(_updater._is_update_available(update, "1.0", 3))
 
     def test_same_version_same_build_no_update(self) -> None:
-        update = self._make_update(version="1.0", updateBuild=3)
+        update = _make_update_info(version="1.0", updateBuild=3)
         self.assertFalse(_updater._is_update_available(update, "1.0", 3))
 
     def test_older_version_no_update(self) -> None:
-        update = self._make_update(version="1.0")
+        update = _make_update_info(version="1.0")
         self.assertFalse(_updater._is_update_available(update, "2.0", 0))
 
 
@@ -524,6 +532,25 @@ class UpdateFileNameTests(unittest.TestCase):
         data = {"fileName": "evil.exe"}
         with self.assertRaises(_updater.UpdateError):
             _updater._update_file_name(data, "1.0")
+
+    def test_missing_path_is_not_classified_as_reparse_point(self) -> None:
+        missing = Path(tempfile.gettempdir()) / "nonexistent-googleTts-reparse-probe-xyz"
+        self.assertFalse(missing.exists())
+        self.assertFalse(_updater._is_reparse_or_symlink(missing))
+
+    def test_parse_update_info_rejects_empty_channel_and_non_https_url(self) -> None:
+        base = {
+            "version": "1.2",
+            "url": "https://example.com/googleTtsForNvda-1.2.nvda-addon",
+            "size": 1024,
+            "sha256": "a" * 64,
+            "minimumNVDAVersion": "2024.1",
+            "lastTestedNVDAVersion": "2026.2",
+        }
+        with self.assertRaises(_updater.UpdateError):
+            _updater._parse_update_info({**base, "channel": ""}, "en")
+        with self.assertRaises(_updater.UpdateError):
+            _updater._parse_update_info({**base, "url": "http://example.com/googleTtsForNvda-1.2.nvda-addon"}, "en")
 
 
 if __name__ == "__main__":

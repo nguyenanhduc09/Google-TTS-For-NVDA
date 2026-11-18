@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import itertools
 import struct
 import sys
+import tempfile
 import threading
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from functools import cache
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER_DIR = ROOT / "googleTtsForNvda" / "synthDrivers" / "googleTtsForNvda"
@@ -17,16 +23,38 @@ DRIVER_PATH = DRIVER_DIR / "__init__.py"
 PROCESSING_PATH = DRIVER_DIR / "speech_processing.py"
 UNICODE_DATA_PATH = DRIVER_DIR / "unicode_data.py"
 _TEST_DRIVER_PACKAGE = "_google_tts_for_nvda_test_driver"
+_FRESH_IMPORT_COUNTER = itertools.count(1)
+
+
+def _ensure_driver_package(packageName: str) -> ModuleType:
+    package = sys.modules.get(packageName)
+    if package is None:
+        package = ModuleType(packageName)
+        package.__path__ = [str(DRIVER_DIR)]  # type: ignore[attr-defined]
+        package.__package__ = packageName
+        sys.modules[packageName] = package
+    return package
 
 
 def _test_driver_package() -> ModuleType:
-    package = sys.modules.get(_TEST_DRIVER_PACKAGE)
-    if package is None:
-        package = ModuleType(_TEST_DRIVER_PACKAGE)
-        package.__path__ = [str(DRIVER_DIR)]  # type: ignore[attr-defined]
-        package.__package__ = _TEST_DRIVER_PACKAGE
-        sys.modules[_TEST_DRIVER_PACKAGE] = package
-    return package
+    return _ensure_driver_package(_TEST_DRIVER_PACKAGE)
+
+
+def load_module_from_path(qualname: str, path: Path) -> Any:
+    """Load and register a Python module from an arbitrary file path."""
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    spec = importlib.util.spec_from_file_location(qualname, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not create an import specification for {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[qualname] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(qualname, None)
+        raise
+    return module
 
 
 @cache
@@ -34,22 +62,38 @@ def load_driver_module(moduleName: str) -> Any:
     """Load one pure driver module without executing its NVDA package initializer."""
     if not moduleName.isidentifier():
         raise ValueError(f"Invalid driver module name: {moduleName!r}")
-    path = DRIVER_DIR / f"{moduleName}.py"
-    if not path.is_file():
-        raise FileNotFoundError(path)
     _test_driver_package()
-    qualifiedName = f"{_TEST_DRIVER_PACKAGE}.{moduleName}"
-    spec = importlib.util.spec_from_file_location(qualifiedName, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not create an import specification for {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[qualifiedName] = module
+    return load_module_from_path(f"{_TEST_DRIVER_PACKAGE}.{moduleName}", DRIVER_DIR / f"{moduleName}.py")
+
+
+def load_fresh_driver_module(moduleName: str) -> Any:
+    """Load one driver module uncached in an isolated temporary package namespace."""
+    if not moduleName.isidentifier():
+        raise ValueError(f"Invalid driver module name: {moduleName!r}")
+    pkgName = f"_google_tts_fresh_driver_{next(_FRESH_IMPORT_COUNTER)}"
+    _ensure_driver_package(pkgName)
     try:
-        spec.loader.exec_module(module)
-    except Exception:
-        sys.modules.pop(qualifiedName, None)
-        raise
-    return module
+        return load_module_from_path(f"{pkgName}.{moduleName}", DRIVER_DIR / f"{moduleName}.py")
+    finally:
+        prefix = f"{pkgName}."
+        for key in [k for k in sys.modules if k == pkgName or k.startswith(prefix)]:
+            sys.modules.pop(key, None)
+
+
+def is_lock_free_from_other_thread(lock: threading.RLock | threading.Lock) -> bool:
+    """Return True if another thread can immediately acquire ``lock`` non-blockingly."""
+    result: list[bool] = []
+
+    def probe() -> None:
+        acquired = lock.acquire(blocking=False)
+        if acquired:
+            lock.release()
+        result.append(acquired)
+
+    thread = threading.Thread(target=probe)
+    thread.start()
+    thread.join(timeout=2)
+    return bool(result and result[0])
 
 
 def pcm_bytes(*samples: int) -> bytes:
@@ -205,5 +249,197 @@ def make_fake_bridge(
     b._lastMemoryCheckAt = 0.0
     b._runtimeReadyAt = 0.0
     b._highMemorySampleCount = 0
+    b._lifecycleEpoch = 0
     b.catalog = bridge_module.VoiceCatalog.load()
     return b
+
+
+def write_test_engine(root: Path, version: str, *, voices: bool = True) -> Path:
+    """Create a temporary fake engine version directory for catalog tests."""
+    version_dir = root / version
+    version_dir.mkdir(parents=True, exist_ok=True)
+    if voices:
+        (version_dir / "voices.json").write_text("[]", encoding="utf-8")
+    return version_dir
+
+
+def captured_prints(print_mock: Any) -> str:
+    """Join positional first arguments logged via a mocked builtins.print."""
+    return " ".join(str(call.args[0]) for call in print_mock.call_args_list if call.args)
+
+
+class FakeHttpResponse:
+    """Minimal urlopen() context manager so download tests never touch the network."""
+
+    def __init__(self, payload: bytes, content_length: int | None = None) -> None:
+        self._stream = io.BytesIO(payload)
+        self.headers = {"Content-Length": str(len(payload) if content_length is None else content_length)}
+
+    def __enter__(self) -> FakeHttpResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        return self._stream.read(size)
+
+
+class FakeConf(dict[str, Any]):
+    """Lightweight dict-backed NVDA config.conf mock with spec and section caches."""
+
+    def __init__(
+        self,
+        initial: dict[str, Any] | None = None,
+        *,
+        cache: dict[str, Any] | None = None,
+        root_cache: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(initial or {})
+        self.spec: dict[str, Any] = {}
+        self._cache: dict[str, Any] = {} if cache is None else cache
+        self.rootSection = SimpleNamespace(_cache={} if root_cache is None else root_cache)
+
+
+@contextmanager
+def temporary_doc_tree(
+    build_i18n_mod: Any,
+    *,
+    en_html: str | None = None,
+    lang: str | None = None,
+    po_text: str | None = None,
+    html_text: str | None = None,
+    md_text: str | None = None,
+    locale_po_text: str | None = None,
+    manifest_text: str | None = None,
+    create_lang_dir: bool = True,
+    patch_en_path: bool = True,
+    patch_addon_dir: bool = True,
+    patch_doc_pot: bool = False,
+    patch_locale_dir: bool = False,
+    en_path_override: Path | None = None,
+) -> Iterator[SimpleNamespace]:
+    """Create a temporary ``doc/`` (and optional ``locale/``) layout and patch ``build_i18n`` constants."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        doc_root = root / "doc"
+        locale_root = root / "locale"
+        doc_pot_path = doc_root / "readme.pot"
+        en_html_path = doc_root / "en" / "readme.html"
+        if en_html is not None:
+            en_html_path.parent.mkdir(parents=True, exist_ok=True)
+            en_html_path.write_text(en_html, encoding="utf-8")
+
+        lang_dir = doc_root / lang if lang else None
+        po_file = None
+        html_file = None
+        md_file = None
+        locale_lang_dir = locale_root / lang if lang else None
+        locale_po_file = None
+        if lang_dir is not None:
+            po_file = lang_dir / "readme.po"
+            html_file = lang_dir / "readme.html"
+            md_file = lang_dir / "readme.md"
+            if create_lang_dir or po_text is not None or html_text is not None or md_text is not None:
+                lang_dir.mkdir(parents=True, exist_ok=True)
+            if po_text is not None:
+                po_file.write_text(po_text, encoding="utf-8")
+            if html_text is not None:
+                html_file.write_text(html_text, encoding="utf-8")
+            if md_text is not None:
+                md_file.write_text(md_text, encoding="utf-8")
+
+        if locale_lang_dir is not None and (locale_po_text is not None or manifest_text is not None):
+            locale_lang_dir.mkdir(parents=True, exist_ok=True)
+            locale_po_file = locale_lang_dir / "LC_MESSAGES" / "nvda.po"
+            if locale_po_text is not None:
+                locale_po_file.parent.mkdir(parents=True, exist_ok=True)
+                locale_po_file.write_text(locale_po_text, encoding="utf-8")
+            if manifest_text is not None:
+                (locale_lang_dir / "manifest.ini").write_text(manifest_text, encoding="utf-8")
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.object(build_i18n_mod, "DOC_DIR", doc_root))
+            if patch_en_path:
+                stack.enter_context(
+                    mock.patch.object(
+                        build_i18n_mod,
+                        "DOC_EN_PATH",
+                        en_path_override if en_path_override is not None else en_html_path,
+                    )
+                )
+            if patch_doc_pot:
+                stack.enter_context(mock.patch.object(build_i18n_mod, "DOC_POT_PATH", doc_pot_path))
+            if patch_locale_dir:
+                locale_root.mkdir(parents=True, exist_ok=True)
+                stack.enter_context(mock.patch.object(build_i18n_mod, "LOCALE_DIR", locale_root))
+            if patch_addon_dir:
+                stack.enter_context(mock.patch.object(build_i18n_mod, "ADDON_DIR", root))
+            yield SimpleNamespace(
+                root=root,
+                doc_root=doc_root,
+                doc_pot=doc_pot_path,
+                locale_root=locale_root,
+                en_html=en_html_path,
+                lang_dir=lang_dir,
+                po_file=po_file,
+                html_file=html_file,
+                md_file=md_file,
+                locale_lang_dir=locale_lang_dir,
+                locale_po_file=locale_po_file,
+            )
+
+
+@contextmanager
+def temporary_po_file(content: str, filename: str = "test.po") -> Iterator[Path]:
+    """Create a temporary PO file with UTF-8 content and yield its path."""
+    with tempfile.TemporaryDirectory() as td:
+        po_path = Path(td) / filename
+        po_path.write_text(content, encoding="utf-8")
+        yield po_path
+
+
+@contextmanager
+def temporary_manifest_file(build_i18n_mod: Any, content: str) -> Iterator[Path]:
+    """Create a temporary manifest.ini file and patch ``build_i18n.MANIFEST_SOURCE``."""
+    with tempfile.TemporaryDirectory() as td:
+        manifest_path = Path(td) / "manifest.ini"
+        manifest_path.write_text(content, encoding="utf-8")
+        with mock.patch.object(build_i18n_mod, "MANIFEST_SOURCE", manifest_path):
+            yield manifest_path
+
+
+def interactive_options_for(
+    build_i18n_mod: Any,
+    inputs: list[str],
+    *,
+    languages: list[str] | None = None,
+    doc_languages: list[str] | None = None,
+) -> tuple[object, ...]:
+    """Run ``build_i18n._interactive_options`` with mocked locales, stdin answers, and print suppression."""
+    with ExitStack() as stack:
+        if languages is not None:
+            stack.enter_context(mock.patch.object(build_i18n_mod, "_addon_languages", return_value=languages))
+        if doc_languages is not None:
+            stack.enter_context(mock.patch.object(build_i18n_mod, "_addon_doc_languages", return_value=doc_languages))
+        stack.enter_context(mock.patch("builtins.input", side_effect=inputs))
+        stack.enter_context(mock.patch("builtins.print"))
+        return tuple(build_i18n_mod._interactive_options(build_i18n_mod.DEFAULT_CHECKS))
+
+
+@contextmanager
+def patched_i18n_cli(
+    build_i18n_mod: Any,
+    argv: list[str],
+    *,
+    capture_print: bool = True,
+    capture_stderr: bool = False,
+) -> Iterator[SimpleNamespace]:
+    """Patch ``build_i18n.sys.argv`` (and optionally ``builtins.print`` / ``sys.stderr``)."""
+    stderr_buf = io.StringIO() if capture_stderr else None
+    with ExitStack() as stack:
+        stack.enter_context(mock.patch.object(build_i18n_mod.sys, "argv", ["build_i18n.py", *argv]))
+        if stderr_buf is not None:
+            stack.enter_context(mock.patch("sys.stderr", stderr_buf))
+        print_mock = stack.enter_context(mock.patch("builtins.print")) if capture_print else None
+        yield SimpleNamespace(print_mock=print_mock, stderr=stderr_buf)
