@@ -11,7 +11,7 @@ cd /d "%~dp0"
 
 :: --------------- Read version from manifest.ini ---------------
 set "VERSION="
-for /f "usebackq delims=" %%V in (`python -B -c "import re; m = re.search(r'(?m)^version\s*=\s*([^\r\n#]+)', open(r'googleTtsForNvda\manifest.ini', encoding='utf-8-sig').read()); print(m.group(1).strip().strip('\"\'') if m else '')"`) do set "VERSION=%%V"
+for /f "usebackq delims=" %%V in (`python -B -c "from pathlib import Path; import re; m = re.search(r'(?m)^version\s*=\s*([^\r\n#]+)', Path(r'googleTtsForNvda\manifest.ini').read_text(encoding='utf-8-sig')); print(m.group(1).strip(' \t' + chr(34) + chr(39)) if m else '')"`) do set "VERSION=%%V"
 
 if "!VERSION!"=="" (
     echo [ERROR] Could not read version from manifest.ini.
